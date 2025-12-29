@@ -4,6 +4,11 @@ plugins {
     id 'org.springframework.boot' version '3.5.9'
 }
 
+println "=================================================="
+println "  Building Keycloak Spring Security Library"
+println "  Version: ${version}"
+println "=================================================="
+
 allprojects {
     group = 'com.ids.keycloak'
     version = '1.0.0-SNAPSHOT'

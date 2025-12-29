@@ -2,6 +2,15 @@ dependencies {
     // Core 모듈에 의존
     api project(':keycloak-spring-security-core')
 
-    // Spring WebFlux 의존성
+    // Spring WebFlux 의존성 (디버깅 목적)
+    api 'org.springframework.boot:spring-boot-starter-webflux'
     api 'org.springframework.security:spring-security-webflux'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+
+    // ErrorHandler에서 JSON 응답을 생성하기 위해 사용
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+
+    // Lombok
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
 }
