@@ -1,7 +1,7 @@
 # Architecture & Development Guidelines
 
 이 문서는 **Keycloak Spring Security Open Source Library**의 아키텍처 원칙, 프로젝트 구조, 배포 전략, 그리고 설정 가이드를 정의합니다.
-본 프로젝트는 **Spring Security 6.5.7 공식 GitHub 리포지토리의 구조**를 따르며, **Servlet(Blocking)** 과 **Reactive(Non-blocking)** 스택을 모두 지원하는 것을 목표로 합니다.
+본 프로젝트는 **Spring Security 공식 GitHub 리포지토리의 구조**를 따르며, **Servlet(Blocking)** 과 **Reactive(Non-blocking)** 스택을 모두 지원하는 것을 목표로 합니다.
 
 ---
 
@@ -147,8 +147,11 @@ public SecurityFilterChain filterChain(HttpSecurity http) {
 
 ## 6. Build Configuration (Gradle)
 
-* **Build Tool:** Gradle (Kotlin DSL 권장)
-* **Java Version:** JDK 17 이상 (Spring Boot 3.x 호환)
+* **Build Tool:** Gradle
+* **Java Version:** JDK 17 이상
+* **Supported Versions:**
+    *   Spring Boot 3.x
+    *   Spring Security 6.5.7 (Stable)
 * **Usage:** 사용자는 환경 구분 없이 아래 의존성 하나만 사용합니다.
 
 ```build.gradle
