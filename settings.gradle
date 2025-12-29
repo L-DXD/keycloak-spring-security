@@ -1,0 +1,4 @@
+include "keycloak-spring-security-core"
+include "keycloak-spring-security-servlet"
+include "keycloak-spring-security-reactive"
+include "keycloak-spring-security-starter"

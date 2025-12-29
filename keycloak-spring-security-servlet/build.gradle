@@ -1,0 +1,8 @@
+dependencies {
+    // Core 모듈에 의존
+    api project(':keycloak-spring-security-core')
+
+    // Spring MVC 및 Servlet API 의존성
+    api 'org.springframework.security:spring-security-web'
+    compileOnly 'jakarta.servlet:jakarta.servlet-api'
+}

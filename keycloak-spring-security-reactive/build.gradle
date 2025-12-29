@@ -1,0 +1,7 @@
+dependencies {
+    // Core 모듈에 의존
+    api project(':keycloak-spring-security-core')
+
+    // Spring WebFlux 의존성
+    api 'org.springframework.security:spring-security-webflux'
+}
