@@ -3,7 +3,7 @@
 ## 🎯 목표
 
 `README.md`에 정의된 가이드라인에 따라 프로젝트의 초기 Gradle 멀티 모듈 구조를 설정합니다.
-루트 프로젝트와 4개의 서브 모듈(`core`, `servlet`, `reactive`, `starter`)이 정상적으로 인식되고 빌드되는 환경을 구축합니다.
+루트 프로젝트와 5개의 라이브러리 서브 모듈(`core`, `servlet`, `reactive`, `servlet-starter`, `reactive-starter`)이 정상적으로 인식되고 빌드되는 환경을 구축합니다.
 
 ## 📋 작업 상세 내용
 
@@ -17,7 +17,8 @@
   - `keycloak-spring-security-core`
   - `keycloak-spring-security-servlet`
   - `keycloak-spring-security-reactive`
-  - `keycloak-spring-security-starter`
+  - `keycloak-spring-security-servlet-starter`
+  - `keycloak-spring-security-reactive-starter`
 
 ## ✅ 인수 조건 (Acceptance Criteria)
 - [x] `./gradlew clean build` 실행 시 실패 없이 모든 모듈이 빌드되어야 한다.
