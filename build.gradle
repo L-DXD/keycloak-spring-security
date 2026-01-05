@@ -1,12 +1,10 @@
 plugins {
-    id 'java'
-    id 'io.spring.dependency-management' version '1.1.5'
-    id 'org.springframework.boot' version '3.5.9'
+    id 'io.spring.dependency-management' version '1.1.5' apply false
 }
 
 allprojects {
     group = 'com.ids.keycloak'
-    version = '1.0.0-SNAPSHOT'
+    version = '0.0.1'
 
     repositories {
         mavenCentral()
@@ -14,28 +12,34 @@ allprojects {
 }
 
 subprojects {
-    apply plugin: 'java-library'
-    apply plugin: 'io.spring.dependency-management'
+    // 'java-base' 플러그인이 적용된 프로젝트에만 자바 관련 설정을 적용
+    plugins.withId('java-base') {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
 
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
-
-    dependencyManagement {
-        imports {
-            mavenBom "org.springframework.boot:spring-boot-dependencies:3.5.9"
+    // 'io.spring.dependency-management' 플러그인이 적용된 프로젝트에만 의존성 관리 설정을 적용
+    plugins.withId('io.spring.dependency-management') {
+        dependencyManagement {
+            imports {
+                mavenBom "org.springframework.boot:spring-boot-dependencies:3.5.9"
+            }
         }
     }
 
-    dependencies {
-        testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    // 하위 프로젝트의 평가가 끝난 후, 'java-base' 플러그인이 있는지 확인하고 의존성을 추가
+    afterEvaluate { project ->
+        if (project.plugins.hasPlugin('java-base')) {
+            project.dependencies {
+                testImplementation 'org.springframework.boot:spring-boot-starter-test'
+
+                // Common Lombok dependencies
+                compileOnly 'org.projectlombok:lombok'
+                annotationProcessor 'org.projectlombok:lombok'
+
+                // Common SLF4J dependency
+                implementation 'org.slf4j:slf4j-api'
+            }
+        }
     }
-}
-
-// This root project is just a container, no code
-bootJar {
-    enabled = false
-}
-
-jar {
-    enabled = false
 }
