@@ -1,0 +1,24 @@
+spring:
+  security:
+    oauth2:
+      client:
+        provider:
+          keycloak:
+            # issuer-uri를 사용하는 대신, 엔드포인트를 직접 명시하여 시작 시 SSL 통신 오류를 우회합니다.
+            authorization-uri: https://authdev.daewoong.co.kr/keycloak/realms/backoffice-sso/protocol/openid-connect/auth
+            token-uri: https://authdev.daewoong.co.kr/keycloak/realms/backoffice-sso/protocol/openid-connect/token
+            jwk-set-uri: https://authdev.daewoong.co.kr/keycloak/realms/backoffice-sso/protocol/openid-connect/certs
+        registration:
+          keycloak:
+            provider: keycloak
+            # 실제 클라이언트 ID로 변경해야 합니다.
+            client-id: ${KEYCLOAK_CLIENT_ID:workmngm}
+            # 실제 클라이언트 시크릿으로 변경해야 합니다.
+            client-secret: ${KEYCLOAK_CLIENT_SECRET:IRzOtEShKSnK6fqQb3z576aU0FvsmXvH}
+            scope: openid, profile, email
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+
+logging:
+  level:
+    org.springframework.security: DEBUG
