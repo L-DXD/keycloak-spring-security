@@ -24,15 +24,7 @@ public class ServletApp {
         SpringApplication.run(ServletApp.class, args);
     }
 
-    @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        http
-            .authorizeHttpRequests(authorize -> authorize
-                .requestMatchers("/test").permitAll() // /test 경로는 인증 없이 허용
-                .anyRequest().authenticated() // 그 외 모든 요청은 인증 필요
-            );
-        return http.build();
-    }
+
 
     @Bean
     public ObjectMapper objectMapper() {

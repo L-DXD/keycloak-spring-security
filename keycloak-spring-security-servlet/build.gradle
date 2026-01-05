@@ -12,6 +12,10 @@ dependencies {
     api 'org.springframework.security:spring-security-config'
     compileOnly 'jakarta.servlet:jakarta.servlet-api'
 
+    // OAuth2/OIDC 클라이언트 및 리소스 서버 기능 추가
+    api 'org.springframework.security:spring-security-oauth2-client'
+    api 'org.springframework.security:spring-security-oauth2-resource-server'
+
     // ErrorHandler에서 JSON 응답을 생성하기 위해 사용
     implementation 'com.fasterxml.jackson.core:jackson-databind'
 

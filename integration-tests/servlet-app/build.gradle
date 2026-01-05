@@ -12,6 +12,8 @@ dependencies {
     implementation project(':keycloak-spring-security-starter')
     // Spring Web (MVC)
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    // OAuth2 Client for OIDC login
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'
 
     // Lombok for @Slf4j
     compileOnly 'org.projectlombok:lombok'
@@ -19,4 +21,8 @@ dependencies {
 
     // SLF4J API (often brought transitively, but explicit for clarity)
     implementation 'org.slf4j:slf4j-api'
+
+    // Test dependencies
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.security:spring-security-test'
 }
