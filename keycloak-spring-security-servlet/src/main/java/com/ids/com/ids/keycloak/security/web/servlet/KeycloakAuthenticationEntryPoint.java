@@ -1,5 +1,5 @@
 
-package com.ids.keycloak.security.web.servlet;
+package com.ids.com.ids.keycloak.security.web.servlet;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ids.keycloak.security.error.ErrorResponse;
