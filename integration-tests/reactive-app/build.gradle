@@ -1,15 +1,29 @@
 plugins {
-    id 'org.springframework.boot'
     id 'java'
+    id 'io.spring.dependency-management'
+    id 'org.springframework.boot' version '3.5.9'
 }
 
-// 라이브러리가 아닌 실행 가능한 애플리케이션으로 설정
-jar.enabled = false
-bootJar.enabled = true
 
 dependencies {
     // 우리가 만든 스타터 모듈
-    implementation project(':keycloak-spring-security-starter')
+    implementation project(':keycloak-spring-security-servlet-starter')
     // Spring WebFlux
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
+
+    // Lombok for @Slf4j
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+
+    // SLF4J API (often brought transitively, but explicit for clarity)
+    implementation 'org.slf4j:slf4j-api'
 }
+
+bootJar {
+    enabled = true
+}
+
+jar {
+    enabled = false
+}
+
