@@ -13,15 +13,7 @@ public class KeycloakBannerAutoConfiguration {
     public ApplicationListener<ApplicationStartedEvent> keycloakBannerPrinter() {
         return event -> {
             ApplicationContext context = event.getApplicationContext();
-            
-            String webStack = "unknown";
-            // 어떤 자동 설정 클래스 타입이 등록되었는지 확인하여 활성화된 환경을 감지
-            if (!context.getBeansOfType(KeycloakServletAutoConfiguration.class).isEmpty()) {
-                webStack = "servlet";
-            } else if (!context.getBeansOfType(KeycloakReactiveAutoConfiguration.class).isEmpty()) {
-                webStack = "reactive";
-            }
-
+            String webStack = "servlet";
             String version = KeycloakBannerAutoConfiguration.class.getPackage().getImplementationVersion();
             if (version == null) {
                 // IDE에서 바로 실행하는 등 manifest 파일이 없을 경우를 위한 대체 버전 정보

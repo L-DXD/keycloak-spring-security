@@ -30,14 +30,14 @@ public class KeycloakServletAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(KeycloakAuthenticationEntryPoint.class)
     public KeycloakAuthenticationEntryPoint keycloakAuthenticationEntryPoint(ObjectMapper objectMapper) {
-        log.info("Keycloak Spring Security: KeycloakAuthenticationEntryPoint 빈이 등록되었습니다.");
+        log.debug("Keycloak Spring Security: KeycloakAuthenticationEntryPoint 빈이 등록되었습니다.");
         return new KeycloakAuthenticationEntryPoint(objectMapper);
     }
 
     @Bean
     @ConditionalOnMissingBean(KeycloakAccessDeniedHandler.class)
     public KeycloakAccessDeniedHandler keycloakAccessDeniedHandler(ObjectMapper objectMapper) {
-        log.info("Keycloak Spring Security: KeycloakAccessDeniedHandler 빈이 등록되었습니다.");
+        log.debug("Keycloak Spring Security: KeycloakAccessDeniedHandler 빈이 등록되었습니다.");
         return new KeycloakAccessDeniedHandler(objectMapper);
     }
 
@@ -48,7 +48,7 @@ public class KeycloakServletAutoConfiguration {
             KeycloakAuthenticationEntryPoint authenticationEntryPoint,
             KeycloakAccessDeniedHandler accessDeniedHandler
     ) throws Exception {
-
+        log.debug("Keycloak Spring Security: Servlet SecurityFilterChain 빈이 등록되었습니다.");
         // 인증, 인가 실패 시 처리할 커스텀 예외 핸들러 등록
         http.exceptionHandling(customizer -> customizer
                 .authenticationEntryPoint(authenticationEntryPoint)
@@ -57,8 +57,6 @@ public class KeycloakServletAutoConfiguration {
 
         // Keycloak 관련 설정(필터 등) 적용
         http.with(KeycloakHttpConfigurer.keycloak(), Customizer.withDefaults());
-
-        log.info("Keycloak Spring Security: Servlet SecurityFilterChain 빈이 등록되었습니다.");
         return http.build();
     }
 }

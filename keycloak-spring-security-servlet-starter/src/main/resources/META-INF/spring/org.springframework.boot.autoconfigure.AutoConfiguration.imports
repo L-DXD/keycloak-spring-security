@@ -1,3 +1,2 @@
 com.ids.keycloak.security.starter.KeycloakServletAutoConfiguration
-com.ids.keycloak.security.starter.KeycloakReactiveAutoConfiguration
 com.ids.keycloak.security.starter.KeycloakBannerAutoConfiguration
