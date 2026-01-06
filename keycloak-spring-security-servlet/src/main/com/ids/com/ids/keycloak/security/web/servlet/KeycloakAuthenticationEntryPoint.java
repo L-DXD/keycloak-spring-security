@@ -2,6 +2,7 @@
 package com.ids.keycloak.security.web.servlet;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ids.keycloak.security.error.ErrorResponse;
 import com.ids.keycloak.security.exception.ErrorCode;
 import com.ids.keycloak.security.exception.KeycloakSecurityException;
 import jakarta.servlet.ServletException;
@@ -46,11 +47,5 @@ public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoin
                 os.flush();
             }
         }
-    }
-
-    /**
-     * JSON 에러 응답을 위한 내부 레코드
-     */
-    private record ErrorResponse(String code, String message) {
     }
 }
