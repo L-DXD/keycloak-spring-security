@@ -3,6 +3,7 @@ package com.ids.keycloak.security.web.reactive;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ids.keycloak.security.error.ErrorResponse;
 import com.ids.keycloak.security.exception.ErrorCode;
 import com.ids.keycloak.security.exception.KeycloakSecurityException;
 import lombok.RequiredArgsConstructor;
@@ -64,11 +65,5 @@ public class KeycloakServerAuthenticationEntryPoint implements ServerAuthenticat
             // ObjectMapper가 완전 실패하는 최악의 경우를 대비한 텍스트 기반 응답
             return String.format("{\"code\":\"%s\",\"message\":\"%s\"}", errorCode.getCode(), errorCode.getDefaultMessage()).getBytes();
         }
-    }
-
-    /**
-     * JSON 에러 응답을 위한 내부 레코드
-     */
-    private record ErrorResponse(String code, String message) {
     }
 }
