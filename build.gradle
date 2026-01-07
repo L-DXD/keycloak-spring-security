@@ -1,0 +1,45 @@
+plugins {
+    id 'io.spring.dependency-management' version '1.1.5' apply false
+}
+
+allprojects {
+    group = 'com.ids.keycloak'
+    version = '0.0.1'
+
+    repositories {
+        mavenCentral()
+    }
+}
+
+subprojects {
+    // 'java-base' 플러그인이 적용된 프로젝트에만 자바 관련 설정을 적용
+    plugins.withId('java-base') {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    // 'io.spring.dependency-management' 플러그인이 적용된 프로젝트에만 의존성 관리 설정을 적용
+    plugins.withId('io.spring.dependency-management') {
+        dependencyManagement {
+            imports {
+                mavenBom "org.springframework.boot:spring-boot-dependencies:3.5.9"
+            }
+        }
+    }
+
+    // 하위 프로젝트의 평가가 끝난 후, 'java-base' 플러그인이 있는지 확인하고 의존성을 추가
+    afterEvaluate { project ->
+        if (project.plugins.hasPlugin('java-base')) {
+            project.dependencies {
+                testImplementation 'org.springframework.boot:spring-boot-starter-test'
+
+                // Common Lombok dependencies
+                compileOnly 'org.projectlombok:lombok'
+                annotationProcessor 'org.projectlombok:lombok'
+
+                // Common SLF4J dependency
+                implementation 'org.slf4j:slf4j-api'
+            }
+        }
+    }
+}

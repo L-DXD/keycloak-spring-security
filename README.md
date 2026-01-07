@@ -23,7 +23,8 @@ Maven Central 배포 시 라이브러리 식별 충돌 방지와 명확한 가�
 | **Core** | `*-core` | **`keycloak-spring-security-core`** | 외부 프레임워크 의존성 없는 순수 로직 (POJO) |
 | **Servlet** | `*-servlet` | **`keycloak-spring-security-servlet`** | Spring MVC (Tomcat) 기반 구현체 |
 | **Reactive** | `*-reactive` | **`keycloak-spring-security-reactive`** | Spring WebFlux (Netty) 기반 구현체 |
-| **Starter** | `*-starter` | **`keycloak-spring-security-starter`** | **Universal AutoConfiguration** (환경 자동 감지) |
+| **Servlet Starter** | `*-servlet-starter` | **`keycloak-spring-security-servlet-starter`** | Servlet (Spring MVC) 환경용 스타터 |
+| **Reactive Starter**| `*-reactive-starter`| **`keycloak-spring-security-reactive-starter`**| Reactive (WebFlux) 환경용 스타터 |
 
 > 🚫 **Bad Practice (사용 금지):**
 > * `com.ids.keycloak:servlet:1.0.0` (X) -> 타 라이브러리(Jakarta Servlet 등)와 혼동됨
@@ -50,9 +51,12 @@ Maven Central 배포 시 라이브러리 식별 충돌 방지와 명확한 가�
 * **의존성:** `core`, `spring-security-webflux`, `reactor-core`
 * **주요 기능:** `ReactiveAuthenticationManager`, `ServerAuthenticationConverter`.
 
-### 🔹 Starter Module (`...-starter`)
-* **역할:** 사용자가 의존성 추가만으로 기능을 사용할 수 있게 하는 **통합 진입점**.
-* **구조:** `servlet`과 `reactive` 모듈을 모두 포함하되, 런타임 환경을 감지하여 필요한 설정만 로드합니다.
+### 🔹 Starter Modules (`...-servlet-starter`, `...-reactive-starter`)
+* **역할:** 사용자가 자신의 환경에 맞는 의존성 하나만 추가하여 라이브러리 기능을 쉽게 사용할 수 있도록 하는 **환경별 진입점**입니다.
+* **구조:**
+    * **`servlet-starter`:** `servlet` 구현체 모듈과 자동 설정 로직을 포함합니다. Servlet 기반의 Spring MVC 환경에서 사용됩니다.
+    * **`reactive-starter`:** `reactive` 구현체 모듈과 자동 설정 로직을 포함합니다. Reactive 기반의 Spring WebFlux 환경에서 사용됩니다.
+* **주의:** 기존의 통합 `starter`는 두 개의 환경별 `starter`로 분리되었습니다.
 
 ---
 
@@ -104,16 +108,15 @@ com.ids.keycloak.security
 
 ## 5. Configuration Strategy (설정 및 확장 전략) 
 
-사용자에게 편의성과 제어권을 동시에 제공하며, **단일 Starter로 모든 환경을 커버**하는 전략을 사용합니다.
+사용자에게 편의성과 제어권을 동시에 제공하며, **환경별 Starter를 통해 명시적인 의존성 관리**를 유도하는 전략을 사용합니다.
 
-### 🔹 Strategy A: Universal Environment Detection (환경 자동 감지)
-사용자는 **Spring MVC(Tomcat)** 와 **WebFlux(Netty)** 환경을 구분하지 않고 `starter` 의존성 하나만 추가하면 됩니다.
-Starter 내부에서 환경을 감지하여 적절한 설정을 활성화합니다.
+### 🔹 Strategy A: Explicit Environment Selection (환경별 스타터 선택)
+사용자는 자신의 애플리케이션 환경(Spring MVC 또는 WebFlux)을 명확히 인지하고, 그에 맞는 `starter` 의존성 하나를 직접 선택하여 추가해야 합니다. 이를 통해 불필요한 `reactive` 또는 `servlet` 의존성이 프로젝트에 포함되는 것을 방지합니다.
  
-* **Mechanism:** `@ConditionalOnWebApplication`
+* **Mechanism:** Gradle/Maven 의존성 관리
 * **Implementation:**
-    * **Servlet 환경:** `type = SERVLET` 조건 충족 시 `KeycloakServletAutoConfiguration` 로드 -> `servlet` 모듈 활성화
-    * **Reactive 환경:** `type = REACTIVE` 조건 충족 시 `KeycloakReactiveAutoConfiguration` 로드 -> `reactive` 모듈 활성화
+    * **Servlet 환경:** 사용자는 `keycloak-spring-security-servlet-starter` 의존성을 추가합니다.
+    * **Reactive 환경:** 사용자는 `keycloak-spring-security-reactive-starter` 의존성을 추가합니다.
 
 ### 🔹 Strategy B: Zero-Configuration (Auto Config)
 초기 설정 없이 동작하도록 기본 `SecurityFilterChain`을 제공합니다.
@@ -150,11 +153,14 @@ public SecurityFilterChain filterChain(HttpSecurity http) {
 * **Build Tool:** Gradle
 * **Java Version:** JDK 17 이상
 * **Supported Versions:**
-    *   Spring Boot 3.x
+    *   Spring Boot 3.5.9 (Stable)
     *   Spring Security 6.5.7 (Stable)
 * **Usage:** 사용자는 환경 구분 없이 아래 의존성 하나만 사용합니다.
 
 ```build.gradle
-// for both MVC and WebFlux
-implementation("com.ids.keycloak:keycloak-spring-security-starter:1.0.0")
+// for MVC and Servlet environment
+implementation("com.ids.keycloak:keycloak-spring-security-servlet-starter:1.0.0")
+
+// for WebFlux and Reactive environment
+implementation("com.ids.keycloak:keycloak-spring-security-reactive-starter:1.0.0")
 ```
