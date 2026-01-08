@@ -10,6 +10,8 @@ dependencies {
     // Spring MVC 및 Servlet API 의존성
     api 'org.springframework.security:spring-security-web'
     api 'org.springframework.security:spring-security-config'
+    api 'org.springframework.security:spring-security-oauth2-client'
+    api 'org.springframework.security:spring-security-oauth2-jose'
     compileOnly 'jakarta.servlet:jakarta.servlet-api'
 
     // OAuth2/OIDC 클라이언트 및 리소스 서버 기능 추가

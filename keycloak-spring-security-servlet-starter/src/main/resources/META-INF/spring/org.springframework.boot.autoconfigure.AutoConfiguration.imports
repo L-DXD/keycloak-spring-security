@@ -1,0 +1,2 @@
+com.ids.keycloak.security.config.KeycloakServletAutoConfiguration
+com.ids.keycloak.security.config.KeycloakBannerAutoConfiguration

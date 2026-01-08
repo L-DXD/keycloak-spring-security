@@ -24,24 +24,24 @@ import java.io.OutputStream;
 @RequiredArgsConstructor
 public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoint {
 
-   private final ObjectMapper objectMapper;
+    private final ObjectMapper objectMapper;
 
-   @Override
-   public void commence(HttpServletRequest request, HttpServletResponse response, AuthenticationException authException)
-       throws IOException, ServletException {
-      // KeycloakSecurityException이 원인인 경우, 해당 예외에서 errorCode를 추출
-      if (authException.getCause() instanceof KeycloakSecurityException cause) {
-         log.debug("KeycloakAuthenticationEntryPoint: 인증 실패 - KeycloakSecurityException 발생 = {}, {}",
-             cause.getErrorCode(), cause.getMessage());
-      }
+    @Override
+    public void commence(HttpServletRequest request, HttpServletResponse response, AuthenticationException authException)
+        throws IOException, ServletException {
+        // KeycloakSecurityException이 원인인 경우, 해당 예외에서 errorCode를 추출
+        if (authException.getCause() instanceof KeycloakSecurityException cause) {
+            log.debug("KeycloakAuthenticationEntryPoint: 인증 실패 - KeycloakSecurityException 발생 = {}, {}",
+                cause.getErrorCode(), cause.getMessage());
+        }
 
-      // 그 외 인증 예외는 기본 401 응답
-      ErrorCode defaultError = ErrorCode.AUTHENTICATION_FAILED;
-      response.setStatus(defaultError.getHttpStatus());
-      response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-      try (OutputStream os = response.getOutputStream()) {
-         objectMapper.writeValue(os, new ErrorResponse(defaultError.getCode(), defaultError.getDefaultMessage()));
-         os.flush();
-      }
-   }
+        // 그 외 인증 예외는 기본 401 응답
+        ErrorCode defaultError = ErrorCode.AUTHENTICATION_FAILED;
+        response.setStatus(defaultError.getHttpStatus());
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        try (OutputStream os = response.getOutputStream()) {
+            objectMapper.writeValue(os, new ErrorResponse(defaultError.getCode(), defaultError.getDefaultMessage()));
+            os.flush();
+        }
+    }
 }
