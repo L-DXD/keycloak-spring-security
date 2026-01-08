@@ -1,5 +1,5 @@
 
-package com.ids.keycloak.security.web.reactive;
+package com.ids.keycloak.security.exception;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ids.keycloak.security.error.ErrorResponse;
@@ -14,40 +14,41 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.json.Jackson2JsonEncoder;
 import org.springframework.http.server.reactive.ServerHttpResponse;
-import org.springframework.security.core.AuthenticationException;
-import org.springframework.security.web.server.ServerAuthenticationEntryPoint;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.web.server.authorization.ServerAccessDeniedHandler;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
 import java.util.Collections;
 
 /**
- * Reactive 환경에서 인증(Authentication) 과정에서 실패하는 경우 호출되는 핸들러
+ * Reactive 환경에서 인가(Authorization) 과정에서 실패하는 경우 호출되는 핸들러
  */
 @Slf4j
 @RequiredArgsConstructor
-public class KeycloakServerAuthenticationEntryPoint implements ServerAuthenticationEntryPoint {
+public class KeycloakServerAccessDeniedHandler implements ServerAccessDeniedHandler {
 
     private final ObjectMapper objectMapper;
 
     @Override
-    public Mono<Void> commence(ServerWebExchange exchange, AuthenticationException ex) {
+    public Mono<Void> handle(ServerWebExchange exchange, AccessDeniedException denied) {
         return Mono.defer(() -> {
-           if (ex.getCause() instanceof KeycloakSecurityException cause) {
-              log.debug("KeycloakServerAuthenticationEntryPoint: 인증 실패 - KeycloakSecurityException 발생 = {}, {}", cause.getErrorCode(), cause.getMessage());
+           if(denied.getCause() instanceof KeycloakSecurityException cause) {
+              log.debug("KeycloakServerAccessDeniedHandler: 인가 실패 - KeycloakSecurityException 발생 = {}, {}", cause.getErrorCode(), cause.getMessage());
            }
-            ServerHttpResponse response = exchange.getResponse();
+
+           ServerHttpResponse response = exchange.getResponse();
             response.getHeaders().add(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE);
 
-            ErrorCode errorCode = ErrorCode.AUTHENTICATION_FAILED;
+            ErrorCode errorCode = ErrorCode.ACCESS_DENIED;
             response.setRawStatusCode(errorCode.getHttpStatus());
 
-            ErrorResponse errorResponse = new ErrorResponse(errorCode.getCode(), errorCode.getDefaultMessage());
+            ErrorResponse errorResponse = new ErrorResponse(errorCode.getCode(), ErrorCode.ACCESS_DENIED.getDefaultMessage());
 
             return writeErrorResponse(response, errorResponse)
-                    .onErrorResume(EncodingException.class, e -> {
+                    .onErrorResume(EncodingException.class, ex -> {
                         // 주 응답 직렬화 실패 시, 대체 응답 시도
-                        log.warn("메인 에러 응답 작성 중 오류 발생, 대체 응답을 시도합니다.", e);
+                        log.warn("메인 에러 응답 작성 중 오류 발생, 대체 응답을 시도합니다.", ex);
                         ErrorCode fallbackErrorCode = ErrorCode.CONFIGURATION_ERROR;
                         response.setRawStatusCode(fallbackErrorCode.getHttpStatus());
                         ErrorResponse fallbackResponse = new ErrorResponse(fallbackErrorCode.getCode(), fallbackErrorCode.getDefaultMessage());
