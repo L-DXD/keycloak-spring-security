@@ -3,4 +3,5 @@ include "keycloak-spring-security-servlet"
 include "keycloak-spring-security-reactive"
 include "keycloak-spring-security-servlet-starter"
 include "keycloak-spring-security-reactive-starter"
-
+include "integration-tests:servlet-app"
+include "integration-tests:reactive-app"

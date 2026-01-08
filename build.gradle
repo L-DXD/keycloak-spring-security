@@ -32,7 +32,6 @@ subprojects {
         }
     }
 
-    // 하위 프로젝트의 평가가 끝난 후, 'java-base' 플러그인이 있는지 확인하고 의존성을 추가
     afterEvaluate { project ->
         if (project.plugins.hasPlugin('java-base')) {
             project.dependencies {
@@ -44,6 +43,9 @@ subprojects {
 
                 // Common SLF4J dependency
                 implementation 'org.slf4j:slf4j-api'
+
+                // keycloak client library (etc. online, token exchange, ...)
+                implementation 'io.github.l-dxd:keycloak-client:1.0.0'
             }
         }
     }

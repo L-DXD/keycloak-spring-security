@@ -1,5 +1,5 @@
 
-package com.ids.keycloak.security.exception;
+package com.ids.keycloak.security.web.servlet;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ids.keycloak.security.error.ErrorResponse;
@@ -32,7 +32,7 @@ public class KeycloakAccessDeniedHandler implements AccessDeniedHandler {
         // KeycloakSecurityException이 원인인 경우, 해당 예외에서 errorCode를 추출
         if (accessDeniedException.getCause() instanceof KeycloakSecurityException cause) {
             log.debug("KeycloakAccessDeniedHandler: 인가 실패 - KeycloakSecurityException 발생 = {}, {}",
-                    cause.getErrorCode(), cause.getMessage());
+                cause.getErrorCode(), cause.getMessage());
         }
 
         // 그 외 인가 예외는 기본 403 응답
