@@ -84,6 +84,8 @@ public class CookieUtil {
      * @param idMaxAge      ID Token 만료 시간(초)
      */
     public static void addTokenCookies(HttpServletResponse response, String accessToken, int accessMaxAge, String idToken, int idMaxAge) {
+        System.out.println("idMaxAge = " + idMaxAge);
+
         log.debug("Access Token 및 ID Token 쿠키를 응답에 추가합니다.");
         addCookie(response, ACCESS_TOKEN_NAME, accessToken, accessMaxAge);
         addCookie(response, ID_TOKEN_NAME, idToken, idMaxAge);

@@ -136,6 +136,7 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         ApplicationContext context = http.getSharedObject(ApplicationContext.class);
 
         // === Bean 조회 ===
+        JwtDecoder jwtDecoder = context.getBean(JwtDecoder.class);
         AuthenticationManager authenticationManager = http.getSharedObject(AuthenticationManager.class);
         ObjectMapper objectMapper = context.getBean(ObjectMapper.class);
         KeycloakAuthenticationEntryPoint authenticationEntryPoint = context.getBean(KeycloakAuthenticationEntryPoint.class);
@@ -150,6 +151,7 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
 
         // === 7. Keycloak 인증 필터 등록 ===
         KeycloakAuthenticationFilter authenticationFilter = new KeycloakAuthenticationFilter(
+            jwtDecoder,
             authenticationManager,
             objectMapper,
             sessionManager

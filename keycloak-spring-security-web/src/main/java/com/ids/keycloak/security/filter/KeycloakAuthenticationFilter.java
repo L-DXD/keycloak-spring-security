@@ -21,6 +21,9 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
@@ -30,15 +33,18 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Slf4j
 public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
 
+    private final JwtDecoder jwtDecoder;
     private final AuthenticationManager authenticationManager;
     private final ObjectMapper objectMapper;
     private final KeycloakSessionManager sessionManager;
 
     public KeycloakAuthenticationFilter(
+        JwtDecoder jwtDecoder,
         AuthenticationManager authenticationManager,
         ObjectMapper objectMapper,
         KeycloakSessionManager sessionManager
     ) {
+        this.jwtDecoder = jwtDecoder;
         this.authenticationManager = authenticationManager;
         this.objectMapper = objectMapper;
         this.sessionManager = sessionManager;
@@ -53,12 +59,6 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
     {
         String idTokenValue = CookieUtil.getCookieValue(request, CookieUtil.ID_TOKEN_NAME).orElse(null);
         String accessTokenValue = CookieUtil.getCookieValue(request, CookieUtil.ACCESS_TOKEN_NAME).orElse(null);
-
-        if (idTokenValue == null) {
-            log.trace("요청에 ID 토큰 쿠키가 없습니다. 다음 필터로 계속 진행합니다.");
-            filterChain.doFilter(request, response);
-            return;
-        }
 
         try {
             // HTTP Session에서 Refresh Token 가져오기
@@ -124,25 +124,20 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
 
     private void updateCookies(HttpServletResponse response, KeycloakTokenInfo newTokens) {
         log.debug("[Filter] 토큰이 재발급되어 쿠키를 업데이트합니다.");
-        int maxAge = CookieUtil.calculateRestMaxAge(newTokens.getExpireTime());
+        int maxAge = newTokens.getExpireTime();
         CookieUtil.addTokenCookies(response, newTokens.getAccessToken(), maxAge, newTokens.getIdToken(), maxAge);
     }
 
-    private PreAuthenticationPrincipal createPrincipalFromIdToken(String idToken) throws IOException {
+    private PreAuthenticationPrincipal createPrincipalFromIdToken(String idToken) {
         try {
-            String[] parts = idToken.split("\\.");
-            if (parts.length < 2) {
-                return new PreAuthenticationPrincipal("unknown");
-            }
-            byte[] payloadBytes = Base64.getUrlDecoder().decode(parts[1]);
-            Map<String, Object> payload = objectMapper.readValue(payloadBytes, Map.class);
-            String subject = (String) payload.get("sub");
+            Jwt jwt = jwtDecoder.decode(idToken);
+            String subject = jwt.getSubject();
             if (subject == null || subject.isBlank()) {
                 throw new AuthenticationFailedException("ID Token에 'sub' 클레임이 없습니다.");
             }
             return new PreAuthenticationPrincipal(subject);
-        } catch (AuthenticationFailedException e) {
-            log.warn("ID Token 파싱 중 오류 발생: {}", e.getMessage());
+
+        } catch (JwtException e) {
             return new PreAuthenticationPrincipal("unknown");
         }
     }
