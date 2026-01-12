@@ -1,63 +1,74 @@
 # 이슈: [Starter] 환경 자동 감지 및 AutoConfiguration 구현
 
 ## 🎯 목표
-사용자가 `keycloak-spring-security-starter` 의존성 하나만 추가하면, Spring MVC(Servlet)와 WebFlux(Reactive) 환경을 자동으로 감지하여 필요한 보안 설정을 활성화하는 AutoConfiguration을 구현합니다. 이를 통해 'Zero-Configuration'에 가까운 사용 경험을 제공합니다.
+사용자가 `keycloak-spring-security-web-starter` (Servlet) 또는 `keycloak-spring-security-webflux-starter` (Reactive) 의존성을 추가하면, 해당 환경에 맞는 Keycloak 보안 설정을 자동으로 활성화합니다. 이를 통해 복잡한 보안 설정 없이 의존성 추가만으로 안전한 애플리케이션을 구성할 수 있는 'Zero-Configuration' 경험을 제공합니다.
 
-## 📋 작업 상세 내용
+## 📋 구현 상세 내용
 
-### 1. AutoConfiguration Imports 설정
-- `keycloak-spring-security-starter` 모듈의 `src/main/resources/META-INF/spring` 디렉터리에 `org.springframework.boot.autoconfigure.AutoConfiguration.imports` 파일을 생성합니다.
-- 이 파일에 아래에서 생성할 두 AutoConfiguration 클래스의 전체 경로를 등록하여 Spring Boot가 설정을 인식하도록 합니다.
+### 1. 모듈 구조 분리
+기존 단일 스타터 계획에서 실행 환경(Servlet vs Reactive)에 따른 명확한 의존성 관리와 설정 분리를 위해 두 개의 스타터 모듈로 분리하였습니다.
+- **`keycloak-spring-security-web-starter`**: Spring MVC (Servlet) 기반 애플리케이션용
+- **`keycloak-spring-security-webflux-starter`**: Spring WebFlux (Reactive) 기반 애플리케이션용 (현재 구조 마련 단계)
 
 ### 2. Servlet 환경 자동 설정 (`KeycloakServletAutoConfiguration`)
-- `keycloak-spring-security-starter` 모듈 내에 `KeycloakServletAutoConfiguration` 클래스를 생성합니다.
-- **조건부 활성화:**
-  - `@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)`: 클래스 레벨에 적용하여 오직 Servlet 기반 웹 애플리케이션에서만 설정이 활성화되도록 합니다.
-  - `@ConditionalOnClass(SecurityFilterChain.class)`: Spring Security가 클래스패스에 존재할 때만 활성화되도록 합니다.
-- **Bean 등록:**
-  - `KeycloakAuthenticationEntryPoint`: `@ConditionalOnMissingBean`과 함께 Bean으로 등록합니다.
-  - `KeycloakAccessDeniedHandler`: `@ConditionalOnMissingBean`과 함께 Bean으로 등록합니다.
-  - `SecurityFilterChain`: `@ConditionalOnMissingBean`과 함께 기본 `SecurityFilterChain`을 등록합니다. 이 체인은 `servlet` 모듈에서 만들 `KeycloakHttpConfigurer`를 사용하여 구성될 것입니다.
+`keycloak-spring-security-web-starter` 모듈의 핵심 설정 클래스입니다. `src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports`에 등록되어 Spring Boot에 의해 로드됩니다.
 
-### 3. Reactive 환경 자동 설정 (`KeycloakReactiveAutoConfiguration`)
-- `keycloak-spring-security-starter` 모듈 내에 `KeycloakReactiveAutoConfiguration` 클래스를 생성합니다.
-- **조건부 활성화:**
-  - `@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.REACTIVE)`: 클래스 레벨에 적용하여 오직 Reactive 기반 웹 애플리케이션에서만 설정이 활성화되도록 합니다.
-  - `@ConditionalOnClass(SecurityWebFilterChain.class)`: Spring Security (WebFlux)가 클래스패스에 존재할 때만 활성화되도록 합니다.
-- **Bean 등록:**
-  - `ServerAuthenticationEntryPoint`: `@ConditionalOnMissingBean`과 함께 Bean으로 등록합니다.
-  - `ServerAccessDeniedHandler`: `@ConditionalOnMissingBean`과 함께 Bean으로 등록합니다.
-  - `SecurityWebFilterChain`: `@ConditionalOnMissingBean`과 함께 기본 `SecurityWebFilterChain`을 등록합니다.
+#### 2.1 활성화 조건
+- `@ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)`: Servlet 웹 애플리케이션에서만 동작합니다.
+- `@AutoConfiguration`: Spring Boot의 자동 설정 메커니즘을 따릅니다.
+- `@EnableConfigurationProperties`: `KeycloakSecurityProperties`, `CookieProperties` 등을 활성화합니다.
 
-### 4. 의존성 관리
-- `keycloak-spring-security-starter`의 `build.gradle` 파일에 `keycloak-spring-security-servlet`과 `keycloak-spring-security-reactive` 모듈에 대한 의존성을 `api` 또는 `implementation`으로 추가합니다.
-- Spring Boot 웹 스타터(`spring-boot-starter-web`, `spring-boot-starter-webflux`) 의존성은 `compileOnly`로 설정하여, 사용자의 프로젝트 환경에 따라 필요한 의존성만 전이되도록 관리하는 것을 고려합니다.
+#### 2.2 구성요소 (Nested Configuration)
+설정의 복잡도를 낮추고 역할별로 Bean을 관리하기 위해 내부 정적 클래스로 구성을 분리하였습니다.
 
-## ✅ 인수 조건
-- [x] 사용자가 직접 `SecurityFilterChain` Bean을 등록하면, `starter`의 기본 `SecurityFilterChain` 설정이 동작하지 않는다 (`@ConditionalOnMissingBean` 동작 확인).
-- [x] 사용자가 직접 `KeycloakAuthenticationEntryPoint` 또는 `ServerAuthenticationEntryPoint` Bean을 등록하면, `starter`의 기본 Bean을 덮어쓴다 (`@ConditionalOnMissingBean` 동작 확인).
+1.  **`SessionConfiguration`**
+    -   `KeycloakSessionManager`: 세션 관리 핵심 컴포넌트
+    -   `IndexedMapSessionRepository`: 백채널 로그아웃 지원을 위한 Principal Name 인덱싱 기능이 포함된 인-메모리 세션 저장소 (`@ConditionalOnMissingBean`으로 사용자 정의 가능)
 
-### ConditionalOnMissingBean 동작 확인 결과
+2.  **`KeycloakInfrastructureConfiguration`**
+    -   `ObjectMapper`, `RestTemplate`: Keycloak API 통신 및 데이터 처리를 위한 유틸리티
+    -   `KeycloakClient`: Keycloak Admin REST API 클라이언트 (설정 파일의 프로퍼티로 초기화)
 
-`@ConditionalOnMissingBean` 어노테이션의 동작을 검증하기 위해 다음과 같은 테스트를 수행하였습니다:
+3.  **`KeycloakAuthenticationConfiguration`**
+    -   `AuthenticationManager`: `KeycloakAuthenticationProvider`를 사용하는 인증 매니저 구성
 
-1.  **준비 단계**:
-    *   `keycloak-spring-security-starter` 모듈 내의 `KeycloakServletAutoConfiguration.java`와 `KeycloakReactiveAutoConfiguration.java` 파일에 각 `@Bean` 메서드가 호출될 때 로그 메시지를 출력하도록 추가하였습니다.
-    *   `integration-tests/servlet-app/src/main/java/com/ids/keycloak/security/test/servlet/ServletApp.java` 파일에 다음 사용자 정의 빈들을 등록하였습니다:
-        *   `SecurityFilterChain` (기본 경로 `/test`에 대해 인증 없이 허용)
-        *   `KeycloakAuthenticationEntryPoint` (커스텀 로그 메시지 출력)
-        *   `KeycloakAccessDeniedHandler` (커스텀 로그 메시지 출력)
-    *   `integration-tests/servlet-app/src/test/java/com/ids/keycloak/security/test/servlet/AutoConfigurationIntegrationTest.java` 파일은 `/test` 경로에 대해 `HTTP 200 OK` 응답을 기대하도록 수정되었습니다.
-    *   모든 `@ConditionalOnMissingBean` 어노테이션은 명시적으로 클래스 기반 검증을 사용하도록 수정되었습니다 (예: `@ConditionalOnMissingBean(SecurityFilterChain.class)`).
+4.  **`KeycloakWebSecurityConfiguration`**
+    -   **보안 핸들러**: `KeycloakAuthenticationEntryPoint`, `KeycloakAccessDeniedHandler`, `OidcLoginSuccessHandler`, `KeycloakLogoutHandler` 등을 등록합니다.
+    -   **`SecurityFilterChain`**: 가장 중요한 보안 체인 설정입니다.
+        -   `KeycloakHttpConfigurer`를 사용하여 핵심 보안 로직(필터, 프로바이더, OIDC, CSRF 등)을 적용합니다.
+        -   `KeycloakSecurityProperties`의 `permitAllPaths` 설정을 통해 인증 제외 경로를 구성합니다.
+        -   `@ConditionalOnMissingBean(SecurityFilterChain.class)`이 적용되어 있어, 사용자가 직접 `SecurityFilterChain`을 빈으로 등록하면 이 기본 설정은 물러납니다.
 
-2.  **테스트 실행**:
-    *   `ServletApp`을 실행하여 로그를 확인하였습니다. (통합 테스트 실행 대신 애플리케이션 직접 실행을 통해 로그 확인)
+### 3. KeycloakHttpConfigurer (`keycloak-spring-security-web`)
+복잡한 `HttpSecurity` 설정을 캡슐화한 `AbstractHttpConfigurer` 구현체입니다. 자동 설정뿐만 아니라, 사용자가 커스텀 보안 체인을 구성할 때도 다음과 같이 쉽게 Keycloak 보안을 적용할 수 있게 돕습니다.
 
-3.  **관찰 결과**:
-    *   `ServletApp`에서 정의한 **사용자 정의 빈들의 등록 로그**(`Custom KeycloakAuthenticationEntryPoint 빈이 등록되었습니다.`, `Custom KeycloakAccessDeniedHandler 빈이 등록되었습니다.`)가 성공적으로 출력되었습니다.
-    *   `KeycloakServletAutoConfiguration`에서 정의한 **라이브러리의 자동 구성 빈들(SecurityFilterChain, KeycloakAuthenticationEntryPoint, KeycloakAccessDeniedHandler)의 등록 로그는 출력되지 않았습니다.**
-    *   `KeycloakServletAutoConfiguration` 클래스 자체의 활성화 로그(`Keycloak Spring Security: Servlet 환경 자동 설정이 활성화되었습니다.`)는 정상적으로 출력되었습니다.
+```java
+http.with(KeycloakHttpConfigurer.keycloak(), Customizer.withDefaults());
+```
 
-4.  **결론**:
-    *   이러한 관찰 결과는 `KeycloakServletAutoConfiguration` 내의 `@ConditionalOnMissingBean` 어노테이션들이 **정상적으로 작동함**을 명확히 보여줍니다. 즉, 사용자가 애플리케이션 컨텍스트에 동일한 타입의 빈을 직접 등록했을 때, 라이브러리의 자동 구성 빈은 등록되지 않고 사용자 정의 빈이 우선합니다. 이는 'Zero-Configuration' 목표를 달성하며 사용자가 필요한 경우 기본 설정을 유연하게 재정의할 수 있음을 의미합니다.
+주요 역할:
+-   **필터 등록**: `KeycloakAuthenticationFilter`를 `UsernamePasswordAuthenticationFilter` 앞에 배치
+-   **인증 프로바이더**: `KeycloakAuthenticationProvider` 등록
+-   **OIDC 로그인**: `oauth2Login()` 설정 및 성공 핸들러 연동
+-   **로그아웃**: Front-Channel 및 Back-Channel 로그아웃 핸들러 설정
+-   **예외 처리**: 인증 진입점 및 접근 거부 처리기 설정
+-   **CSRF**: 로그아웃 엔드포인트에 대한 CSRF 면제 처리
+
+### 4. 배너 자동 설정 (`KeycloakBannerAutoConfiguration`)
+애플리케이션 시작 시 라이브러리 로고, 버전, 현재 활성화된 웹 스택(Servlet/Reactive) 정보를 콘솔에 출력하여 라이브러리 동작 여부를 시각적으로 확인시켜줍니다.
+
+## ✅ 인수 조건 및 검증 결과
+
+### 1. Zero-Configuration 동작 확인
+- [x] 스타터 의존성 추가만으로 인증/인가, 로그인/로그아웃, 세션 관리 기능이 동작해야 한다.
+    - **결과**: `integration-tests/servlet-app`에서 별도의 Security Config 없이 프로퍼티 설정만으로 Keycloak 연동이 정상 동작함을 확인.
+
+### 2. 사용자 정의 유연성 (@ConditionalOnMissingBean)
+- [x] 사용자가 직접 `SecurityFilterChain` Bean을 등록하면, 스타터의 기본 체인은 생성되지 않아야 한다.
+- [x] 사용자가 특정 핸들러(예: `AuthenticationEntryPoint`)만 재정의하면, 나머지 설정은 유지된 채 해당 빈만 교체되어야 한다.
+    - **결과**: 테스트를 통해 사용자가 등록한 빈이 우선순위를 가지며, 자동 설정 로그가 출력되지 않거나(전체 대체) 필요한 부분만 교체됨을 확인.
+
+### 3. 커스텀 구성 지원
+- [x] 사용자가 복잡한 보안 요구사항(예: 다중 필터 체인)을 가질 경우, `KeycloakHttpConfigurer`를 활용하여 쉽게 통합할 수 있어야 한다.
+
 
