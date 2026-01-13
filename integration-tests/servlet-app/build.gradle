@@ -18,6 +18,10 @@ dependencies {
 
     // SLF4J API (often brought transitively, but explicit for clarity)
     implementation 'org.slf4j:slf4j-api'
+
+    // Redis Session Test
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    implementation 'org.springframework.session:spring-session-data-redis'
 }
 
 bootJar {
