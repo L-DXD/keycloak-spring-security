@@ -13,12 +13,12 @@ import com.sd.KeycloakClient.config.AbstractKeycloakConfig;
 import com.sd.KeycloakClient.config.ClientConfiguration;
 import com.sd.KeycloakClient.factory.KeycloakClient;
 import jakarta.annotation.PostConstruct;
-import java.util.concurrent.ConcurrentHashMap;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -33,9 +33,9 @@ import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInit
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.session.FindByIndexNameSessionRepository;
-import org.springframework.session.MapSession;
-import org.springframework.session.config.annotation.web.http.EnableSpringHttpSession;
+import org.springframework.session.Session;
 
 /**
  * Keycloak Spring Security의 Servlet 환경 자동 설정을 담당하는 진입점입니다.
@@ -43,10 +43,13 @@ import org.springframework.session.config.annotation.web.http.EnableSpringHttpSe
  */
 @AutoConfiguration
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-@EnableConfigurationProperties({KeycloakSecurityProperties.class})
+@EnableConfigurationProperties({KeycloakSecurityProperties.class, KeycloakSessionProperties.class})
+@AutoConfigureAfter(name = "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration")
 @Import({
-    // 세션 관련 설정을 가장 먼저 임포트하여 Bean 생성 순서를 보장합니다.
+    // 세션 관련 설정 (Memory/Redis는 별도 Configuration 클래스로 분리)
     KeycloakServletAutoConfiguration.SessionConfiguration.class,
+    MemorySessionConfiguration.class,
+    RedisSessionConfiguration.class,
     KeycloakServletAutoConfiguration.KeycloakInfrastructureConfiguration.class,
     KeycloakServletAutoConfiguration.KeycloakAuthenticationConfiguration.class,
     KeycloakServletAutoConfiguration.KeycloakWebSecurityConfiguration.class
@@ -70,10 +73,14 @@ public class KeycloakServletAutoConfiguration {
     }
 
     /**
-     * 세션 관리 관련 Bean 설정
+     * 세션 관리 관련 공통 Bean 설정.
+     * <p>
+     * 세션 저장소(Memory/Redis)는 별도 Configuration 클래스로 분리되었습니다.
+     * - MemorySessionConfiguration: keycloak.session.store-type=memory (기본값)
+     * - RedisSessionConfiguration: keycloak.session.store-type=redis
+     * </p>
      */
     @Configuration(proxyBeanMethods = false)
-    @EnableSpringHttpSession
     @Slf4j
     protected static class SessionConfiguration {
 
@@ -82,18 +89,6 @@ public class KeycloakServletAutoConfiguration {
         public KeycloakSessionManager keycloakSessionManager() {
             log.debug("지원 Bean을 등록합니다: [KeycloakSessionManager]");
             return new KeycloakSessionManager();
-        }
-
-        /**
-         * Principal Name으로 세션을 검색할 수 있는 인-메모리 세션 저장소 Bean.
-         * 사용자가 다른 구현(ex: Redis)을 원할 경우를 대비하여 @ConditionalOnMissingBean 적용.
-         * 백채널 로그아웃 기능을 위해 FindByIndexNameSessionRepository 인터페이스를 구현합니다.
-         */
-        @Bean
-        @ConditionalOnMissingBean(FindByIndexNameSessionRepository.class)
-        public FindByIndexNameSessionRepository<MapSession> sessionRepository() {
-            log.info("IndexedMapSessionRepository (In-Memory with Principal Name Index) 생성");
-            return new IndexedMapSessionRepository(new ConcurrentHashMap<>());
         }
     }
 
@@ -247,13 +242,17 @@ public class KeycloakServletAutoConfiguration {
         public SecurityFilterChain keycloakSecurityFilterChain(
             HttpSecurity http,
             KeycloakSecurityProperties securityProperties,
+            ObjectProvider<FindByIndexNameSessionRepository<? extends Session>> sessionRepositoryProvider,
             KeycloakAuthorizationManager keycloakAuthorizationManager
         ) throws Exception {
             log.info("핵심 Bean을 등록합니다: [SecurityFilterChain]");
 
             // 1. Keycloak 핵심 설정을 Configurer에서 적용
             // (인증 필터, 프로바이더, 로그인, 로그아웃, 세션, CSRF 등)
-            http.with(KeycloakHttpConfigurer.keycloak(), Customizer.withDefaults());
+            // 세션 리포지토리를 명시적으로 주입하여 빈 생성 순서 보장
+            http.with(KeycloakHttpConfigurer.keycloak()
+                    .sessionRepository(sessionRepositoryProvider.getIfAvailable()),
+                Customizer.withDefaults());
 
             // 2. 인가 설정
             http.authorizeHttpRequests(authorize -> {
