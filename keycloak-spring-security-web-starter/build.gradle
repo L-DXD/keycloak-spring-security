@@ -19,4 +19,8 @@ dependencies {
     // 사용자의 프로젝트 환경에 따라 필요한 의존성만 전이되도록 compileOnly로 설정
     compileOnly 'org.springframework.boot:spring-boot-starter-web'
 
+    // Redis Session Support (선택적 의존성)
+    // 라이브러리 사용자가 Redis를 원할 때만 자신의 프로젝트에 추가하면 됨
+    compileOnly 'org.springframework.boot:spring-boot-starter-data-redis'
+    compileOnly 'org.springframework.session:spring-session-data-redis'
 }
