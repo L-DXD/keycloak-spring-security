@@ -253,7 +253,7 @@ public class KeycloakServletAutoConfiguration {
                     authorize.requestMatchers(permitAllPaths).permitAll();
                     log.info("인증 제외 경로 설정: {}", securityProperties.getAuthentication().getPermitAllPaths());
                 }
-                
+
                 // 에러 페이지는 인증 없이 접근 허용 (정적 리소스 누락 시 로그인 리디렉션 방지)
                 authorize.requestMatchers("/error").permitAll();
 
