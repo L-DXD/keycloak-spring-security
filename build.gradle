@@ -21,6 +21,10 @@ subprojects {
     plugins.withId('java-base') {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+
+        tasks.withType(Test) {
+            useJUnitPlatform()
+        }
     }
 
     // 'io.spring.dependency-management' 플러그인이 적용된 프로젝트에만 의존성 관리 설정을 적용
@@ -35,7 +39,13 @@ subprojects {
     afterEvaluate { project ->
         if (project.plugins.hasPlugin('java-base')) {
             project.dependencies {
-                testImplementation 'org.springframework.boot:spring-boot-starter-test'
+                // Test dependencies
+                testImplementation 'org.junit.jupiter:junit-jupiter-api'
+                testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine'
+                testImplementation 'org.assertj:assertj-core'
+                testImplementation 'org.mockito:mockito-core'
+                testImplementation 'org.mockito:mockito-junit-jupiter'
+                testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 
                 // Common Lombok dependencies
                 compileOnly 'org.projectlombok:lombok'
