@@ -27,8 +27,7 @@ import static com.ids.keycloak.security.config.KeycloakSecurityConstants.BACK_CH
 import static com.ids.keycloak.security.config.KeycloakSecurityConstants.LOGOUT_URL;
 
 /**
- * Keycloak 인증에 필요한 모든 핵심 설정을 {@link HttpSecurity}에 등록하는
- * {@link AbstractHttpConfigurer} 구현체입니다.
+ * Keycloak 인증에 필요한 모든 핵심 설정을 {@link HttpSecurity}에 등록하는 {@link AbstractHttpConfigurer} 구현체입니다.
  * <p>
  * 이 Configurer는 다음을 설정합니다:
  * <ul>
