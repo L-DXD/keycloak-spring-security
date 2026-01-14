@@ -24,6 +24,7 @@ import org.springframework.security.web.context.NullSecurityContextRepository;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.Session;
 
+import static com.ids.keycloak.security.config.KeycloakSecurityConstants.BACK_CHANNEL_LOGOUT_URL;
 import static com.ids.keycloak.security.config.KeycloakSecurityConstants.LOGOUT_URL;
 
 /**
@@ -127,7 +128,7 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         // === 5. CSRF 설정 ===
         // 로그아웃 엔드포인트는 CSRF 면제 (OIDC 리다이렉트 시 토큰 전달 어려움)
         http.csrf(csrf -> csrf
-            .ignoringRequestMatchers(LOGOUT_URL)
+            .ignoringRequestMatchers(LOGOUT_URL, BACK_CHANNEL_LOGOUT_URL)
         );
     }
 

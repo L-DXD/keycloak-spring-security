@@ -12,6 +12,9 @@ public final class KeycloakSecurityConstants {
     /** 프론트채널 로그아웃 URL */
     public static final String LOGOUT_URL = "/logout";
 
+    /** 백채널 로그아웃 URL 패턴 (Keycloak에서 호출) */
+    public static final String BACK_CHANNEL_LOGOUT_URL = "/logout/connect/back-channel/**";
+
     /** ClientRegistration ID */
     public static final String REGISTRATION_ID = "keycloak";
 
