@@ -13,10 +13,10 @@ import java.util.List;
  * <pre>
  * keycloak:
  *   security:
- *     authentication:
- *       permit-all-paths:
- *         - /public/**
- *         - /health
+ *     permit-all-paths:
+ *       - /public/**
+ *       - /health
+ *       - /actuator/**
  * </pre>
  * </p>
  */
