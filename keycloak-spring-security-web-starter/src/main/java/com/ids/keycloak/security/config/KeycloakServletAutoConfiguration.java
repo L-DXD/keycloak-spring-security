@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ids.keycloak.security.authentication.KeycloakAuthenticationProvider;
 import com.ids.keycloak.security.authentication.KeycloakLogoutHandler;
 import com.ids.keycloak.security.authentication.OidcLoginSuccessHandler;
+import com.ids.keycloak.security.manager.KeycloakAuthorizationManager;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
 import com.ids.keycloak.security.util.CookieUtil;
 import com.ids.keycloak.security.exception.KeycloakAuthenticationEntryPoint;
@@ -73,12 +74,7 @@ public class KeycloakServletAutoConfiguration {
     }
 
     /**
-     * 세션 관리 관련 공통 Bean 설정.
-     * <p>
-     * 세션 저장소(Memory/Redis)는 별도 Configuration 클래스로 분리되었습니다.
-     * - MemorySessionConfiguration: keycloak.session.store-type=memory (기본값)
-     * - RedisSessionConfiguration: keycloak.session.store-type=redis
-     * </p>
+     * 세션 관리 관련 Bean 설정
      */
     @Configuration(proxyBeanMethods = false)
     @Slf4j
@@ -89,6 +85,18 @@ public class KeycloakServletAutoConfiguration {
         public KeycloakSessionManager keycloakSessionManager() {
             log.debug("지원 Bean을 등록합니다: [KeycloakSessionManager]");
             return new KeycloakSessionManager();
+        }
+
+        /**
+         * Principal Name으로 세션을 검색할 수 있는 인-메모리 세션 저장소 Bean.
+         * 사용자가 다른 구현(ex: Redis)을 원할 경우를 대비하여 @ConditionalOnMissingBean 적용.
+         * 백채널 로그아웃 기능을 위해 FindByIndexNameSessionRepository 인터페이스를 구현합니다.
+         */
+        @Bean
+        @ConditionalOnMissingBean(FindByIndexNameSessionRepository.class)
+        public FindByIndexNameSessionRepository<MapSession> sessionRepository() {
+            log.info("IndexedMapSessionRepository (In-Memory with Principal Name Index) 생성");
+            return new IndexedMapSessionRepository(new ConcurrentHashMap<>());
         }
     }
 
@@ -231,22 +239,26 @@ public class KeycloakServletAutoConfiguration {
         }
 
         @Bean
+        @ConditionalOnMissingBean
+        public KeycloakAuthorizationManager keycloakAuthorizationManager(KeycloakClient keycloakClient) {
+            log.debug("지원 Bean을 등록합니다: [KeycloakAuthorizationManager]");
+            return new KeycloakAuthorizationManager(keycloakClient);
+        }
+
+        @Bean
         @ConditionalOnMissingBean(SecurityFilterChain.class)
         public SecurityFilterChain keycloakSecurityFilterChain(
             HttpSecurity http,
             KeycloakSecurityProperties securityProperties,
-            ObjectProvider<FindByIndexNameSessionRepository<? extends Session>> sessionRepositoryProvider
+            KeycloakAuthorizationManager keycloakAuthorizationManager
         ) throws Exception {
             log.info("핵심 Bean을 등록합니다: [SecurityFilterChain]");
 
             // 1. Keycloak 핵심 설정을 Configurer에서 적용
             // (인증 필터, 프로바이더, 로그인, 로그아웃, 세션, CSRF 등)
-            // 세션 리포지토리를 명시적으로 주입하여 빈 생성 순서 보장
-            http.with(KeycloakHttpConfigurer.keycloak()
-                    .sessionRepository(sessionRepositoryProvider.getIfAvailable()),
-                Customizer.withDefaults());
+            http.with(KeycloakHttpConfigurer.keycloak(), Customizer.withDefaults());
 
-            // 2. 인가 설정 - permitAllPaths는 인증 없이 접근, 나머지는 인증 필요
+            // 2. 인가 설정
             http.authorizeHttpRequests(authorize -> {
                 // permit-all-paths 설정된 경로들은 인증 없이 접근 허용
                 if (!securityProperties.getAuthentication().getPermitAllPaths().isEmpty()) {
@@ -258,8 +270,14 @@ public class KeycloakServletAutoConfiguration {
                 // 에러 페이지는 인증 없이 접근 허용 (정적 리소스 누락 시 로그인 리디렉션 방지)
                 authorize.requestMatchers("/error").permitAll();
 
-                // 나머지 모든 요청은 인증 필요
-                authorize.anyRequest().authenticated();
+                // authorization-enabled 여부에 따라 인가 방식 결정
+                if (securityProperties.isAuthorizationEnabled()) {
+                    log.info("Keycloak Authorization Services 활성화: 모든 요청에 대해 Keycloak 인가 검증");
+                    authorize.anyRequest().access(keycloakAuthorizationManager);
+                } else {
+                    // 나머지 모든 요청은 인증만 필요
+                    authorize.anyRequest().authenticated();
+                }
             });
 
             return http.build();
