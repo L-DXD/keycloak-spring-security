@@ -159,8 +159,8 @@ public SecurityFilterChain filterChain(HttpSecurity http) {
 
 ```build.gradle
 // for MVC and Servlet environment
-implementation("com.ids.keycloak:keycloak-spring-security-servlet-starter:1.0.0")
+implementation("com.ids.keycloak:keycloak-spring-security-web-starter:1.0.0")
 
 // for WebFlux and Reactive environment
-implementation("com.ids.keycloak:keycloak-spring-security-reactive-starter:1.0.0")
+implementation("com.ids.keycloak:keycloak-spring-security-webflux-starter:1.0.0")
 ```
