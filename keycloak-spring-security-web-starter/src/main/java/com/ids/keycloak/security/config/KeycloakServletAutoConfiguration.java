@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ids.keycloak.security.authentication.KeycloakAuthenticationProvider;
 import com.ids.keycloak.security.authentication.KeycloakLogoutHandler;
 import com.ids.keycloak.security.authentication.OidcLoginSuccessHandler;
+import com.ids.keycloak.security.manager.KeycloakAuthorizationManager;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
 import com.ids.keycloak.security.util.CookieUtil;
 import com.ids.keycloak.security.exception.KeycloakAuthenticationEntryPoint;
@@ -235,10 +236,18 @@ public class KeycloakServletAutoConfiguration {
         }
 
         @Bean
+        @ConditionalOnMissingBean
+        public KeycloakAuthorizationManager keycloakAuthorizationManager(KeycloakClient keycloakClient) {
+            log.debug("지원 Bean을 등록합니다: [KeycloakAuthorizationManager]");
+            return new KeycloakAuthorizationManager(keycloakClient);
+        }
+
+        @Bean
         @ConditionalOnMissingBean(SecurityFilterChain.class)
         public SecurityFilterChain keycloakSecurityFilterChain(
             HttpSecurity http,
-            KeycloakSecurityProperties securityProperties
+            KeycloakSecurityProperties securityProperties,
+            KeycloakAuthorizationManager keycloakAuthorizationManager
         ) throws Exception {
             log.info("핵심 Bean을 등록합니다: [SecurityFilterChain]");
 
@@ -246,7 +255,7 @@ public class KeycloakServletAutoConfiguration {
             // (인증 필터, 프로바이더, 로그인, 로그아웃, 세션, CSRF 등)
             http.with(KeycloakHttpConfigurer.keycloak(), Customizer.withDefaults());
 
-            // 2. 인가 설정 - permitAllPaths는 인증 없이 접근, 나머지는 인증 필요
+            // 2. 인가 설정
             http.authorizeHttpRequests(authorize -> {
                 // permit-all-paths 설정된 경로들은 인증 없이 접근 허용
                 if (!securityProperties.getAuthentication().getPermitAllPaths().isEmpty()) {
@@ -254,12 +263,18 @@ public class KeycloakServletAutoConfiguration {
                     authorize.requestMatchers(permitAllPaths).permitAll();
                     log.info("인증 제외 경로 설정: {}", securityProperties.getAuthentication().getPermitAllPaths());
                 }
-                
+
+                // authorization-enabled 여부에 따라 인가 방식 결정
+                if (securityProperties.isAuthorizationEnabled()) {
+                    log.info("Keycloak Authorization Services 활성화: 모든 요청에 대해 Keycloak 인가 검증");
+                    authorize.anyRequest().access(keycloakAuthorizationManager);
+                } else {
+                    // 나머지 모든 요청은 인증만 필요
+                    authorize.anyRequest().authenticated();
+                }
+
                 // 에러 페이지는 인증 없이 접근 허용 (정적 리소스 누락 시 로그인 리디렉션 방지)
                 authorize.requestMatchers("/error").permitAll();
-
-                // 나머지 모든 요청은 인증 필요
-                authorize.anyRequest().authenticated();
             });
 
             return http.build();
