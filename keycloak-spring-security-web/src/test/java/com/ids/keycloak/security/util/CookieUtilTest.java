@@ -7,7 +7,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.ids.keycloak.security.config.CookieProperties;
+import com.ids.keycloak.security.config.KeycloakCookieProperties;
 import com.ids.keycloak.security.exception.ConfigurationException;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
@@ -35,11 +35,11 @@ class CookieUtilTest {
     @Captor
     private ArgumentCaptor<Cookie> cookieCaptor;
 
-    private CookieProperties properties;
+    private KeycloakCookieProperties properties;
 
     @BeforeEach
     void setUp() {
-        properties = new CookieProperties();
+        properties = new KeycloakCookieProperties();
         properties.setHttpOnly(true);
         properties.setSecure(true);
         properties.setPath("/app");
