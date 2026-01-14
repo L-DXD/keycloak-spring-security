@@ -20,4 +20,15 @@ public final class KeycloakSecurityConstants {
 
     /** Spring Security 역할 접두사 */
     public static final String ROLE_PREFIX = "ROLE_";
+
+    // ===== OIDC Claims =====
+
+    /** 사용자 고유 식별자 클레임 */
+    public static final String SUB_CLAIM = "sub";
+
+    /** 사용자 명 클레임 */
+    public static final String PREFERRED_USERNAME_CLAIM = "preferred_username";
+
+    /** 세션 ID 클레임 */
+    public static final String SID_CLAIM = "sid";
 }

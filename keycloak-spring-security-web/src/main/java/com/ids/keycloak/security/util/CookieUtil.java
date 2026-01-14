@@ -1,8 +1,7 @@
 package com.ids.keycloak.security.util;
 
-import com.ids.keycloak.security.config.CookieProperties;
+import com.ids.keycloak.security.config.KeycloakCookieProperties;
 import com.ids.keycloak.security.exception.ConfigurationException;
-import com.sd.KeycloakClient.dto.auth.KeycloakTokenInfo;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -20,7 +19,7 @@ public class CookieUtil {
     public static final String ID_TOKEN_NAME = "id_token";
     public static final String ACCESS_TOKEN_NAME = "access_token";
 
-    private static CookieProperties properties;
+    private static KeycloakCookieProperties properties;
 
     /**
      * Cookie 설정을 담당하는 프로퍼티를 주입합니다.
@@ -28,7 +27,7 @@ public class CookieUtil {
      *
      * @param props 쿠키 설정 프로퍼티
      */
-    public static void setProperties(CookieProperties props) {
+    public static void setProperties(KeycloakCookieProperties props) {
         CookieUtil.properties = props;
     }
 
@@ -42,7 +41,7 @@ public class CookieUtil {
      */
     private static Cookie createCookie(String name, String value, int maxAge) {
         if (properties == null) {
-            throw new ConfigurationException("CookieProperties가 초기화되지 않았습니다. AutoConfiguration 설정을 확인하세요.");
+            throw new ConfigurationException("KeycloakCookieProperties가 초기화되지 않았습니다. AutoConfiguration 설정을 확인하세요.");
         }
 
         Cookie cookie = new Cookie(name, value);

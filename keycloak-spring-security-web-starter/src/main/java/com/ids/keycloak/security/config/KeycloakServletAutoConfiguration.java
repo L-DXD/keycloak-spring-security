@@ -45,7 +45,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @AutoConfiguration
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-@EnableConfigurationProperties({CookieProperties.class, KeycloakSecurityProperties.class})
+@EnableConfigurationProperties({KeycloakSecurityProperties.class})
 @Import({
     // 세션 관련 설정을 가장 먼저 임포트하여 Bean 생성 순서를 보장합니다.
     KeycloakServletAutoConfiguration.SessionConfiguration.class,
@@ -62,12 +62,12 @@ public class KeycloakServletAutoConfiguration {
     @Configuration(proxyBeanMethods = false)
     @RequiredArgsConstructor
     static class CookieUtilInitializer {
-        private final CookieProperties cookieProperties;
+        private final KeycloakSecurityProperties securityProperties;
 
         @PostConstruct
         public void init() {
             log.debug("CookieUtil에 CookieProperties를 주입합니다.");
-            CookieUtil.setProperties(cookieProperties);
+            CookieUtil.setProperties(securityProperties.getCookie());
         }
     }
 
@@ -259,10 +259,10 @@ public class KeycloakServletAutoConfiguration {
             // 2. 인가 설정 - permitAllPaths는 인증 없이 접근, 나머지는 인증 필요
             http.authorizeHttpRequests(authorize -> {
                 // permit-all-paths 설정된 경로들은 인증 없이 접근 허용
-                if (!securityProperties.getPermitAllPaths().isEmpty()) {
-                    String[] permitAllPaths = securityProperties.getPermitAllPaths().toArray(new String[0]);
+                if (!securityProperties.getAuthentication().getPermitAllPaths().isEmpty()) {
+                    String[] permitAllPaths = securityProperties.getAuthentication().getPermitAllPaths().toArray(new String[0]);
                     authorize.requestMatchers(permitAllPaths).permitAll();
-                    log.info("인증 제외 경로 설정: {}", securityProperties.getPermitAllPaths());
+                    log.info("인증 제외 경로 설정: {}", securityProperties.getAuthentication().getPermitAllPaths());
                 }
                 // 나머지 모든 요청은 인증 필요
                 authorize.anyRequest().authenticated();

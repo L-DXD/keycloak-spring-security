@@ -2,29 +2,27 @@ package com.ids.keycloak.security.config;
 
 import lombok.Getter;
 import lombok.Setter;
-import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Keycloak Security 관련 설정을 담는 Properties 클래스입니다.
+ * Keycloak Security 인증(Authentication) 관련 설정을 담는 Properties 클래스입니다.
  * <p>
- * application.yaml 예시:
+ * application.yaml:
  * <pre>
  * keycloak:
  *   security:
- *     permit-all-paths:
- *       - /public/**
- *       - /health
- *       - /actuator/**
+ *     authentication:
+ *       permit-all-paths:
+ *         - /public/**
+ *         - /health
  * </pre>
  * </p>
  */
 @Getter
 @Setter
-@ConfigurationProperties(prefix = "keycloak.security")
-public class KeycloakSecurityProperties {
+public class KeycloakAuthenticationProperties {
 
     /**
      * 인증 없이 접근 가능한 경로 목록 (permitAll)
