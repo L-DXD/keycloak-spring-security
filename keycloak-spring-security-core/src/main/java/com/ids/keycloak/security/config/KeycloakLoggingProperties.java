@@ -10,6 +10,7 @@ import lombok.Setter;
  * </p>
  */
 @Getter
+@Setter
 public class KeycloakLoggingProperties {
 
     /** 요청 추적 ID 포함 여부 (기본값: true) */
