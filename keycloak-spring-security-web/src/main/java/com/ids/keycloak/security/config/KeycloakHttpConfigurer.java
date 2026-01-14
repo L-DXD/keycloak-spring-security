@@ -7,6 +7,10 @@ import com.ids.keycloak.security.authentication.OidcLoginSuccessHandler;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
 import com.ids.keycloak.security.exception.KeycloakAuthenticationEntryPoint;
 import com.ids.keycloak.security.filter.KeycloakAuthenticationFilter;
+import com.ids.keycloak.security.filter.MdcAuthenticationFilter;
+import com.ids.keycloak.security.filter.MdcRequestFilter;
+import com.ids.keycloak.security.logging.LoggingContextAccessor;
+import com.ids.keycloak.security.logging.WebMdcContextAccessor;
 import com.ids.keycloak.security.web.servlet.KeycloakAccessDeniedHandler;
 import com.sd.KeycloakClient.factory.KeycloakClient;
 import org.springframework.context.ApplicationContext;
@@ -17,8 +21,11 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInitiatedLogoutSuccessHandler;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.context.NullSecurityContextRepository;
+import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.Session;
 
@@ -31,6 +38,7 @@ import static com.ids.keycloak.security.config.KeycloakSecurityConstants.LOGOUT_
  * <p>
  * 이 Configurer는 다음을 설정합니다:
  * <ul>
+ *   <li>MDC 로깅 필터 (MdcRequestFilter, MdcAuthenticationFilter)</li>
  *   <li>인증 필터 (KeycloakAuthenticationFilter)</li>
  *   <li>인증 프로바이더 (KeycloakAuthenticationProvider)</li>
  *   <li>OIDC 로그인 (OAuth2Login)</li>
@@ -142,6 +150,11 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         KeycloakAuthenticationEntryPoint authenticationEntryPoint = context.getBean(KeycloakAuthenticationEntryPoint.class);
         KeycloakAccessDeniedHandler accessDeniedHandler = context.getBean(KeycloakAccessDeniedHandler.class);
         KeycloakSessionManager sessionManager = context.getBean(KeycloakSessionManager.class);
+        KeycloakSecurityProperties securityProperties = context.getBean(KeycloakSecurityProperties.class);
+
+        // LoggingContextAccessor: Bean이 있으면 사용, 없으면 기본 구현체 사용
+        LoggingContextAccessor loggingContextAccessor = getBeanOrDefault(
+            context, LoggingContextAccessor.class, new WebMdcContextAccessor());
 
         // === 6. 예외 처리기 설정 ===
         http.exceptionHandling(customizer -> customizer
@@ -149,7 +162,16 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
             .accessDeniedHandler(accessDeniedHandler)
         );
 
-        // === 7. Keycloak 인증 필터 등록 ===
+        // 7. MDC 로깅 필터 등록
+        // 7-1. MdcRequestFilter: 인증 전 (최상단) - traceId, httpMethod, requestUri, clientIp
+        MdcRequestFilter mdcRequestFilter = new MdcRequestFilter(loggingContextAccessor, securityProperties);
+        http.addFilterBefore(mdcRequestFilter, SecurityContextHolderFilter.class);
+
+        // 7-2. MdcAuthenticationFilter: 인증 후 (AuthorizationFilter 앞) - userId, username, sessionId
+        MdcAuthenticationFilter mdcAuthenticationFilter = new MdcAuthenticationFilter(loggingContextAccessor, securityProperties);
+        http.addFilterBefore(mdcAuthenticationFilter, AuthorizationFilter.class);
+
+        // === 8. Keycloak 인증 필터 등록 ===
         KeycloakAuthenticationFilter authenticationFilter = new KeycloakAuthenticationFilter(
             authenticationManager,
             authenticationProvider,
@@ -157,5 +179,16 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
             keycloakClient
         );
         http.addFilterBefore(authenticationFilter, UsernamePasswordAuthenticationFilter.class);
+    }
+
+    /**
+     * ApplicationContext에서 Bean을 조회하고, 없으면 기본값을 반환합니다.
+     */
+    private <T> T getBeanOrDefault(ApplicationContext context, Class<T> beanClass, T defaultValue) {
+        try {
+            return context.getBean(beanClass);
+        } catch (Exception e) {
+            return defaultValue;
+        }
     }
 }
