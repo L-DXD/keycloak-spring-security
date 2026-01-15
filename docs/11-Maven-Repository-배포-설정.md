@@ -446,6 +446,93 @@ git push origin webflux-starter-v1.1.0
 
 ---
 
+### Phase 7: 로컬 테스트 (배포 전 검증)
+
+실제 Maven Central 배포 전에 로컬에서 서명 및 아티팩트 생성을 테스트합니다.
+
+#### 7.1 GPG 키 ID 확인
+```bash
+gpg --list-secret-keys --keyid-format LONG
+```
+
+출력 예시:
+```
+sec   rsa4096/ABC123DEF456789 2024-01-01 [SC]
+      ABCDEF1234567890ABCDEF1234567890ABC123DE
+uid                 [ultimate] Your Name <email@example.com>
+```
+→ `ABC123DEF456789` 부분이 KEY_ID
+
+#### 7.2 secret.asc 파일 생성
+```bash
+# 전체 키 추출
+gpg --armor --export-secret-keys YOUR_KEY_ID > temp.asc
+
+# temp.asc에서 "-----BEGIN PGP PRIVATE KEY BLOCK-----" 이후 내용만 secret.asc로 저장
+# 즉, "IN PGP PRIVATE KEY BLOCK-----" 부터 시작하도록 편집
+```
+
+**파일 구조:**
+```
+# temp.asc (원본)
+-----BEGIN PGP PRIVATE KEY BLOCK-----
+lQdGBGV...
+
+# secret.asc (수정본) - "-----BEG" 제거
+IN PGP PRIVATE KEY BLOCK-----
+lQdGBGV...
+```
+
+#### 7.3 signing.password 설정
+
+**방법 A: gradle.properties 파일** (프로젝트 루트)
+```properties
+signing.password=YOUR_GPG_PASSPHRASE
+```
+
+**방법 B: 명령줄 인자** (Windows PowerShell)
+```powershell
+./gradlew ... "-Psigning.password=YOUR_GPG_PASSPHRASE"
+```
+
+#### 7.4 publishToMavenLocal 실행
+
+```bash
+# web-starter 테스트
+./gradlew :keycloak-spring-security-web-starter:publishToMavenLocal
+
+# webflux-starter 테스트
+./gradlew :keycloak-spring-security-webflux-starter:publishToMavenLocal
+```
+
+#### 7.5 결과 확인
+
+```bash
+# 아티팩트 목록 확인
+ls ~/.m2/repository/io/github/l-dxd/keycloak-spring-security-web-starter/0.0.1/
+```
+
+**성공 시 파일 목록:**
+```
+keycloak-spring-security-web-starter-0.0.1.jar
+keycloak-spring-security-web-starter-0.0.1.jar.asc          ← 서명 파일
+keycloak-spring-security-web-starter-0.0.1.pom
+keycloak-spring-security-web-starter-0.0.1.pom.asc          ← 서명 파일
+keycloak-spring-security-web-starter-0.0.1-sources.jar
+keycloak-spring-security-web-starter-0.0.1-sources.jar.asc  ← 서명 파일
+keycloak-spring-security-web-starter-0.0.1-javadoc.jar
+keycloak-spring-security-web-starter-0.0.1-javadoc.jar.asc  ← 서명 파일
+```
+
+> **Note:** `.asc` 파일이 생성되었으면 GPG 서명 성공
+
+#### 7.6 서명 검증 (선택사항)
+```bash
+gpg --verify keycloak-spring-security-web-starter-0.0.1.jar.asc
+```
+
+---
+
 ## 5. 사전 준비 사항
 
 ### 5.1 Sonatype Central Portal 계정
@@ -495,9 +582,15 @@ implementation 'io.github.l-dxd:keycloak-spring-security-webflux-starter:1.0.0'
 - [x] `.github/workflows/publish.yml` 생성
 - [ ] GitHub Secrets 설정
 
-### Phase 5: 검증
-- [ ] `./gradlew publishToMavenLocal` 로컬 테스트
-- [ ] 실제 배포 테스트
+### Phase 5: 로컬 테스트 (Phase 7 참조)
+- [ ] GPG 키 ID 확인
+- [ ] `secret.asc` 파일 생성 (-----BEG 제외)
+- [ ] `signing.password` 설정
+- [ ] `./gradlew publishToMavenLocal` 실행
+- [ ] `.asc` 서명 파일 생성 확인
+
+### Phase 6: 실제 배포
+- [ ] 태그 푸시로 CI/CD 배포 테스트
 
 ---
 
