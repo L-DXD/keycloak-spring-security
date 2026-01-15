@@ -10,14 +10,14 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * application.yaml 예시:
  * <pre>
  * keycloak:
- *   session:
- *     store-type: memory  # 또는 redis
+ *   security:
+ *      session:
+ *          store-type: memory  # 또는 redis
  * </pre>
  * </p>
  */
 @Getter
 @Setter
-@ConfigurationProperties(prefix = "keycloak.session")
 public class KeycloakSessionProperties {
 
     /**

@@ -53,6 +53,12 @@ public class KeycloakSecurityProperties {
     private KeycloakCookieProperties cookie = new KeycloakCookieProperties();
 
     /**
+     * Session 관련 설정
+     */
+    @NestedConfigurationProperty
+    private KeycloakSessionProperties session = new KeycloakSessionProperties();
+
+    /**
      * 로깅 관련 설정
      */
     @NestedConfigurationProperty
