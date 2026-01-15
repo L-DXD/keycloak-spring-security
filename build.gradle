@@ -1,15 +1,16 @@
 plugins {
     id 'io.spring.dependency-management' version '1.1.5' apply false
+    id 'com.vanniktech.maven.publish' version '0.28.0' apply false
 }
 
 println "=================================================="
 println "  Building Keycloak Spring Security Library"
-println "  Version: ${version}"
+println "  Web Version: ${webVersion}"
+println "  WebFlux Version: ${webfluxVersion}"
 println "=================================================="
 
 allprojects {
-    group = 'com.ids.keycloak'
-    version = '0.0.1'
+    group = mavenGroupId
 
     repositories {
         mavenCentral()
@@ -17,13 +18,21 @@ allprojects {
 }
 
 subprojects {
-    // 'java-base' 플러그인이 적용된 프로젝트에만 자바 관련 설정을 적용
-    plugins.withId('java-base') {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+    // 'java' 플러그인이 적용된 프로젝트에만 자바 관련 설정을 적용
+    plugins.withType(JavaPlugin) {
+        java {
+            sourceCompatibility = JavaVersion.VERSION_17
+            targetCompatibility = JavaVersion.VERSION_17
+        }
 
         tasks.withType(Test) {
             useJUnitPlatform()
+        }
+
+        tasks.withType(Javadoc) {
+            options {
+                encoding 'UTF-8'
+            }
         }
     }
 
@@ -37,7 +46,7 @@ subprojects {
     }
 
     afterEvaluate { project ->
-        if (project.plugins.hasPlugin('java-base')) {
+        if (project.plugins.hasPlugin(JavaPlugin)) {
             project.dependencies {
                 // Test dependencies
                 testImplementation 'org.junit.jupiter:junit-jupiter-api'
