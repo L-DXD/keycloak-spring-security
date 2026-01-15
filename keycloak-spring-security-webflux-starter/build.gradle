@@ -25,16 +25,16 @@ dependencies {
 }
 
 signing {
-    // 1순위: 환경변수 (CI/CD)
-    // 2순위: secret.asc 파일 (로컬)
-    def signingKey = findProperty("signingInMemoryKey")
-        ?: (file("${rootDir}/secret.asc").exists() ? file("${rootDir}/secret.asc").text : null)
+    def secretFile = file("${rootDir}/secret.asc")
     def signingPassword = findProperty("signingInMemoryKeyPassword")
         ?: findProperty("signing.password")
 
-    if (signingKey != null && signingPassword != null) {
+    if (secretFile.exists()) {
+        def signingKey = secretFile.text
         useInMemoryPgpKeys(signingKey, signingPassword as String)
         sign publishing.publications
+    } else {
+        println "secret.asc 파일이 없습니다. GPG 서명을 건너뜁니다."
     }
 }
 
