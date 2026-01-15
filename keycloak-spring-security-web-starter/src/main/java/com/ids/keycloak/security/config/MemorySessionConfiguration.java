@@ -20,7 +20,7 @@ import org.springframework.session.config.annotation.web.http.EnableSpringHttpSe
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-@ConditionalOnProperty(prefix = "keycloak.session", name = "store-type", havingValue = "memory", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "keycloak.security.session", name = "store-type", havingValue = "memory", matchIfMissing = true)
 @EnableSpringHttpSession
 @Slf4j
 public class MemorySessionConfiguration {
