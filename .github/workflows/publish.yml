@@ -38,9 +38,6 @@ jobs:
       - name: Grant execute permission
         run: chmod +x ./gradlew
 
-      - name: Create secret.asc
-        run: echo "${{ secrets.GPG_SECRET_KEY }}" > secret.asc
-
       - name: Determine module to publish
         id: module
         run: |
@@ -74,11 +71,8 @@ jobs:
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
-          ORG_GRADLE_PROJECT_signing.password: ${{ secrets.GPG_PASSWORD }}
-
-      - name: Clean up secret.asc
-        if: always()
-        run: rm -f secret.asc
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_SECRET_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_PASSWORD }}
 
   # 배포 완료 알림 (선택사항)
   notify:
