@@ -63,4 +63,10 @@ public class KeycloakSecurityProperties {
      */
     @NestedConfigurationProperty
     private KeycloakLoggingProperties logging = new KeycloakLoggingProperties();
+
+    /**
+     * Session 관련 설정
+     */
+    @NestedConfigurationProperty
+    private KeycloakSessionProperties session = new KeycloakSessionProperties();
 }
