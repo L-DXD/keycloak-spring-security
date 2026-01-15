@@ -45,7 +45,7 @@ import org.springframework.session.Session;
  */
 @AutoConfiguration
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-@EnableConfigurationProperties({KeycloakSecurityProperties.class, KeycloakSessionProperties.class})
+@EnableConfigurationProperties({KeycloakSecurityProperties.class})
 @AutoConfigureAfter(name = "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration")
 @Import({
     // 세션 관련 설정 (Memory/Redis는 별도 Configuration 클래스로 분리)
@@ -263,7 +263,7 @@ public class KeycloakServletAutoConfiguration {
                     .sessionRepository(sessionRepositoryProvider.getIfAvailable()),
                 Customizer.withDefaults());
 
-            // 2. 인가 설정
+            // 2. 인가 설정 - permitAllPaths는 인증 없이 접근, 나머지는 인증 필요
             http.authorizeHttpRequests(authorize -> {
                 // permit-all-paths 설정된 경로들은 인증 없이 접근 허용
                 if (!securityProperties.getAuthentication().getPermitAllPaths().isEmpty()) {
