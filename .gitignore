@@ -42,6 +42,10 @@ out/
 ### VS Code ###
 .vscode/
 
-# 의존성 파일
+# 의존성 파일 (application.yml 등)
 *.yml
 *.yaml
+!.github/**/*.yml
+
+# GPG signing key (절대 커밋 금지)
+secret.asc
