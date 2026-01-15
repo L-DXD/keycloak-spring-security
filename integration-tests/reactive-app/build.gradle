@@ -4,6 +4,8 @@ plugins {
     id 'org.springframework.boot' version '3.5.9'
 }
 
+version = '1.0.0-TEST'
+
 dependencies {
     implementation 'org.springframework.boot:spring-boot-starter'
     // 우리가 만든 스타터 모듈
@@ -14,6 +16,7 @@ dependencies {
     // Test dependencies
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.springframework.security:spring-security-test'
+    testImplementation 'io.projectreactor:reactor-test'
 }
 
 bootJar {

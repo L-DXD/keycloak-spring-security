@@ -42,7 +42,7 @@ import org.springframework.session.Session;
  */
 @AutoConfiguration
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-@EnableConfigurationProperties({KeycloakSecurityProperties.class, KeycloakSessionProperties.class})
+@EnableConfigurationProperties({KeycloakSecurityProperties.class})
 @AutoConfigureAfter(name = "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration")
 @Import({
     // 세션 관련 설정 (Memory/Redis는 별도 Configuration 클래스로 분리)

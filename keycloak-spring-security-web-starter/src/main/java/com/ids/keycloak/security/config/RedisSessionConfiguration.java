@@ -30,7 +30,7 @@ import org.springframework.session.data.redis.config.annotation.web.http.EnableR
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-@ConditionalOnProperty(prefix = "keycloak.session", name = "store-type", havingValue = "redis")
+@ConditionalOnProperty(prefix = "keycloak.security.session", name = "store-type", havingValue = "redis")
 @ConditionalOnClass(name = {
     "org.springframework.data.redis.connection.RedisConnectionFactory",
     "org.springframework.session.data.redis.RedisIndexedSessionRepository"
