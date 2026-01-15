@@ -251,7 +251,7 @@ public class KeycloakServletAutoConfiguration {
         public SecurityFilterChain keycloakSecurityFilterChain(
             HttpSecurity http,
             KeycloakSecurityProperties securityProperties,
-            ObjectProvider<FindByIndexNameSessionRepository<? extends Session>> sessionRepositoryProvider
+            ObjectProvider<FindByIndexNameSessionRepository<? extends Session>> sessionRepositoryProvider,
             KeycloakAuthorizationManager keycloakAuthorizationManager
         ) throws Exception {
             log.info("핵심 Bean을 등록합니다: [SecurityFilterChain]");
