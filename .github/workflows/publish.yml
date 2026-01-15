@@ -40,11 +40,14 @@ jobs:
 
       - name: Decode GPG Key
         run: |
+          # 1. Base64 디코딩하여 파일 생성 (디버깅/확인용)
           echo "${{ secrets.GPG_SECRET_KEY_BASE64 }}" | base64 --decode > secret.asc
-          echo "=== secret.asc 파일 확인 ==="
-          echo "파일 존재: $(test -f secret.asc && echo 'YES' || echo 'NO')"
-          echo "파일 크기: $(wc -c < secret.asc) bytes"
-          echo "첫 줄: $(head -1 secret.asc)"
+          
+          # 2. [핵심] 디코딩된 키 내용을 'ORG_GRADLE_PROJECT_signingInMemoryKey' 환경변수에 주입
+          # 멀티라인 텍스트를 환경변수에 넣기 위한 문법입니다.
+          echo "ORG_GRADLE_PROJECT_signingInMemoryKey<<EOF" >> $GITHUB_ENV
+          cat secret.asc >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
       - name: Determine module to publish
         id: module
