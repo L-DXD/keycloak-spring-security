@@ -263,7 +263,7 @@ public class KeycloakServletAutoConfiguration {
                 }
 
                 // authorization-enabled 여부에 따라 인가 방식 결정
-                if (securityProperties.isAuthorizationEnabled()) {
+                if (securityProperties.getAuthorization().isEnabled()) {
                     log.info("Keycloak Authorization Services 활성화: 모든 요청에 대해 Keycloak 인가 검증");
                     authorize.anyRequest().access(keycloakAuthorizationManager);
                 } else {
