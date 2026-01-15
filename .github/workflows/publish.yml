@@ -39,7 +39,12 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Decode GPG Key
-        run: echo "${{ secrets.GPG_SECRET_KEY_BASE64 }}" | base64 --decode > secret.asc
+        run: |
+          echo "${{ secrets.GPG_SECRET_KEY_BASE64 }}" | base64 --decode > secret.asc
+          echo "=== secret.asc 파일 확인 ==="
+          echo "파일 존재: $(test -f secret.asc && echo 'YES' || echo 'NO')"
+          echo "파일 크기: $(wc -c < secret.asc) bytes"
+          echo "첫 줄: $(head -1 secret.asc)"
 
       - name: Determine module to publish
         id: module
