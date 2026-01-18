@@ -52,12 +52,21 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
    public Authentication authenticate(Authentication authentication) throws AuthenticationException {
       log.debug("[Provider] 인증 요청 시작: {}", authentication.getName());
       KeycloakAuthentication authRequest = (KeycloakAuthentication) authentication;
+      String idTokenValue = (String) authRequest.getCredentials();
+      String accessTokenValue = authRequest.getAccessToken();
 
+      // 토큰 만료 여부를 먼저 확인 (Nimbus JWT 라이브러리 사용)
+      if (JwtUtil.isTokenExpired(idTokenValue) || JwtUtil.isTokenExpired(accessTokenValue)) {
+         log.warn("[Provider] 토큰 만료 확인, 리프레시를 시도합니다.");
+         return authenticateWithRefreshToken(authRequest);
+      }
+
+      // 토큰이 만료되지 않은 경우에만 검증 시도
       try {
          return authenticateWithIdToken(authRequest);
       } catch (JwtException e) {
-         log.warn("[Provider] ID 토큰 검증 실패, 리프레시를 시도합니다. 원인: {}", e.getMessage());
-         return authenticateWithRefreshToken(authRequest);
+         log.error("[Provider] 토큰 검증 실패 (만료 외 사유). 원인: {}", e.getMessage());
+         throw new AuthenticationFailedException("토큰 검증 실패: " + e.getMessage());
       }
    }
 
@@ -118,6 +127,7 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
       } catch (RestClientException e) {
          throw new AuthenticationFailedException();
       }
+      // todo : 401 또는 403 일때 AuthException 로그아웃 처리 진행해야함.
    }
 
    /**
