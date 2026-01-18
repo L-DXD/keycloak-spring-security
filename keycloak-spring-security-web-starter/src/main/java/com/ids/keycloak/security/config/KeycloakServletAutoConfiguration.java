@@ -12,6 +12,7 @@ import com.sd.KeycloakClient.config.AbstractKeycloakConfig;
 import com.sd.KeycloakClient.config.ClientConfiguration;
 import com.sd.KeycloakClient.factory.KeycloakClient;
 import jakarta.annotation.PostConstruct;
+import java.util.concurrent.ConcurrentHashMap;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -35,9 +36,6 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.MapSession;
 import org.springframework.session.config.annotation.web.http.EnableSpringHttpSession;
-import org.springframework.web.client.RestTemplate;
-
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Keycloak Spring Security의 Servlet 환경 자동 설정을 담당하는 진입점입니다.
@@ -111,13 +109,6 @@ public class KeycloakServletAutoConfiguration {
         public ObjectMapper keycloakObjectMapper() {
             log.debug("지원 Bean을 등록합니다: [ObjectMapper]");
             return new ObjectMapper();
-        }
-
-        @Bean
-        @ConditionalOnMissingBean
-        public RestTemplate keycloakRestTemplate() {
-            log.debug("지원 Bean을 등록합니다: [RestTemplate]");
-            return new RestTemplate();
         }
 
         @Configuration(proxyBeanMethods = false)
