@@ -30,7 +30,6 @@ import java.util.List;
  * </p>
  */
 @Getter
-@Setter
 @ConfigurationProperties(prefix = "keycloak.security")
 public class KeycloakSecurityProperties {
 

@@ -3,36 +3,42 @@
 ## 목표
 
 `keycloak-spring-security` 라이브러리를 Maven Central에 배포합니다.
-- **web-starter**: 배포 O
-- **webflux-starter**: 배포 O
-- **core, web, webflux**: 내부 모듈 (배포 제외)
+
+**배포 대상 (5개 모듈):**
+- **core**: 공통 유틸리티 및 모델
+- **web**: Servlet 기반 보안 구현
+- **webflux**: Reactive 기반 보안 구현
+- **web-starter**: Servlet 자동 설정
+- **webflux-starter**: WebFlux 자동 설정
 
 ---
 
-## 1. 현재 상태 분석
+## 1. 프로젝트 구조 및 의존성
 
-### 프로젝트 구조 및 의존성
 ```
 keycloak-spring-security/
-├── core/                    # 공통 코어 (내부 모듈, 배포 제외)
+├── core/                    # 공통 코어 (배포 O)
 │     ↑
-├── web/                     # Servlet 기반 (내부 모듈, 배포 제외)
+├── web/                     # Servlet 기반 (배포 O)
 │     ↑
-├── web-starter/             # Servlet 자동 설정 (배포 대상)
+├── web-starter/             # Servlet 자동 설정 (배포 O)
 │
-├── webflux/                 # WebFlux 기반 (내부 모듈, 배포 제외)
+├── core/                    # (공유)
 │     ↑
-├── webflux-starter/         # WebFlux 자동 설정 (배포 대상)
+├── webflux/                 # WebFlux 기반 (배포 O)
+│     ↑
+├── webflux-starter/         # WebFlux 자동 설정 (배포 O)
 │
 └── integration-tests/       # 테스트 (배포 제외)
 ```
 
 ### 버전 관리 전략
-| 버전 변수 | 적용 모듈 | 태그 패턴 | 배포 |
-|-----------|-----------|-----------|------|
-| `webVersion` | web-starter | `web-starter-v*` | O |
-| `webfluxVersion` | webflux-starter | `webflux-starter-v*` | O |
-| - | core, web, webflux | - | X (내부 모듈) |
+
+**단일 버전 관리** - 모든 모듈이 동일한 버전으로 배포됩니다.
+
+| 버전 변수 | 적용 모듈 | 태그 패턴 |
+|-----------|-----------|-----------|
+| `projectVersion` | 모든 모듈 | `v*` |
 
 ---
 
@@ -47,6 +53,7 @@ keycloak-spring-security/
 | source/javadoc jar | 자동 생성 | 수동 설정 필요 |
 | Sonatype Central Portal | 직접 지원 | 별도 설정 필요 |
 | 서명 | `signAllPublications()` 한 줄 | signing 블록 상세 설정 |
+| project() 참조 | 자동으로 Maven 좌표 변환 | 수동 설정 필요 |
 
 ### Sonatype Central Portal
 2024년 3월부터 **새 프로젝트는 Central Portal 사용 필수** (기존 OSSRH 신규 등록 불가)
@@ -64,16 +71,15 @@ keycloak-spring-security/
 
 ---
 
-## 4. 구현 계획
+## 4. 구현 설정
 
-### Phase 1: gradle.properties 생성
+### 4.1 gradle.properties
 
 ```properties
 # gradle.properties
 
-# 버전 관리
-webVersion=1.0.0
-webfluxVersion=1.0.0
+# 버전 관리 (단일 버전)
+projectVersion=0.0.2
 
 # Maven 배포 정보
 mavenGroupId=io.github.l-dxd
@@ -83,15 +89,12 @@ mavenScmUrl=github.com/L-DXD/keycloak-spring-security.git
 # 개발자 정보
 developerId=LeeBongSeung
 developerName=LeeBongSeung
-developerUrl=https://github.com/L-DXD/keyclaok-spring-security
-
-# 서명 비밀번호 (로컬 빌드용, CI에서는 환경변수 사용)
-# signing.password=your-gpg-password
+developerUrl=https://github.com/L-DXD/keycloak-spring-security
 ```
 
 ---
 
-### Phase 2: 루트 build.gradle 수정
+### 4.2 루트 build.gradle
 
 ```groovy
 plugins {
@@ -101,8 +104,7 @@ plugins {
 
 println "=================================================="
 println "  Building Keycloak Spring Security Library"
-println "  Web Version: ${webVersion}"
-println "  WebFlux Version: ${webfluxVersion}"
+println "  Version: ${projectVersion}"
 println "=================================================="
 
 allprojects {
@@ -114,9 +116,11 @@ allprojects {
 }
 
 subprojects {
-    plugins.withId('java-base') {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+    plugins.withType(JavaPlugin) {
+        java {
+            sourceCompatibility = JavaVersion.VERSION_17
+            targetCompatibility = JavaVersion.VERSION_17
+        }
 
         tasks.withType(Test) {
             useJUnitPlatform()
@@ -138,7 +142,7 @@ subprojects {
     }
 
     afterEvaluate { project ->
-        if (project.plugins.hasPlugin('java-base')) {
+        if (project.plugins.hasPlugin(JavaPlugin)) {
             project.dependencies {
                 testImplementation 'org.junit.jupiter:junit-jupiter-api'
                 testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine'
@@ -158,11 +162,9 @@ subprojects {
 
 ---
 
-### Phase 3: Starter 모듈 build.gradle 수정
+### 4.3 모듈별 build.gradle
 
-> **Note:** `core`, `web`, `webflux`는 배포 대상이 아니므로 기존 build.gradle 유지 (maven-publish 플러그인 불필요)
-
-#### 3.1 keycloak-spring-security-web-starter/build.gradle
+#### keycloak-spring-security-core/build.gradle
 ```groovy
 import com.vanniktech.maven.publish.SonatypeHost
 
@@ -173,26 +175,23 @@ plugins {
     id 'signing'
 }
 
-version = webVersion
-description = 'Keycloak Spring Security Web Starter - Auto-configuration for Servlet applications'
+version = projectVersion
+description = 'Keycloak Spring Security Core - Common utilities and models'
 
 dependencies {
-    api 'org.springframework.boot:spring-boot-autoconfigure'
-    api 'org.springframework.session:spring-session-core'
-    annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
-    api project(':keycloak-spring-security-web')
-    compileOnly 'org.springframework.boot:spring-boot-starter-web'
+    api 'org.springframework.security:spring-security-core'
+    api 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
+    implementation 'com.fasterxml.jackson.core:jackson-annotations'
 }
 
 signing {
     def secretFile = file("${rootDir}/secret.asc")
-    def signingKey = secretFile.exists() ? secretFile.text : null
+    def signingPassword = findProperty("signingInMemoryKeyPassword")
+        ?: findProperty("signing.password")
 
-    if (signingKey != null) {
-        useInMemoryPgpKeys(
-                "-----BEG" + signingKey,
-                findProperty("signing.password") as String
-        )
+    if (secretFile.exists()) {
+        def signingKey = secretFile.text
+        useInMemoryPgpKeys(signingKey, signingPassword as String)
         sign publishing.publications
     }
 }
@@ -201,10 +200,10 @@ mavenPublishing {
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
     signAllPublications()
 
-    coordinates(mavenGroupId, "keycloak-spring-security-web-starter", version as String)
+    coordinates(mavenGroupId, "keycloak-spring-security-core", version as String)
 
     pom {
-        name = "keycloak-spring-security-web-starter"
+        name = "keycloak-spring-security-core"
         description = project.description
         inceptionYear = "2025"
         url = mavenProjectUrl
@@ -234,7 +233,7 @@ mavenPublishing {
 }
 ```
 
-#### 3.2 keycloak-spring-security-webflux-starter/build.gradle
+#### keycloak-spring-security-web/build.gradle
 ```groovy
 import com.vanniktech.maven.publish.SonatypeHost
 
@@ -245,71 +244,74 @@ plugins {
     id 'signing'
 }
 
-version = webfluxVersion
-description = 'Keycloak Spring Security WebFlux Starter - Auto-configuration for Reactive applications'
+version = projectVersion
+description = 'Keycloak Spring Security Web - Servlet-based security implementation'
 
+dependencies {
+    // Core 모듈에 의존 (배포 시 자동으로 Maven 좌표로 변환됨)
+    api project(':keycloak-spring-security-core')
+
+    api 'org.springframework.session:spring-session-core'
+    api 'org.springframework.security:spring-security-web'
+    api 'org.springframework.security:spring-security-config'
+    api 'org.springframework.security:spring-security-oauth2-client'
+    api 'org.springframework.security:spring-security-oauth2-jose'
+    compileOnly 'jakarta.servlet:jakarta.servlet-api'
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+}
+
+// signing, mavenPublishing 블록은 core와 동일 (coordinates만 변경)
+// coordinates(mavenGroupId, "keycloak-spring-security-web", version as String)
+```
+
+#### keycloak-spring-security-webflux/build.gradle
+```groovy
+// web과 동일한 구조
+// coordinates(mavenGroupId, "keycloak-spring-security-webflux", version as String)
+dependencies {
+    api project(':keycloak-spring-security-core')
+    api 'org.springframework.boot:spring-boot-starter-webflux'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+}
+```
+
+#### keycloak-spring-security-web-starter/build.gradle
+```groovy
+// starter 모듈
+// coordinates(mavenGroupId, "keycloak-spring-security-web-starter", version as String)
+dependencies {
+    api 'org.springframework.boot:spring-boot-autoconfigure'
+    api 'org.springframework.session:spring-session-core'
+    annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
+
+    // Web 모듈에 의존 (배포 시 자동으로 Maven 좌표로 변환됨)
+    api project(':keycloak-spring-security-web')
+
+    compileOnly 'org.springframework.boot:spring-boot-starter-web'
+}
+```
+
+#### keycloak-spring-security-webflux-starter/build.gradle
+```groovy
+// starter 모듈
+// coordinates(mavenGroupId, "keycloak-spring-security-webflux-starter", version as String)
 dependencies {
     api 'org.springframework.boot:spring-boot-autoconfigure'
     annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
+
+    // WebFlux 모듈에 의존 (배포 시 자동으로 Maven 좌표로 변환됨)
     api project(':keycloak-spring-security-webflux')
+
     compileOnly 'org.springframework.boot:spring-boot-starter-webflux'
-}
-
-signing {
-    def secretFile = file("${rootDir}/secret.asc")
-    def signingKey = secretFile.exists() ? secretFile.text : null
-
-    if (signingKey != null) {
-        useInMemoryPgpKeys(
-                "-----BEG" + signingKey,
-                findProperty("signing.password") as String
-        )
-        sign publishing.publications
-    }
-}
-
-mavenPublishing {
-    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
-    signAllPublications()
-
-    coordinates(mavenGroupId, "keycloak-spring-security-webflux-starter", version as String)
-
-    pom {
-        name = "keycloak-spring-security-webflux-starter"
-        description = project.description
-        inceptionYear = "2025"
-        url = mavenProjectUrl
-
-        licenses {
-            license {
-                name = "MIT License"
-                url = "https://opensource.org/licenses/MIT"
-                distribution = "repo"
-            }
-        }
-
-        developers {
-            developer {
-                id = developerId
-                name = developerName
-                url = developerUrl
-            }
-        }
-
-        scm {
-            url = mavenProjectUrl
-            connection = "scm:git:git://${mavenScmUrl}"
-            developerConnection = "scm:git:ssh://git@${mavenScmUrl}"
-        }
-    }
 }
 ```
 
 ---
 
-### Phase 4: GPG 서명 설정
+### 4.4 GPG 서명 설정
 
-#### 4.1 GPG 키 생성
+#### GPG 키 생성
 ```bash
 # GPG 키 생성
 gpg --full-generate-key
@@ -321,7 +323,7 @@ gpg --list-secret-keys --keyid-format LONG
 gpg --keyserver keyserver.ubuntu.com --send-keys YOUR_KEY_ID
 ```
 
-#### 4.2 secret.asc 파일 생성
+#### secret.asc 파일 생성
 ```bash
 # 비밀키 내보내기 (-----BEGIN 부분 제외)
 gpg --armor --export-secret-keys YOUR_KEY_ID > temp.asc
@@ -330,40 +332,41 @@ gpg --armor --export-secret-keys YOUR_KEY_ID > temp.asc
 # 즉, "IN PGP PRIVATE KEY BLOCK-----" 부터 시작
 ```
 
-**주의:** `secret.asc`와 `gradle.properties`는 `.gitignore`에 추가하여 커밋되지 않도록 합니다.
+**주의:** `secret.asc`와 `gradle.properties`의 signing.password는 `.gitignore`에 추가
 
 ```gitignore
 # .gitignore
 secret.asc
-gradle.properties
-```
-
-#### 4.3 서명 비밀번호 설정
-`gradle.properties` (로컬, 커밋 제외) 또는 환경변수:
-```properties
-signing.password=your-gpg-password
 ```
 
 ---
 
-### Phase 5: CI/CD 파이프라인 (GitHub Actions)
+## 5. CI/CD 파이프라인 (GitHub Actions)
 
-#### 5.1 릴리스 워크플로우
+### 5.1 릴리스 워크플로우
+
 ```yaml
 # .github/workflows/publish.yml
 name: Publish to Maven Central
 
+permissions:
+  contents: write
+
 on:
   push:
     tags:
-      - 'web-starter-v*'
-      - 'webflux-starter-v*'
+      - 'v*'
+
+  workflow_dispatch:
 
 jobs:
   publish:
+    name: Publish All Modules to Maven Central
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -374,232 +377,182 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Create secret.asc
-        run: echo "${{ secrets.GPG_SECRET_KEY }}" > secret.asc
+      - name: Grant execute permission
+        run: chmod +x ./gradlew
 
-      - name: Determine module to publish
-        id: module
+      - name: Decode GPG Key
         run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          if [[ $TAG == web-starter-v* ]]; then
-            echo "task=:keycloak-spring-security-web-starter:publish" >> $GITHUB_OUTPUT
-            echo "name=web-starter" >> $GITHUB_OUTPUT
-          elif [[ $TAG == webflux-starter-v* ]]; then
-            echo "task=:keycloak-spring-security-webflux-starter:publish" >> $GITHUB_OUTPUT
-            echo "name=webflux-starter" >> $GITHUB_OUTPUT
-          fi
+          echo "${{ secrets.GPG_SECRET_KEY_BASE64 }}" | base64 --decode > secret.asc
+          echo "ORG_GRADLE_PROJECT_signingInMemoryKey<<EOF" >> $GITHUB_ENV
+          cat secret.asc >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
-      - name: Publish ${{ steps.module.outputs.name }} to Maven Central
-        run: ./gradlew ${{ steps.module.outputs.task }}
+      - name: Build all modules
+        run: ./gradlew build --no-daemon
+
+      # 배포 순서: core → web, webflux → web-starter, webflux-starter
+      - name: Publish core
+        run: ./gradlew :keycloak-spring-security-core:publish --no-daemon
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
-          ORG_GRADLE_PROJECT_signing.password: ${{ secrets.GPG_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_PASSWORD }}
+
+      - name: Publish web and webflux
+        run: |
+          ./gradlew :keycloak-spring-security-web:publish --no-daemon
+          ./gradlew :keycloak-spring-security-webflux:publish --no-daemon
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_PASSWORD }}
+
+      - name: Publish web-starter and webflux-starter
+        run: |
+          ./gradlew :keycloak-spring-security-web-starter:publish --no-daemon
+          ./gradlew :keycloak-spring-security-webflux-starter:publish --no-daemon
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_PASSWORD }}
+
+      - name: Clean up
+        if: always()
+        run: rm -f secret.asc
 ```
 
-#### 5.2 GitHub Secrets 설정
+### 5.2 GitHub Secrets 설정
 
 **설정 경로:** `Repository` → `Settings` → `Secrets and variables` → `Actions` → `New repository secret`
 
-| Secret 이름 | 설명 | 값 획득 방법 |
-|-------------|------|-------------|
-| `MAVEN_CENTRAL_USERNAME` | Sonatype Central Portal 사용자명 | [central.sonatype.com](https://central.sonatype.com) → 로그인 → 우측 상단 계정 메뉴 → `View Account` → Username |
-| `MAVEN_CENTRAL_PASSWORD` | Sonatype Central Portal 토큰 | [central.sonatype.com](https://central.sonatype.com) → `View Account` → `Generate User Token` → Password 값 |
-| `GPG_SECRET_KEY` | GPG 비밀키 (secret.asc 내용) | `gpg --armor --export-secret-keys KEY_ID` 실행 후 `-----BEGIN` 이후 전체 내용 |
-| `GPG_PASSWORD` | GPG 키 생성 시 설정한 비밀번호 | GPG 키 생성 시 입력한 passphrase |
-
-> **참고:** `GITHUB_TOKEN`은 자동 제공되므로 별도 설정 불필요
+| Secret 이름 | 설명 |
+|-------------|------|
+| `MAVEN_CENTRAL_USERNAME` | Sonatype Central Portal 사용자명 |
+| `MAVEN_CENTRAL_PASSWORD` | Sonatype Central Portal 토큰 |
+| `GPG_SECRET_KEY_BASE64` | GPG 비밀키 (Base64 인코딩) |
+| `GPG_PASSWORD` | GPG 키 비밀번호 |
 
 ---
 
-### Phase 6: 릴리스 절차
+## 6. 릴리스 절차
 
-#### 6.1 web-starter 릴리스
+### 6.1 버전 업데이트 및 배포
+
 ```bash
-# 1. gradle.properties에서 webVersion 업데이트
-webVersion=1.1.0
+# 1. gradle.properties에서 projectVersion 업데이트
+projectVersion=0.0.3
 
 # 2. 커밋 & 푸시
 git add gradle.properties
-git commit -m "chore: bump web-starter version to 1.1.0"
+git commit -m "chore: bump version to 0.0.3"
 git push
 
-# 3. 태그 생성 -> CI 자동 배포
-git tag web-starter-v1.1.0
-git push origin web-starter-v1.1.0
-```
-
-#### 6.2 webflux-starter 릴리스
-```bash
-# 1. gradle.properties에서 webfluxVersion 업데이트
-webfluxVersion=1.1.0
-
-# 2. 커밋 & 푸시
-git add gradle.properties
-git commit -m "chore: bump webflux-starter version to 1.1.0"
-git push
-
-# 3. 태그 생성 -> CI 자동 배포
-git tag webflux-starter-v1.1.0
-git push origin webflux-starter-v1.1.0
+# 3. 태그 생성 -> CI 자동 배포 (모든 모듈)
+git tag v0.0.3
+git push origin v0.0.3
 ```
 
 ---
 
-### Phase 7: 로컬 테스트 (배포 전 검증)
+## 7. 로컬 테스트 (배포 전 검증)
 
-실제 Maven Central 배포 전에 로컬에서 서명 및 아티팩트 생성을 테스트합니다.
-
-#### 7.1 GPG 키 ID 확인
-```bash
-gpg --list-secret-keys --keyid-format LONG
-```
-
-출력 예시:
-```
-sec   rsa4096/ABC123DEF456789 2024-01-01 [SC]
-      ABCDEF1234567890ABCDEF1234567890ABC123DE
-uid                 [ultimate] Your Name <email@example.com>
-```
-→ `ABC123DEF456789` 부분이 KEY_ID
-
-#### 7.2 secret.asc 파일 생성
-```bash
-# 전체 키 추출
-gpg --armor --export-secret-keys YOUR_KEY_ID > temp.asc
-
-# temp.asc에서 "-----BEGIN PGP PRIVATE KEY BLOCK-----" 이후 내용만 secret.asc로 저장
-# 즉, "IN PGP PRIVATE KEY BLOCK-----" 부터 시작하도록 편집
-```
-
-**파일 구조:**
-```
-# temp.asc (원본)
------BEGIN PGP PRIVATE KEY BLOCK-----
-lQdGBGV...
-
-# secret.asc (수정본) - "-----BEG" 제거
-IN PGP PRIVATE KEY BLOCK-----
-lQdGBGV...
-```
-
-#### 7.3 signing.password 설정
-
-**방법 A: gradle.properties 파일** (프로젝트 루트)
-```properties
-signing.password=YOUR_GPG_PASSPHRASE
-```
-
-**방법 B: 명령줄 인자** (Windows PowerShell)
-```powershell
-./gradlew ... "-Psigning.password=YOUR_GPG_PASSPHRASE"
-```
-
-#### 7.4 publishToMavenLocal 실행
+### 7.1 publishToMavenLocal 실행
 
 ```bash
-# web-starter 테스트
-./gradlew :keycloak-spring-security-web-starter:publishToMavenLocal
-
-# webflux-starter 테스트
-./gradlew :keycloak-spring-security-webflux-starter:publishToMavenLocal
+# 모든 모듈 로컬 배포 테스트
+./gradlew publishToMavenLocal
 ```
 
-#### 7.5 결과 확인
+### 7.2 결과 확인
 
 ```bash
 # 아티팩트 목록 확인
-ls ~/.m2/repository/io/github/l-dxd/keycloak-spring-security-web-starter/0.0.1/
+ls ~/.m2/repository/io/github/l-dxd/
+
+# 예상 결과:
+# keycloak-spring-security-core/
+# keycloak-spring-security-web/
+# keycloak-spring-security-webflux/
+# keycloak-spring-security-web-starter/
+# keycloak-spring-security-webflux-starter/
 ```
 
-**성공 시 파일 목록:**
+**성공 시 각 모듈 폴더 내 파일:**
 ```
-keycloak-spring-security-web-starter-0.0.1.jar
-keycloak-spring-security-web-starter-0.0.1.jar.asc          ← 서명 파일
-keycloak-spring-security-web-starter-0.0.1.pom
-keycloak-spring-security-web-starter-0.0.1.pom.asc          ← 서명 파일
-keycloak-spring-security-web-starter-0.0.1-sources.jar
-keycloak-spring-security-web-starter-0.0.1-sources.jar.asc  ← 서명 파일
-keycloak-spring-security-web-starter-0.0.1-javadoc.jar
-keycloak-spring-security-web-starter-0.0.1-javadoc.jar.asc  ← 서명 파일
-```
-
-> **Note:** `.asc` 파일이 생성되었으면 GPG 서명 성공
-
-#### 7.6 서명 검증 (선택사항)
-```bash
-gpg --verify keycloak-spring-security-web-starter-0.0.1.jar.asc
+keycloak-spring-security-core-0.0.2.jar
+keycloak-spring-security-core-0.0.2.jar.asc          ← 서명 파일
+keycloak-spring-security-core-0.0.2.pom
+keycloak-spring-security-core-0.0.2.pom.asc
+keycloak-spring-security-core-0.0.2-sources.jar
+keycloak-spring-security-core-0.0.2-javadoc.jar
 ```
 
 ---
 
-## 5. 사전 준비 사항
+## 8. 배포 후 확인
 
-### 5.1 Sonatype Central Portal 계정
-1. https://central.sonatype.com 에서 계정 생성
-2. Namespace 등록: `io.github.l-dxd`
-   - GitHub 기반이므로 GitHub 프로필에서 자동 검증
+### 8.1 Maven Central 검색
 
-### 5.2 이미 등록된 Namespace 확인
-`io.github.l-dxd`가 이미 `keycloak-client` 배포에 사용 중이라면 추가 등록 불필요
-
----
-
-## 6. 배포 후 확인
-
-### 6.1 Maven Central 검색
 배포 후 약 10-30분 후 검색 가능:
 - https://central.sonatype.com/search?q=g:io.github.l-dxd
 
-### 6.2 사용자 의존성 추가
-```groovy
-// Servlet 프로젝트
-implementation 'io.github.l-dxd:keycloak-spring-security-web-starter:1.0.0'
+### 8.2 사용자 의존성 추가
 
-// WebFlux 프로젝트
-implementation 'io.github.l-dxd:keycloak-spring-security-webflux-starter:1.0.0'
+```groovy
+// Servlet 프로젝트 (권장)
+implementation 'io.github.l-dxd:keycloak-spring-security-web-starter:0.0.2'
+
+// WebFlux 프로젝트 (권장)
+implementation 'io.github.l-dxd:keycloak-spring-security-webflux-starter:0.0.2'
+```
+
+```xml
+<!-- Maven -->
+<dependency>
+    <groupId>io.github.l-dxd</groupId>
+    <artifactId>keycloak-spring-security-web-starter</artifactId>
+    <version>0.0.2</version>
+</dependency>
 ```
 
 ---
 
-## 7. 작업 체크리스트
+## 9. 작업 체크리스트
 
-### Phase 1: 버전 관리
-- [x] `gradle.properties` 생성
+### 초기 설정
+- [x] `gradle.properties` 생성 (projectVersion 단일 버전)
 - [x] 루트 `build.gradle` 수정
 
-### Phase 2: 모듈별 설정
+### 모듈별 설정
+- [x] `keycloak-spring-security-core/build.gradle` 수정
+- [x] `keycloak-spring-security-web/build.gradle` 수정
+- [x] `keycloak-spring-security-webflux/build.gradle` 수정
 - [x] `keycloak-spring-security-web-starter/build.gradle` 수정
 - [x] `keycloak-spring-security-webflux-starter/build.gradle` 수정
 
-### Phase 3: GPG 서명
+### GPG 서명
 - [ ] GPG 키 생성 (또는 기존 키 사용)
 - [ ] 공개키 서버 업로드
 - [ ] `secret.asc` 파일 생성
 - [x] `.gitignore`에 `secret.asc` 추가
 
-### Phase 4: CI/CD
+### CI/CD
 - [x] `.github/workflows/publish.yml` 생성
 - [ ] GitHub Secrets 설정
 
-### Phase 5: 로컬 테스트 (Phase 7 참조)
-- [ ] GPG 키 ID 확인
-- [ ] `secret.asc` 파일 생성 (-----BEG 제외)
-- [ ] `signing.password` 설정
-- [ ] `./gradlew publishToMavenLocal` 실행
-- [ ] `.asc` 서명 파일 생성 확인
-
-### Phase 6: 실제 배포
-- [ ] 태그 푸시로 CI/CD 배포 테스트
+### 테스트 및 배포
+- [ ] `./gradlew publishToMavenLocal` 로컬 테스트
+- [ ] 태그 푸시로 CI/CD 배포
 
 ---
 
-## 8. 결정 완료 사항
+## 10. 요약
 
-| 항목 | 결정 |
+| 항목 | 값 |
 |------|------|
 | groupId | `io.github.l-dxd` |
-| 배포 대상 | web-starter, webflux-starter만 |
-| 배포 제외 | core, web, webflux (내부 모듈) |
+| 버전 관리 | 단일 버전 (`projectVersion`) |
+| 배포 대상 | core, web, webflux, web-starter, webflux-starter (5개) |
+| 태그 패턴 | `v*` (예: v0.0.2) |
+| 배포 순서 | core → web, webflux → web-starter, webflux-starter |
 | 라이선스 | MIT License |
-| 개발자 | LeeBongSeung |
