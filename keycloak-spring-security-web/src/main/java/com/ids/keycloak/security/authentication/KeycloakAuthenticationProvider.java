@@ -70,7 +70,7 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
    }
 
    private Authentication authenticateWithIdToken(KeycloakAuthentication authRequest) {
-      String idTokenValue = (String) authRequest.getCredentials();
+      String idTokenValue = authRequest.getIdToken();
       String accessTokenValue = authRequest.getAccessToken();
 
       log.debug("[Provider] ID 토큰 검증 시도.");

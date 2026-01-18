@@ -70,7 +70,7 @@ class KeycloakAuthenticationFilterTest {
 
     @BeforeEach
     void setUp() {
-        filter = new KeycloakAuthenticationFilter(jwtDecoder, authenticationManager, objectMapper, sessionManager);
+        filter = new KeycloakAuthenticationFilter(jwtDecoder, authenticationManager, sessionManager);
         SecurityContextHolder.clearContext();
     }
 
