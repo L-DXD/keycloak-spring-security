@@ -65,9 +65,7 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
             HttpSession session = request.getSession(false);
             if (session == null) {
                 log.debug("[Filter] HTTP Session이 없음 (로그아웃 상태) - 쿠키 삭제 후 다음 필터로 진행");
-                CookieUtil.deleteAllTokenCookies(response);
-                filterChain.doFilter(request, response);
-                return;
+                throw new AuthenticationFailedException("HTTP Session이 없음");
             }
 
             String refreshToken = sessionManager.getRefreshToken(session).orElse(null);
