@@ -111,10 +111,12 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
             SecurityContextHolder.clearContext();
             log.warn("[Filter] Keycloak 인증에 실패했습니다: {}", e.getMessage());
             CookieUtil.deleteAllTokenCookies(response);
+            sessionManager.invalidateSession(request.getSession());
         } catch (Exception e) {
             SecurityContextHolder.clearContext();
             log.error("[Filter] Keycloak 인증 과정에서 예상치 못한 오류가 발생했습니다.", e);
             CookieUtil.deleteAllTokenCookies(response);
+            sessionManager.invalidateSession(request.getSession());
         }
 
         filterChain.doFilter(request, response);
