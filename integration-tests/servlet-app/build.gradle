@@ -8,7 +8,8 @@ version = '1.2.3-TEST'
 
 dependencies {
     // 우리가 만든 스타터 모듈
-    implementation project(':keycloak-spring-security-web-starter')
+    implementation 'io.github.l-dxd:keycloak-spring-security-web-starter:0.0.2'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
     // Spring Web (MVC)
     implementation 'org.springframework.boot:spring-boot-starter-web'
 
