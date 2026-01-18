@@ -1,8 +1,8 @@
 package com.ids.keycloak.security.config;
 
+import java.time.Duration;
 import lombok.Getter;
 import lombok.Setter;
-import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
  * Keycloak 세션 저장소 관련 설정을 담는 Properties 클래스입니다.
@@ -13,6 +13,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *   security:
  *      session:
  *          store-type: memory  # 또는 redis
+ *          timeout: 30m        # 세션 만료 시간 (기본값: 30분)
  * </pre>
  * </p>
  */
@@ -25,4 +26,10 @@ public class KeycloakSessionProperties {
      * 기본값: MEMORY (하위 호환성 유지)
      */
     private SessionStoreType storeType = SessionStoreType.MEMORY;
+
+    /**
+     * 세션 만료 시간.
+     * 기본값: 30분
+     */
+    private Duration timeout = Duration.ofMinutes(30);
 }
