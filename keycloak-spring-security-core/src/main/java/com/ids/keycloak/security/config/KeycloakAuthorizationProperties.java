@@ -16,7 +16,6 @@ import lombok.Setter;
  * </p>
  */
 @Getter
-@Setter
 public class KeycloakAuthorizationProperties {
     /**
      * Keycloak Authorization Services 사용 여부

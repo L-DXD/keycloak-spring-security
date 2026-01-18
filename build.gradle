@@ -5,8 +5,7 @@ plugins {
 
 println "=================================================="
 println "  Building Keycloak Spring Security Library"
-println "  Web Version: ${webVersion}"
-println "  WebFlux Version: ${webfluxVersion}"
+println "  Version: ${projectVersion}"
 println "=================================================="
 
 allprojects {
