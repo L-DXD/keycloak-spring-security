@@ -127,7 +127,6 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
       } catch (RestClientException e) {
          throw new AuthenticationFailedException();
       }
-      // todo : 401 또는 403 일때 AuthException 로그아웃 처리 진행해야함.
    }
 
    /**
