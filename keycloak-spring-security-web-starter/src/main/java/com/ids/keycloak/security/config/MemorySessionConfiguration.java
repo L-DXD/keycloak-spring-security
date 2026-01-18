@@ -32,11 +32,16 @@ public class MemorySessionConfiguration {
     /**
      * Principal Name으로 세션을 검색할 수 있는 In-Memory 세션 저장소 Bean.
      * 백채널 로그아웃 기능을 위해 FindByIndexNameSessionRepository 인터페이스를 구현합니다.
+     *
+     * @param properties Keycloak 보안 프로퍼티
      */
     @Bean
     @ConditionalOnMissingBean(FindByIndexNameSessionRepository.class)
-    public FindByIndexNameSessionRepository<MapSession> sessionRepository() {
-        log.debug("IndexedMapSessionRepository (In-Memory with Principal Name Index) 생성");
-        return new IndexedMapSessionRepository(new ConcurrentHashMap<>());
+    public FindByIndexNameSessionRepository<MapSession> sessionRepository(KeycloakSecurityProperties properties) {
+        IndexedMapSessionRepository repository = new IndexedMapSessionRepository(new ConcurrentHashMap<>());
+        repository.setDefaultMaxInactiveInterval(properties.getSession().getTimeout());
+        log.info("Keycloak Session: In-Memory 세션 만료 시간이 {}초로 설정되었습니다.",
+            properties.getSession().getTimeout().toSeconds());
+        return repository;
     }
 }
