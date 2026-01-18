@@ -1,12 +1,16 @@
 package com.ids.keycloak.security.config;
 
+import java.time.Duration;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
+import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.session.data.redis.config.annotation.web.http.EnableRedisHttpSession;
+import org.springframework.session.data.redis.config.annotation.web.http.EnableRedisIndexedHttpSession;
 
 /**
  * Redis 세션 저장소 설정.
@@ -27,6 +31,15 @@ import org.springframework.session.data.redis.config.annotation.web.http.EnableR
  *     implementation 'org.springframework.session:spring-session-data-redis'
  * }
  * </pre>
+ *
+ * <h3>세션 만료 시간 설정</h3>
+ * <pre>
+ * keycloak:
+ *   security:
+ *     session:
+ *       store-type: redis
+ *       timeout: 1h  # 세션 만료 시간 (기본값: 30m)
+ * </pre>
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
@@ -36,16 +49,35 @@ import org.springframework.session.data.redis.config.annotation.web.http.EnableR
     "org.springframework.session.data.redis.RedisIndexedSessionRepository"
 })
 @AutoConfigureAfter(name = "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration")
-@EnableRedisHttpSession(redisNamespace = "${spring.session.redis.namespace:${spring.application.name:spring:session}}")
+@EnableRedisIndexedHttpSession
 @Slf4j
 public class RedisSessionConfiguration {
 
     /**
-     * @EnableRedisHttpSession이 RedisIndexedSessionRepository를 자동으로 Bean 등록합니다.
-     * RedisIndexedSessionRepository는 FindByIndexNameSessionRepository<Session>을 구현하므로
-     * 백채널 로그아웃 기능이 그대로 동작합니다.
+     * Redis namespace 설정.
+     * spring.session.redis.namespace 프로퍼티를 사용하며, 없으면 기본값 사용.
      */
-    public RedisSessionConfiguration() {
-        log.info("Keycloak Session: Redis 세션 저장소가 활성화되었습니다.");
+    @Value("${spring.session.redis.namespace:${spring.application.name:spring:session}}")
+    private String redisNamespace;
+
+    /**
+     * 세션 저장소의 기본 만료 시간을 설정합니다.
+     * keycloak.security.session.timeout 프로퍼티 값을 사용합니다.
+     * @EnableRedisHttpSession의 maxInactiveIntervalInSeconds 속성은 상수여야 하므로
+     * 동적 설정을 위해 SessionRepositoryCustomizer를 사용합니다.
+     */
+    @Bean
+    public org.springframework.session.config.SessionRepositoryCustomizer<org.springframework.session.data.redis.RedisIndexedSessionRepository> springSessionRepositoryCustomizer(KeycloakSecurityProperties properties) {
+        return repository -> {
+            Duration timeout = properties.getSession().getTimeout();
+            repository.setDefaultMaxInactiveInterval(timeout);
+
+            if (redisNamespace != null && !redisNamespace.isBlank()) {
+                repository.setRedisKeyNamespace(redisNamespace);
+            }
+
+            log.info("Keycloak Session: Redis 세션 저장소가 활성화되었습니다. (만료 시간: {}초, Namespace: {})",
+                timeout.toSeconds(), redisNamespace);
+        };
     }
 }
