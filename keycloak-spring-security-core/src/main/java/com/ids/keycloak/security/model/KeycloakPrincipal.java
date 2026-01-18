@@ -23,7 +23,6 @@ public record KeycloakPrincipal(
     Collection<? extends GrantedAuthority> authorities,
     Map<String, Object> attributes
 ) implements OAuth2User, Serializable {
-
     /**
      * {@inheritDoc}
      */
