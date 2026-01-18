@@ -1,6 +1,5 @@
 package com.ids.keycloak.security.config;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ids.keycloak.security.authentication.KeycloakAuthenticationProvider;
 import com.ids.keycloak.security.authentication.KeycloakLogoutHandler;
 import com.ids.keycloak.security.authentication.OidcBackChannelSessionLogoutHandler;
@@ -139,7 +138,6 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         // === Bean 조회 ===
         JwtDecoder jwtDecoder = context.getBean(JwtDecoder.class);
         AuthenticationManager authenticationManager = http.getSharedObject(AuthenticationManager.class);
-        ObjectMapper objectMapper = context.getBean(ObjectMapper.class);
         KeycloakAuthenticationEntryPoint authenticationEntryPoint = context.getBean(KeycloakAuthenticationEntryPoint.class);
         KeycloakAccessDeniedHandler accessDeniedHandler = context.getBean(KeycloakAccessDeniedHandler.class);
         KeycloakSessionManager sessionManager = context.getBean(KeycloakSessionManager.class);
@@ -154,7 +152,6 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         KeycloakAuthenticationFilter authenticationFilter = new KeycloakAuthenticationFilter(
             jwtDecoder,
             authenticationManager,
-            objectMapper,
             sessionManager
         );
         http.addFilterBefore(authenticationFilter, UsernamePasswordAuthenticationFilter.class);

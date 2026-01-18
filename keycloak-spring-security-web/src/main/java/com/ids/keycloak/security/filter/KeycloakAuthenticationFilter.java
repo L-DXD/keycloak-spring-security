@@ -35,18 +35,15 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtDecoder jwtDecoder;
     private final AuthenticationManager authenticationManager;
-    private final ObjectMapper objectMapper;
     private final KeycloakSessionManager sessionManager;
 
     public KeycloakAuthenticationFilter(
         JwtDecoder jwtDecoder,
         AuthenticationManager authenticationManager,
-        ObjectMapper objectMapper,
         KeycloakSessionManager sessionManager
     ) {
         this.jwtDecoder = jwtDecoder;
         this.authenticationManager = authenticationManager;
-        this.objectMapper = objectMapper;
         this.sessionManager = sessionManager;
     }
 
@@ -78,7 +75,6 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
 
             log.debug("[Filter] HTTP Session에서 Refresh Token 로드 성공.");
 
-            // 인증 요청 생성
             PreAuthenticationPrincipal principal = createPrincipalFromIdToken(idTokenValue);
             KeycloakAuthentication authRequest = new KeycloakAuthentication(principal, idTokenValue, accessTokenValue);
             authRequest.setDetails(refreshToken);  // Refresh Token을 details에 설정
