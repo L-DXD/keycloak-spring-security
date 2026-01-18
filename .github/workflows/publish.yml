@@ -6,23 +6,14 @@ permissions:
 on:
   push:
     tags:
-      - 'web-starter-v*'
-      - 'webflux-starter-v*'
+      - 'v*'
 
   # 수동 실행 지원 (테스트/긴급 배포용)
   workflow_dispatch:
-    inputs:
-      module:
-        description: 'Module to publish'
-        required: true
-        type: choice
-        options:
-          - web-starter
-          - webflux-starter
 
 jobs:
   publish:
-    name: Publish to Maven Central
+    name: Publish All Modules to Maven Central
     runs-on: ubuntu-latest
 
     steps:
@@ -45,43 +36,48 @@ jobs:
         run: |
           # 1. Base64 디코딩하여 파일 생성 (디버깅/확인용)
           echo "${{ secrets.GPG_SECRET_KEY_BASE64 }}" | base64 --decode > secret.asc
-          
+
           # 2. [핵심] 디코딩된 키 내용을 'ORG_GRADLE_PROJECT_signingInMemoryKey' 환경변수에 주입
           # 멀티라인 텍스트를 환경변수에 넣기 위한 문법입니다.
           echo "ORG_GRADLE_PROJECT_signingInMemoryKey<<EOF" >> $GITHUB_ENV
           cat secret.asc >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
 
-      - name: Determine module to publish
-        id: module
+      - name: Extract version
+        id: version
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            MODULE="${{ github.event.inputs.module }}"
+            VERSION=$(grep "^projectVersion=" gradle.properties | cut -d'=' -f2)
           else
             TAG=${GITHUB_REF#refs/tags/}
-            if [[ $TAG == web-starter-v* ]]; then
-              MODULE="web-starter"
-              VERSION=${TAG#web-starter-v}
-            elif [[ $TAG == webflux-starter-v* ]]; then
-              MODULE="webflux-starter"
-              VERSION=${TAG#webflux-starter-v}
-            fi
-            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            VERSION=${TAG#v}
           fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-          if [ "$MODULE" == "web-starter" ]; then
-            echo "task=:keycloak-spring-security-web-starter:publish" >> $GITHUB_OUTPUT
-            echo "name=keycloak-spring-security-web-starter" >> $GITHUB_OUTPUT
-          elif [ "$MODULE" == "webflux-starter" ]; then
-            echo "task=:keycloak-spring-security-webflux-starter:publish" >> $GITHUB_OUTPUT
-            echo "name=keycloak-spring-security-webflux-starter" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Build before publish
+      - name: Build all modules
         run: ./gradlew build --no-daemon
 
-      - name: Publish ${{ steps.module.outputs.name }}
-        run: ./gradlew ${{ steps.module.outputs.task }} --no-daemon
+      # 배포 순서: core → web, webflux → web-starter, webflux-starter (의존성 순서)
+      - name: Publish core
+        run: ./gradlew :keycloak-spring-security-core:publish --no-daemon
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_PASSWORD }}
+
+      - name: Publish web and webflux
+        run: |
+          ./gradlew :keycloak-spring-security-web:publish --no-daemon
+          ./gradlew :keycloak-spring-security-webflux:publish --no-daemon
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_PASSWORD }}
+
+      - name: Publish web-starter and webflux-starter
+        run: |
+          ./gradlew :keycloak-spring-security-web-starter:publish --no-daemon
+          ./gradlew :keycloak-spring-security-webflux-starter:publish --no-daemon
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
@@ -106,33 +102,39 @@ jobs:
         id: version
         run: |
           TAG=${GITHUB_REF#refs/tags/}
-          if [[ $TAG == web-starter-v* ]]; then
-            echo "module=web-starter" >> $GITHUB_OUTPUT
-            echo "version=${TAG#web-starter-v}" >> $GITHUB_OUTPUT
-            echo "artifact=keycloak-spring-security-web-starter" >> $GITHUB_OUTPUT
-          elif [[ $TAG == webflux-starter-v* ]]; then
-            echo "module=webflux-starter" >> $GITHUB_OUTPUT
-            echo "version=${TAG#webflux-starter-v}" >> $GITHUB_OUTPUT
-            echo "artifact=keycloak-spring-security-webflux-starter" >> $GITHUB_OUTPUT
-          fi
+          VERSION=${TAG#v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          name: "${{ steps.version.outputs.module }} v${{ steps.version.outputs.version }}"
+          name: "v${{ steps.version.outputs.version }}"
           body: |
-            ## ${{ steps.version.outputs.module }} v${{ steps.version.outputs.version }}
+            ## Keycloak Spring Security v${{ steps.version.outputs.version }}
 
-            ### Maven Central
+            ### Servlet (Spring MVC)
             ```groovy
-            implementation 'io.github.l-dxd:${{ steps.version.outputs.artifact }}:${{ steps.version.outputs.version }}'
+            implementation 'io.github.l-dxd:keycloak-spring-security-web-starter:${{ steps.version.outputs.version }}'
+            ```
+
+            ### Reactive (Spring WebFlux)
+            ```groovy
+            implementation 'io.github.l-dxd:keycloak-spring-security-webflux-starter:${{ steps.version.outputs.version }}'
             ```
 
             ### Maven
             ```xml
+            <!-- Servlet -->
             <dependency>
                 <groupId>io.github.l-dxd</groupId>
-                <artifactId>${{ steps.version.outputs.artifact }}</artifactId>
+                <artifactId>keycloak-spring-security-web-starter</artifactId>
+                <version>${{ steps.version.outputs.version }}</version>
+            </dependency>
+
+            <!-- Reactive -->
+            <dependency>
+                <groupId>io.github.l-dxd</groupId>
+                <artifactId>keycloak-spring-security-webflux-starter</artifactId>
                 <version>${{ steps.version.outputs.version }}</version>
             </dependency>
             ```
