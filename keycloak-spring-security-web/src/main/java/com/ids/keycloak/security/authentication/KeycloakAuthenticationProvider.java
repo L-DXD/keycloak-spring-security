@@ -66,6 +66,9 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
       } catch (JwtException e) {
          log.error("[Provider] 토큰 검증 실패 (만료 외 사유). 원인: {}", e.getMessage());
          throw new AuthenticationFailedException("토큰 검증 실패: " + e.getMessage());
+      } catch (NullPointerException e){
+         log.error("[Provider] 인증에 필요한 토큰 정보가 누락되었습니다. 원인: {}", e.getMessage());
+         throw new AuthenticationFailedException("토큰 검증 실패: " + e.getMessage());
       }
    }
 
