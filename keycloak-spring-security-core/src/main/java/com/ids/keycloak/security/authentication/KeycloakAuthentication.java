@@ -69,6 +69,15 @@ public class KeycloakAuthentication extends AbstractAuthenticationToken {
     }
 
     /**
+     * ID Token을 반환합니다.
+     *
+     * @return ID Token 문자열
+     */
+    public String getIdToken() {
+        return this.idToken;
+    }
+
+    /**
      * Access Token을 반환합니다.
      *
      * @return Access Token 문자열

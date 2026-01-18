@@ -45,6 +45,11 @@ public class OidcBackChannelSessionLogoutHandler implements LogoutHandler {
     public void logout(HttpServletRequest request, HttpServletResponse response, Authentication authentication) {
         log.debug("[BackChannelLogoutHandler] 세션 직접 무효화 시작");
 
+        if (sessionRepository == null) {
+            log.error("[BackChannelLogoutHandler] SessionRepository가 설정되지 않아 로그아웃 처리를 할 수 없습니다.");
+            return;
+        }
+
         if (authentication == null) {
             log.debug("[BackChannelLogoutHandler] Authentication이 null - 처리 스킵");
             return;

@@ -71,6 +71,7 @@ public class OidcLoginSuccessHandler extends SavedRequestAwareAuthenticationSucc
 
                 // Refresh Token을 세션에 저장
                 if (session != null && authorizedClient.getRefreshToken() != null) {
+                    log.debug("HTTP Session에 Refresh Token을 저장합니다.");
                     sessionManager.saveRefreshToken(session, authorizedClient.getRefreshToken().getTokenValue());
                 }
             } else {
@@ -91,8 +92,15 @@ public class OidcLoginSuccessHandler extends SavedRequestAwareAuthenticationSucc
             log.warn("OAuth2AuthenticationToken 타입이 아니므로, 토큰 쿠키를 생성할 수 없습니다. Authentication type: {}", authentication.getClass().getName());
         }
 
-        // 세션 생성 및 리디렉션을 위해 기본 핸들러 로직 호출
-        super.onAuthenticationSuccess(request, response, authentication);
-        log.debug("기본 SuccessHandler(세션 생성, 리디렉션)를 호출합니다.");
+        // 세션 무효화 충돌 방지를 위해 super.onAuthenticationSuccess() 호출 제거
+        // 대신 직접 리디렉션 처리 (기본 SavedRequest 또는 루트)
+        String targetUrl = determineTargetUrl(request, response, authentication);
+        if (response.isCommitted()) {
+            log.debug("응답이 이미 커밋되었습니다. 다음 URL로 리디렉션할 수 없습니다: " + targetUrl);
+            return;
+        }
+        
+        getRedirectStrategy().sendRedirect(request, response, targetUrl);
+        log.debug("OIDC 로그인 성공 후 리디렉션: {}", targetUrl);
     }
 }
