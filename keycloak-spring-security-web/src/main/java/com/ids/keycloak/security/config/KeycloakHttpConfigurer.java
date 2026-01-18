@@ -114,6 +114,7 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
       // Spring Security가 세션을 생성하지 않음 (애플리케이션에서 관리)
       http.sessionManagement(session -> session
           .sessionCreationPolicy(SessionCreationPolicy.NEVER)
+          .sessionFixation(sf -> sf.none())
       );
 
       // Filter에서 사용할 수 있도록 SharedObject로 저장
@@ -149,12 +150,12 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
           )
       );
 
-        // === 5. CSRF 설정 ===
-        // 로그아웃 엔드포인트는 CSRF 면제 (OIDC 리다이렉트 시 토큰 전달 어려움)
-        http.csrf(csrf -> csrf
-            .ignoringRequestMatchers(LOGOUT_URL, BACK_CHANNEL_LOGOUT_URL)
-        );
-    }
+      // === 5. CSRF 설정 ===
+      // 로그아웃 엔드포인트는 CSRF 면제 (OIDC 리다이렉트 시 토큰 전달 어려움)
+      http.csrf(csrf -> csrf
+          .ignoringRequestMatchers(LOGOUT_URL, BACK_CHANNEL_LOGOUT_URL)
+      );
+   }
 
    @Override
    public void configure(HttpSecurity http) throws Exception {
