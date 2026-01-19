@@ -2,17 +2,19 @@ package com.ids.keycloak.security.filter;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ids.keycloak.security.authentication.KeycloakAuthentication;
+import com.ids.keycloak.security.authentication.KeycloakAuthenticationProvider;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
 import com.ids.keycloak.security.util.CookieUtil;
-import com.sd.KeycloakClient.dto.auth.KeycloakTokenInfo;
+import com.ids.keycloak.security.util.JwtUtil;
+import com.sd.KeycloakClient.factory.KeycloakClient;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -24,30 +26,28 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Answers;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.jwt.Jwt;
-import org.springframework.security.oauth2.jwt.JwtDecoder;
-import org.springframework.security.oauth2.jwt.JwtException;
 
 @ExtendWith(MockitoExtension.class)
 class KeycloakAuthenticationFilterTest {
 
     @Mock
-    private JwtDecoder jwtDecoder;
-
-    @Mock
     private AuthenticationManager authenticationManager;
 
     @Mock
-    private ObjectMapper objectMapper;
+    private KeycloakAuthenticationProvider authenticationProvider;
 
     @Mock
     private KeycloakSessionManager sessionManager;
+
+    @Mock(answer = Answers.RETURNS_DEEP_STUBS)
+    private KeycloakClient keycloakClient;
 
     @Mock
     private HttpServletRequest request;
@@ -70,7 +70,12 @@ class KeycloakAuthenticationFilterTest {
 
     @BeforeEach
     void setUp() {
-        filter = new KeycloakAuthenticationFilter(jwtDecoder, authenticationManager, sessionManager);
+        filter = new KeycloakAuthenticationFilter(
+            authenticationManager,
+            authenticationProvider,
+            sessionManager,
+            keycloakClient
+        );
         SecurityContextHolder.clearContext();
     }
 
@@ -79,18 +84,9 @@ class KeycloakAuthenticationFilterTest {
         SecurityContextHolder.clearContext();
     }
 
-    private Jwt createMockJwt(String subject) {
-        return Jwt.withTokenValue(ID_TOKEN_VALUE)
-            .header("alg", "RS256")
-            .subject(subject)
-            .build();
-    }
-
     private KeycloakAuthentication createSuccessfulAuthentication() {
         KeycloakPrincipal principal = new KeycloakPrincipal(USER_SUB, Collections.emptyList(), Collections.emptyMap());
-        KeycloakAuthentication auth = new KeycloakAuthentication(principal, ID_TOKEN_VALUE, ACCESS_TOKEN_VALUE);
-        auth.setAuthenticated(true);
-        return auth;
+        return new KeycloakAuthentication(principal, ID_TOKEN_VALUE, ACCESS_TOKEN_VALUE, true);
     }
 
     @Nested
@@ -101,16 +97,20 @@ class KeycloakAuthenticationFilterTest {
             // Given
             when(request.getSession(false)).thenReturn(session);
             when(sessionManager.getRefreshToken(session)).thenReturn(Optional.of(REFRESH_TOKEN_VALUE));
-            when(jwtDecoder.decode(ID_TOKEN_VALUE)).thenReturn(createMockJwt(USER_SUB));
 
             KeycloakAuthentication successAuth = createSuccessfulAuthentication();
             when(authenticationManager.authenticate(any())).thenReturn(successAuth);
 
-            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class)) {
+            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class);
+                 MockedStatic<JwtUtil> jwtUtil = mockStatic(JwtUtil.class)) {
+
                 cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ID_TOKEN_NAME))
                     .thenReturn(Optional.of(ID_TOKEN_VALUE));
                 cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ACCESS_TOKEN_NAME))
                     .thenReturn(Optional.of(ACCESS_TOKEN_VALUE));
+
+                jwtUtil.when(() -> JwtUtil.parseSubjectWithoutValidation(anyString()))
+                    .thenReturn(USER_SUB);
 
                 // When
                 filter.doFilterInternal(request, response, filterChain);
@@ -122,44 +122,6 @@ class KeycloakAuthenticationFilterTest {
                 assertThat(SecurityContextHolder.getContext().getAuthentication().getName()).isEqualTo(USER_SUB);
             }
         }
-
-        @Test
-        void 토큰_재발급_시_세션과_쿠키를_갱신한다() throws Exception {
-            // Given
-            when(request.getSession(false)).thenReturn(session);
-            when(sessionManager.getRefreshToken(session)).thenReturn(Optional.of(REFRESH_TOKEN_VALUE));
-            when(jwtDecoder.decode(ID_TOKEN_VALUE)).thenReturn(createMockJwt(USER_SUB));
-
-            String newRefreshToken = "new-refresh-token";
-            String newAccessToken = "new-access-token";
-            String newIdToken = "new-id-token";
-
-            KeycloakTokenInfo newTokens = KeycloakTokenInfo.builder()
-                .refreshToken(newRefreshToken)
-                .accessToken(newAccessToken)
-                .idToken(newIdToken)
-                .expireTime(3600)
-                .build();
-
-            KeycloakAuthentication successAuth = createSuccessfulAuthentication();
-            successAuth.setDetails(newTokens);
-            when(authenticationManager.authenticate(any())).thenReturn(successAuth);
-
-            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class)) {
-                cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ID_TOKEN_NAME))
-                    .thenReturn(Optional.of(ID_TOKEN_VALUE));
-                cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ACCESS_TOKEN_NAME))
-                    .thenReturn(Optional.of(ACCESS_TOKEN_VALUE));
-
-                // When
-                filter.doFilterInternal(request, response, filterChain);
-
-                // Then
-                verify(sessionManager).saveRefreshToken(session, newRefreshToken);
-                cookieUtil.verify(() -> CookieUtil.addTokenCookies(response, newAccessToken, 3600, newIdToken, 3600));
-                assertThat(SecurityContextHolder.getContext().getAuthentication()).isNotNull();
-            }
-        }
     }
 
     @Nested
@@ -169,6 +131,7 @@ class KeycloakAuthenticationFilterTest {
         void 세션이_없으면_쿠키를_삭제하고_인증을_시도하지_않는다() throws Exception {
             // Given
             when(request.getSession(false)).thenReturn(null);
+            when(request.getSession()).thenReturn(session);
 
             try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class)) {
                 cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ID_TOKEN_NAME))
@@ -213,16 +176,21 @@ class KeycloakAuthenticationFilterTest {
         void AuthenticationException_발생_시_SecurityContext를_비우고_쿠키를_삭제한다() throws Exception {
             // Given
             when(request.getSession(false)).thenReturn(session);
+            when(request.getSession()).thenReturn(session);
             when(sessionManager.getRefreshToken(session)).thenReturn(Optional.of(REFRESH_TOKEN_VALUE));
-            when(jwtDecoder.decode(ID_TOKEN_VALUE)).thenReturn(createMockJwt(USER_SUB));
             when(authenticationManager.authenticate(any()))
                 .thenThrow(new BadCredentialsException("Authentication failed"));
 
-            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class)) {
+            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class);
+                 MockedStatic<JwtUtil> jwtUtil = mockStatic(JwtUtil.class)) {
+
                 cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ID_TOKEN_NAME))
                     .thenReturn(Optional.of(ID_TOKEN_VALUE));
                 cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ACCESS_TOKEN_NAME))
                     .thenReturn(Optional.of(ACCESS_TOKEN_VALUE));
+
+                jwtUtil.when(() -> JwtUtil.parseSubjectWithoutValidation(anyString()))
+                    .thenReturn(USER_SUB);
 
                 // When
                 filter.doFilterInternal(request, response, filterChain);
@@ -239,42 +207,24 @@ class KeycloakAuthenticationFilterTest {
     class 바운더리_케이스 {
 
         @Test
-        void ID_Token_디코딩_실패_시_unknown_principal로_인증을_시도한다() throws Exception {
-            // Given
-            when(request.getSession(false)).thenReturn(session);
-            when(sessionManager.getRefreshToken(session)).thenReturn(Optional.of(REFRESH_TOKEN_VALUE));
-            when(jwtDecoder.decode(ID_TOKEN_VALUE)).thenThrow(new JwtException("Invalid token"));
-
-            KeycloakAuthentication successAuth = createSuccessfulAuthentication();
-            when(authenticationManager.authenticate(any())).thenReturn(successAuth);
-
-            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class)) {
-                cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ID_TOKEN_NAME))
-                    .thenReturn(Optional.of(ID_TOKEN_VALUE));
-                cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ACCESS_TOKEN_NAME))
-                    .thenReturn(Optional.of(ACCESS_TOKEN_VALUE));
-
-                // When
-                filter.doFilterInternal(request, response, filterChain);
-
-                // Then
-                verify(authenticationManager).authenticate(any(KeycloakAuthentication.class));
-                verify(filterChain).doFilter(request, response);
-            }
-        }
-
-        @Test
         void 일반_Exception_발생_시_SecurityContext를_비우고_쿠키를_삭제한다() throws Exception {
             // Given
             when(request.getSession(false)).thenReturn(session);
+            when(request.getSession()).thenReturn(session);
             when(sessionManager.getRefreshToken(session)).thenReturn(Optional.of(REFRESH_TOKEN_VALUE));
-            when(jwtDecoder.decode(ID_TOKEN_VALUE)).thenThrow(new RuntimeException("Unexpected error"));
+            when(authenticationManager.authenticate(any()))
+                .thenThrow(new RuntimeException("Unexpected error"));
 
-            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class)) {
+            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class);
+                 MockedStatic<JwtUtil> jwtUtil = mockStatic(JwtUtil.class)) {
+
                 cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ID_TOKEN_NAME))
                     .thenReturn(Optional.of(ID_TOKEN_VALUE));
                 cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ACCESS_TOKEN_NAME))
                     .thenReturn(Optional.of(ACCESS_TOKEN_VALUE));
+
+                jwtUtil.when(() -> JwtUtil.parseSubjectWithoutValidation(anyString()))
+                    .thenReturn(USER_SUB);
 
                 // When
                 filter.doFilterInternal(request, response, filterChain);

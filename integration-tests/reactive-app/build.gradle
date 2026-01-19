@@ -1,5 +1,7 @@
 plugins {
     id 'java'
+    id 'io.spring.dependency-management'
+    id 'org.springframework.boot' version '3.5.9'
 }
 
 dependencies {
@@ -8,4 +10,16 @@ dependencies {
     implementation project(':keycloak-spring-security-webflux-starter')
     // Spring WebFlux
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
+
+    // Test dependencies
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.security:spring-security-test'
+}
+
+bootJar {
+    enabled = true
+}
+
+jar {
+    enabled = false
 }

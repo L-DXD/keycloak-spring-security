@@ -12,14 +12,14 @@ Keycloak 기반의 OIDC 인증 환경에서, 브라우저 쿠키(Access/ID Token
 
 ### 1.1 인증 객체 (Authentication Objects)
 -   **`KeycloakAuthentication`**: `SecurityContext`에 저장되는 핵심 `Authentication` 구현체입니다.
-    -   **Principal**:
-        -   인증 전: `PreAuthenticationPrincipal` (ID Token의 `sub` 클레임만 포함)
-        -   인증 후: `KeycloakPrincipal` (사용자 정보, 권한, 속성 포함)
+    -   **Principal**: `KeycloakPrincipal` (인증 전/후 동일 타입 사용)
+        -   인증 전: 빈 authorities/attributes로 생성
+        -   인증 후: 사용자 정보, 권한, 속성 포함
     -   **Credentials**: `idToken` (검증의 주체)
     -   **Details**: `refreshToken` (갱신용) 또는 `KeycloakTokenInfo` (갱신 결과)
     -   **AccessToken**: 별도 필드로 보관 (API 호출용)
 
--   **`KeycloakPrincipal`**: 인증이 완료된 사용자를 나타내며 `OAuth2User`를 구현합니다. `resource_access` 클레임에서 권한을 추출하여 보유합니다.
+-   **`KeycloakPrincipal`**: 사용자를 나타내며 `OAuth2User`를 구현합니다. 인증 완료 후 `resource_access` 클레임에서 권한을 추출하여 보유합니다.
 
 ### 1.2 토큰 저장 전략 (Hybrid Approach)
 -   **Access Token / ID Token**: **브라우저 쿠키**에 저장
@@ -47,7 +47,7 @@ Keycloak 기반의 OIDC 인증 환경에서, 브라우저 쿠키(Access/ID Token
              | 2. 쿠키에서 토큰 추출
              | 3. Session에서 RefreshToken 추출 (via KeycloakSessionManager)
              | 4. '미인증' Authentication 객체 생성
-             |    - Principal: PreAuthenticationPrincipal (sub)
+             |    - Principal: KeycloakPrincipal (sub만 포함, 빈 authorities)
              |    - Details:   RefreshToken
              |
              V

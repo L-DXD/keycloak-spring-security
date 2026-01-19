@@ -77,7 +77,6 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         OidcLoginSuccessHandler oidcLoginSuccessHandler = context.getBean(OidcLoginSuccessHandler.class);
         KeycloakLogoutHandler keycloakLogoutHandler = context.getBean(KeycloakLogoutHandler.class);
         OidcClientInitiatedLogoutSuccessHandler oidcLogoutSuccessHandler = context.getBean(OidcClientInitiatedLogoutSuccessHandler.class);
-        KeycloakSessionManager sessionManager = context.getBean(KeycloakSessionManager.class);
 
         // === 1. Authentication Provider 등록 ===
         KeycloakAuthenticationProvider provider = new KeycloakAuthenticationProvider(
@@ -85,6 +84,10 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
             clientRegistrationRepository
         );
         http.authenticationProvider(provider);
+
+        // Filter에서 사용할 수 있도록 SharedObject로 저장
+        http.setSharedObject(KeycloakAuthenticationProvider.class, provider);
+        http.setSharedObject(KeycloakClient.class, keycloakClient);
 
         // === 2. 세션 관리 ===
         // Spring Security가 세션을 생성하지 않음 (애플리케이션에서 관리)
@@ -132,8 +135,10 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
     public void configure(HttpSecurity http) throws Exception {
         ApplicationContext context = http.getSharedObject(ApplicationContext.class);
 
-        // === Bean 조회 ===
+        // === Bean 및 SharedObject 조회 ===
         AuthenticationManager authenticationManager = http.getSharedObject(AuthenticationManager.class);
+        KeycloakAuthenticationProvider authenticationProvider = http.getSharedObject(KeycloakAuthenticationProvider.class);
+        KeycloakClient keycloakClient = http.getSharedObject(KeycloakClient.class);
         KeycloakAuthenticationEntryPoint authenticationEntryPoint = context.getBean(KeycloakAuthenticationEntryPoint.class);
         KeycloakAccessDeniedHandler accessDeniedHandler = context.getBean(KeycloakAccessDeniedHandler.class);
         KeycloakSessionManager sessionManager = context.getBean(KeycloakSessionManager.class);
@@ -147,7 +152,9 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         // === 7. Keycloak 인증 필터 등록 ===
         KeycloakAuthenticationFilter authenticationFilter = new KeycloakAuthenticationFilter(
             authenticationManager,
-            sessionManager
+            authenticationProvider,
+            sessionManager,
+            keycloakClient
         );
         http.addFilterBefore(authenticationFilter, UsernamePasswordAuthenticationFilter.class);
     }
