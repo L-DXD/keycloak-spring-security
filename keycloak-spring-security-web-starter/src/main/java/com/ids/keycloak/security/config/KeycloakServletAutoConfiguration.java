@@ -31,7 +31,6 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInitiatedLogoutSuccessHandler;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
-import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.MapSession;
@@ -171,12 +170,10 @@ public class KeycloakServletAutoConfiguration {
         @Bean
         @ConditionalOnMissingBean(AuthenticationManager.class)
         public AuthenticationManager authenticationManager(
-            JwtDecoder jwtDecoder,
             KeycloakClient keycloakClient,
             ClientRegistrationRepository clientRegistrationRepository) {
             log.info("핵심 Bean을 등록합니다: [AuthenticationManager] (Provider: KeycloakAuthenticationProvider)");
             KeycloakAuthenticationProvider provider = new KeycloakAuthenticationProvider(
-                jwtDecoder,
                 keycloakClient,
                 clientRegistrationRepository
             );

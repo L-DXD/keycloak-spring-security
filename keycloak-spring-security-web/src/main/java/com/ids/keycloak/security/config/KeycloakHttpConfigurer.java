@@ -17,7 +17,6 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInitiatedLogoutSuccessHandler;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
-import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.context.NullSecurityContextRepository;
 import org.springframework.session.FindByIndexNameSessionRepository;
@@ -70,7 +69,6 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         ApplicationContext context = http.getSharedObject(ApplicationContext.class);
 
         // === Bean 조회 ===
-        JwtDecoder jwtDecoder = context.getBean(JwtDecoder.class);
         KeycloakClient keycloakClient = context.getBean(KeycloakClient.class);
         ClientRegistrationRepository clientRegistrationRepository = context.getBean(ClientRegistrationRepository.class);
         FindByIndexNameSessionRepository<? extends Session> sessionRepository =
@@ -83,7 +81,6 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
 
         // === 1. Authentication Provider 등록 ===
         KeycloakAuthenticationProvider provider = new KeycloakAuthenticationProvider(
-            jwtDecoder,
             keycloakClient,
             clientRegistrationRepository
         );
@@ -136,7 +133,6 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         ApplicationContext context = http.getSharedObject(ApplicationContext.class);
 
         // === Bean 조회 ===
-        JwtDecoder jwtDecoder = context.getBean(JwtDecoder.class);
         AuthenticationManager authenticationManager = http.getSharedObject(AuthenticationManager.class);
         KeycloakAuthenticationEntryPoint authenticationEntryPoint = context.getBean(KeycloakAuthenticationEntryPoint.class);
         KeycloakAccessDeniedHandler accessDeniedHandler = context.getBean(KeycloakAccessDeniedHandler.class);
@@ -150,7 +146,6 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
 
         // === 7. Keycloak 인증 필터 등록 ===
         KeycloakAuthenticationFilter authenticationFilter = new KeycloakAuthenticationFilter(
-            jwtDecoder,
             authenticationManager,
             sessionManager
         );

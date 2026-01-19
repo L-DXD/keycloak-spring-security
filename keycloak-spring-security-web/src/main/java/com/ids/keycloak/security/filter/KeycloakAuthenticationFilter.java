@@ -1,11 +1,11 @@
 package com.ids.keycloak.security.filter;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ids.keycloak.security.authentication.KeycloakAuthentication;
 import com.ids.keycloak.security.exception.AuthenticationFailedException;
 import com.ids.keycloak.security.model.PreAuthenticationPrincipal;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
 import com.ids.keycloak.security.util.CookieUtil;
+import com.ids.keycloak.security.util.JwtUtil;
 import com.sd.KeycloakClient.dto.auth.KeycloakTokenInfo;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -13,17 +13,12 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
-import java.util.Base64;
-import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.jwt.Jwt;
-import org.springframework.security.oauth2.jwt.JwtDecoder;
-import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
@@ -33,16 +28,13 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Slf4j
 public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
 
-    private final JwtDecoder jwtDecoder;
     private final AuthenticationManager authenticationManager;
     private final KeycloakSessionManager sessionManager;
 
     public KeycloakAuthenticationFilter(
-        JwtDecoder jwtDecoder,
         AuthenticationManager authenticationManager,
         KeycloakSessionManager sessionManager
     ) {
-        this.jwtDecoder = jwtDecoder;
         this.authenticationManager = authenticationManager;
         this.sessionManager = sessionManager;
     }
@@ -125,16 +117,11 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
     }
 
     private PreAuthenticationPrincipal createPrincipalFromIdToken(String idToken) {
-        try {
-            Jwt jwt = jwtDecoder.decode(idToken);
-            String subject = jwt.getSubject();
-            if (subject == null || subject.isBlank()) {
-                throw new AuthenticationFailedException("ID Token에 'sub' 클레임이 없습니다.");
-            }
-            return new PreAuthenticationPrincipal(subject);
-
-        } catch (JwtException e) {
+        // 서명 검증 없이 subject만 추출 (온라인 검증에서 유효성 확인)
+        String subject = JwtUtil.parseSubjectWithoutValidation(idToken);
+        if (subject == null || subject.isBlank()) {
             return new PreAuthenticationPrincipal("unknown");
         }
+        return new PreAuthenticationPrincipal(subject);
     }
 }

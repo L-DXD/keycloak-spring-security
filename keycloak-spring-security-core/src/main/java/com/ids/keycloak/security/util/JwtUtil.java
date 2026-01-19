@@ -74,4 +74,39 @@ public class JwtUtil {
             return false;
         }
     }
+
+    /**
+     * JWT 토큰에서 서명 검증 없이 클레임만 추출합니다.
+     * <p>
+     * 온라인 검증(Keycloak Introspect)을 사용하는 경우, 토큰의 유효성은
+     * Keycloak에서 검증하므로 여기서는 클레임 정보만 파싱합니다.
+     * </p>
+     *
+     * @param token JWT 토큰 문자열
+     * @return 클레임 맵 (파싱 실패 시 빈 맵 반환)
+     */
+    public static Map<String, Object> parseClaimsWithoutValidation(String token) {
+        try {
+            SignedJWT signedJWT = SignedJWT.parse(token);
+            JWTClaimsSet claimsSet = signedJWT.getJWTClaimsSet();
+            return claimsSet.getClaims();
+        } catch (ParseException e) {
+            return Collections.emptyMap();
+        }
+    }
+
+    /**
+     * JWT 토큰에서 서명 검증 없이 subject(사용자 ID)를 추출합니다.
+     *
+     * @param token JWT 토큰 문자열
+     * @return subject 값 (파싱 실패 시 null 반환)
+     */
+    public static String parseSubjectWithoutValidation(String token) {
+        try {
+            SignedJWT signedJWT = SignedJWT.parse(token);
+            return signedJWT.getJWTClaimsSet().getSubject();
+        } catch (ParseException e) {
+            return null;
+        }
+    }
 }
