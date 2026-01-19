@@ -255,6 +255,9 @@ public class KeycloakServletAutoConfiguration {
 
             // 2. 인가 설정
             http.authorizeHttpRequests(authorize -> {
+                // 에러 페이지는 인증 없이 접근 허용 (정적 리소스 누락 시 로그인 리디렉션 방지)
+                authorize.requestMatchers("/error").permitAll();
+
                 // permit-all-paths 설정된 경로들은 인증 없이 접근 허용
                 if (!securityProperties.getAuthentication().getPermitAllPaths().isEmpty()) {
                     String[] permitAllPaths = securityProperties.getAuthentication().getPermitAllPaths().toArray(new String[0]);
@@ -270,9 +273,6 @@ public class KeycloakServletAutoConfiguration {
                     // 나머지 모든 요청은 인증만 필요
                     authorize.anyRequest().authenticated();
                 }
-
-                // 에러 페이지는 인증 없이 접근 허용 (정적 리소스 누락 시 로그인 리디렉션 방지)
-                authorize.requestMatchers("/error").permitAll();
             });
 
             return http.build();
