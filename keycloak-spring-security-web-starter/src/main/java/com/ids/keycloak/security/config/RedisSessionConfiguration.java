@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
+import org.springframework.boot.autoconfigure.AutoConfigureBefore;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
@@ -49,6 +50,7 @@ import org.springframework.session.data.redis.config.annotation.web.http.EnableR
     "org.springframework.session.data.redis.RedisIndexedSessionRepository"
 })
 @AutoConfigureAfter(name = "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration")
+@AutoConfigureBefore(name = "org.springframework.boot.autoconfigure.session.SessionAutoConfiguration")
 @EnableRedisIndexedHttpSession
 @Slf4j
 public class RedisSessionConfiguration {
