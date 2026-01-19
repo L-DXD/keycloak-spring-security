@@ -7,6 +7,7 @@ import com.ids.keycloak.security.exception.AuthenticationFailedException;
 import com.ids.keycloak.security.exception.ConfigurationException;
 import com.ids.keycloak.security.exception.IntrospectionFailedException;
 import com.ids.keycloak.security.exception.RefreshTokenException;
+import com.ids.keycloak.security.exception.TokenExpiredException;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.util.JwtUtil;
 import com.sd.KeycloakClient.dto.KeycloakResponse;
@@ -18,6 +19,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
@@ -25,25 +27,28 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.web.client.RestClientException;
 
 /**
- * {@link KeycloakAuthentication}을 처리하는 {@link AuthenticationProvider} 구현체입니다.
- * <p>
- * 토큰 유효성 검증은 Keycloak Introspect API(온라인 검증)에 완전히 위임합니다.
- * 로컬에서는 서명/만료 검증 없이 토큰 클레임만 파싱하여 사용합니다.
- * </p>
+ * {@link KeycloakAuthentication}을 처리하는 {@link AuthenticationProvider} 구현체입니다. ID Token의 유효성을 검증하고, 만료 시 재발급을 시도하며, 인증된
+ * {@link KeycloakPrincipal}을 생성합니다. 토큰 저장/조회 책임은 이 클래스에서 제거되었습니다.
  */
 @Slf4j
 public class KeycloakAuthenticationProvider implements AuthenticationProvider {
 
+   private final JwtDecoder jwtDecoder;
    private final KeycloakClient keycloakClient;
-   private final ClientRegistrationRepository clientRegistrationRepository;
+   private final ClientRegistrationRepository clientRegistrationRepository; // clientId 조회를 위해 의존성 다시 추가
 
    public KeycloakAuthenticationProvider(
+       JwtDecoder jwtDecoder,
        KeycloakClient keycloakClient,
-       ClientRegistrationRepository clientRegistrationRepository
+       ClientRegistrationRepository clientRegistrationRepository // 의존성 다시 추가
    ) {
+      this.jwtDecoder = jwtDecoder;
       this.keycloakClient = keycloakClient;
       this.clientRegistrationRepository = clientRegistrationRepository;
    }
@@ -55,11 +60,11 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
 
       try {
          return authenticateWithIdToken(authRequest);
-      } catch (IntrospectionFailedException e) {
-         log.warn("[Provider] 온라인 검증 실패, 리프레시를 시도합니다. 원인: {}", e.getMessage());
+      } catch (TokenExpiredException | IntrospectionFailedException e) {
+         log.warn("[Provider] 토큰 만료 또는 온라인 검증 실패, 리프레시를 시도합니다. 원인: {}", e.getMessage());
          return authenticateWithRefreshToken(authRequest);
-      } catch (NullPointerException e) {
-         log.error("[Provider] 인증에 필요한 토큰 정보가 누락되었습니다. 원인: {}", e.getMessage());
+      } catch (JwtException e) {
+         log.error("[Provider] 토큰 검증 실패 (만료 외 사유). 원인: {}", e.getMessage());
          throw new AuthenticationFailedException("토큰 검증 실패: " + e.getMessage());
       }
    }
@@ -68,13 +73,17 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
       String idTokenValue = authRequest.getIdToken();
       String accessTokenValue = authRequest.getAccessToken();
 
-      log.debug("[Provider] Keycloak 온라인 검증 시도 (ID Token).");
+      log.debug("[Provider] ID 토큰 검증 시도.");
 
-      // 온라인 검증 (Keycloak Introspect) - ID Token으로 검증
-      verifyTokenOnline(idTokenValue);
+      // 오프라인 검증 (만료 체크 + 서명, 클레임 등)
+      Jwt idToken = decodeToken(idTokenValue);
+      Jwt accessToken = decodeToken(accessTokenValue);
 
-      log.debug("[Provider] 온라인 검증 성공. 인증된 객체 생성 시작.");
-      return createAuthenticatedToken(idTokenValue, accessTokenValue, null);
+      // 온라인 검증 (Keycloak Introspect)
+      verifyTokenOnline(accessTokenValue);
+
+      log.debug("[Provider] ID 토큰 검증 성공. 인증된 객체 생성 시작.");
+      return createAuthenticatedToken(idToken, accessToken, null);
    }
 
    private Authentication authenticateWithRefreshToken(KeycloakAuthentication authRequest) {
@@ -85,27 +94,23 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
       }
 
       KeycloakTokenInfo newTokens = refreshTokens(refreshTokenValue);
-      log.debug("[Provider] 새 토큰 발급 성공. 인증된 객체 생성 시작.");
+      log.debug("[Provider] 새 토큰 발급 성공.");
+      Jwt newIdToken = decodeToken(newTokens.getIdToken());
+      Jwt newAccessToken = decodeToken(newTokens.getAccessToken());
+      log.debug("[Provider] 새 ID/Access 토큰 검증 성공. 인증된 객체 생성 시작.");
 
-      return createAuthenticatedToken(newTokens.getIdToken(), newTokens.getAccessToken(), newTokens);
+      return createAuthenticatedToken(newIdToken, newAccessToken, newTokens);
    }
 
-   private Authentication createAuthenticatedToken(String idTokenValue, String accessTokenValue, KeycloakTokenInfo newTokens) {
+   private Authentication createAuthenticatedToken(Jwt validatedIdToken, Jwt validatedAccessToken, KeycloakTokenInfo newTokens) {
       ClientRegistration clientRegistration = clientRegistrationRepository.findByRegistrationId(REGISTRATION_ID);
       if (clientRegistration == null) {
          throw new ConfigurationException("clientRegistration에 id를 찾을 수 없습니다. ");
       }
       String clientId = clientRegistration.getClientId();
 
-      // ID Token에서 subject(사용자 ID)와 클레임 추출
-      Map<String, Object> idTokenClaims = JwtUtil.parseClaimsWithoutValidation(idTokenValue);
-      String subject = JwtUtil.parseSubjectWithoutValidation(idTokenValue);
-
-      // Access Token에서 역할(roles) 정보 추출을 위한 클레임 파싱
-      Map<String, Object> accessTokenClaims = JwtUtil.parseClaimsWithoutValidation(accessTokenValue);
-
-      KeycloakPrincipal principal = createPrincipal(idTokenClaims, accessTokenClaims, subject, clientId);
-      KeycloakAuthentication authenticatedToken = new KeycloakAuthentication(principal, idTokenValue, accessTokenValue);
+      KeycloakPrincipal principal = createPrincipal(validatedAccessToken, clientId);
+      KeycloakAuthentication authenticatedToken = new KeycloakAuthentication(principal, validatedIdToken.getTokenValue(), validatedAccessToken.getTokenValue());
 
       if (newTokens != null) {
          authenticatedToken.setDetails(newTokens);
@@ -156,30 +161,35 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
    }
 
    /**
+    * JWT 토큰을 디코딩하고 만료 여부를 확인합니다.
+    * 만료된 토큰인 경우 {@link TokenExpiredException}을 던집니다.
+    *
+    * @param token JWT 토큰 문자열
+    * @return 디코딩된 Jwt 객체
+    * @throws TokenExpiredException 토큰이 만료된 경우
+    */
+   private Jwt decodeToken(String token) {
+      if (JwtUtil.isTokenExpired(token)) {
+         throw new TokenExpiredException("토큰이 만료되었습니다.");
+      }
+      return jwtDecoder.decode(token);
+   }
+
+   /**
     * Keycloak Introspect API를 통해 토큰을 온라인으로 검증합니다.
     *
-    * @param token 검증할 토큰 (ID Token)
-    * @throws IntrospectionFailedException 토큰이 유효하지 않은 경우 (active=false 또는 401)
+    * @param accessToken 검증할 Access Token
+    * @throws IntrospectionFailedException 토큰이 유효하지 않은 경우 (401)
     * @throws ConfigurationException Keycloak 서버 오류 (500)
     * @throws AuthenticationFailedException 그 외 예상치 못한 응답
     */
-   private void verifyTokenOnline(String token) {
+   private void verifyTokenOnline(String accessToken) {
       try {
-         KeycloakResponse<KeycloakIntrospectResponse> response = keycloakClient.auth().authenticationByIntrospect(token);
+         KeycloakResponse<KeycloakIntrospectResponse> response = keycloakClient.auth().authenticationByIntrospect(accessToken);
          int status = response.getStatus();
 
          switch (status) {
-            case 200 -> {
-               // 응답 본문의 active 필드 확인 (중요!)
-               KeycloakIntrospectResponse introspectResponse = response.getBody()
-                   .orElseThrow(() -> new IntrospectionFailedException("온라인 검증 실패: 응답 본문이 없습니다."));
-
-               if (!introspectResponse.getActive()) {
-                  log.warn("[Provider] 온라인 검증 실패: 토큰이 비활성 상태입니다 (active=false).");
-                  throw new IntrospectionFailedException("온라인 검증 실패: 토큰이 유효하지 않습니다.");
-               }
-               log.debug("[Provider] 온라인 검증 성공.");
-            }
+            case 200 -> log.debug("[Provider] 온라인 검증 성공.");
             case 401 -> {
                log.warn("[Provider] 온라인 검증 실패 (401 Unauthorized). 토큰 재발급을 시도합니다.");
                throw new IntrospectionFailedException("온라인 검증 실패: 토큰이 유효하지 않습니다.");
@@ -200,17 +210,18 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
    }
 
    /**
-    * ID Token과 Access Token 클레임에서 Principal 객체를 생성합니다.
+    * 검증된 AccessToken의 'resource_access' 클레임에서 역할을 추출하여 Principal 객체를 생성합니다.
     *
-    * @param idTokenClaims     ID Token 클레임 (사용자 정보)
-    * @param accessTokenClaims Access Token 클레임 (역할 정보)
-    * @param subject           사용자 ID (ID Token에서 추출)
-    * @param clientId          역할을 추출할 대상 클라이언트 ID
+    * @param accessToken 검증된 Access Token
+    * @param clientId    역할을 추출할 대상 클라이언트 ID
     * @return 권한 정보가 포함된 Principal 객체
     */
-   private KeycloakPrincipal createPrincipal(Map<String, Object> idTokenClaims, Map<String, Object> accessTokenClaims, String subject, String clientId) {
-      // Access Token의 'resource_access' 클레임에서 clientId에 해당하는 역할(role) 목록을 추출합니다.
-      List<String> roles = JwtUtil.extractRoles(accessTokenClaims, clientId);
+   private KeycloakPrincipal createPrincipal(Jwt accessToken, String clientId) {
+      Map<String, Object> claims = accessToken.getClaims();
+      String subject = accessToken.getSubject();
+
+      // 'resource_access' 클레임에서 clientId에 해당하는 역할(role) 목록을 추출합니다.
+      List<String> roles = JwtUtil.extractRoles(claims, clientId);
 
       Collection<GrantedAuthority> authorities = new ArrayList<>();
       for (String role : roles) {
@@ -219,8 +230,7 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
       }
 
       log.debug("[Provider] 사용자 '{}'의 권한 매핑 완료: {}", subject, authorities);
-      // Principal에는 ID Token 클레임을 저장 (사용자 정보)
-      return new KeycloakPrincipal(subject, authorities, idTokenClaims);
+      return new KeycloakPrincipal(subject, authorities, claims);
    }
 
    @Override
