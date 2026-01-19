@@ -18,6 +18,7 @@ import lombok.Setter;
  * </p>
  */
 @Getter
+@Setter
 public class KeycloakSessionProperties {
 
     /**
