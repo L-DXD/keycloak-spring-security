@@ -17,6 +17,7 @@ import java.util.List;
  *       - /public/**
  *       - /health
  *       - /actuator/**
+ *     authorization-enabled: true
  * </pre>
  * </p>
  */
@@ -29,4 +30,11 @@ public class KeycloakAuthenticationProperties {
      * Ant 패턴 지원: /api/**, /public/*, etc.
      */
     private List<String> permitAllPaths = new ArrayList<>();
+
+    /**
+     * Keycloak Authorization Services 사용 여부.
+     * true: 매 요청마다 Keycloak에 인가 요청 (Policy Enforcement)
+     * false: Spring Security 기본 인가 사용 (authenticated만 확인)
+     */
+    private boolean authorizationEnabled = false;
 }
