@@ -17,6 +17,7 @@ import java.util.List;
  *       permit-all-paths:
  *         - /public/**
  *         - /health
+ *       default_success_url: /home
  * </pre>
  * </p>
  */
@@ -29,4 +30,10 @@ public class KeycloakAuthenticationProperties {
      * Ant 패턴 지원: /api/**, /public/*, etc.
      */
     private List<String> permitAllPaths = new ArrayList<>();
+
+    /**
+     * 로그인 성공 후 리다이렉트할 기본 URL
+     * 기본값: "/"
+     */
+    private String defaultSuccessUrl = "/";
 }

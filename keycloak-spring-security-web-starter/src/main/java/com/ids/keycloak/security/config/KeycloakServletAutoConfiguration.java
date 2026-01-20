@@ -207,10 +207,12 @@ public class KeycloakServletAutoConfiguration {
         @ConditionalOnMissingBean
         public OidcLoginSuccessHandler oidcLoginSuccessHandler(
             OAuth2AuthorizedClientRepository authorizedClientRepository,
-            KeycloakSessionManager sessionManager
+            KeycloakSessionManager sessionManager,
+            KeycloakSecurityProperties securityProperties
         ) {
             log.debug("지원 Bean을 등록합니다: [OidcLoginSuccessHandler]");
-            return new OidcLoginSuccessHandler(authorizedClientRepository, sessionManager);
+            String defaultSuccessUrl = securityProperties.getAuthentication().getDefaultSuccessUrl();
+            return new OidcLoginSuccessHandler(authorizedClientRepository, sessionManager, defaultSuccessUrl);
         }
 
         @Bean

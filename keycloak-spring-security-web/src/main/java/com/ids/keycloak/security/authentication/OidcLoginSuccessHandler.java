@@ -7,7 +7,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
@@ -22,11 +21,20 @@ import org.springframework.session.FindByIndexNameSessionRepository;
  * docs/04 아키텍처의 stateless 인증 흐름을 지원하기 위한 사전 작업을 수행합니다.
  */
 @Slf4j
-@RequiredArgsConstructor
 public class OidcLoginSuccessHandler extends SavedRequestAwareAuthenticationSuccessHandler {
 
     private final OAuth2AuthorizedClientRepository authorizedClientRepository;
     private final KeycloakSessionManager sessionManager;
+
+    public OidcLoginSuccessHandler(
+        OAuth2AuthorizedClientRepository authorizedClientRepository,
+        KeycloakSessionManager sessionManager,
+        String defaultSuccessUrl
+    ) {
+        this.authorizedClientRepository = authorizedClientRepository;
+        this.sessionManager = sessionManager;
+        setDefaultTargetUrl(defaultSuccessUrl);
+    }
 
     @Override
     public void onAuthenticationSuccess(
@@ -34,6 +42,8 @@ public class OidcLoginSuccessHandler extends SavedRequestAwareAuthenticationSucc
         HttpServletResponse response,
         Authentication authentication
     ) throws IOException, ServletException {
+
+        // KeycloakAuthentication
         if (authentication instanceof OAuth2AuthenticationToken) {
             log.debug("OIDC 로그인 성공 principal Name = {}", authentication.getName());
             log.debug("OIDC 로그인 성공. 토큰을 쿠키에 저장합니다.");
