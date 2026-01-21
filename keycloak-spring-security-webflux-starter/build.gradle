@@ -1,0 +1,18 @@
+plugins {
+    id 'java-library'
+    id 'io.spring.dependency-management'
+}
+
+dependencies {
+    // 자동 설정을 위한 필수 의존성
+    api 'org.springframework.boot:spring-boot-autoconfigure'
+
+    // ConfigurationProperties 스캔 및 메타데이터 생성을 위한 애노테이션 프로세서
+    annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
+
+    // Reactive 환경을 지원하기 위해 포함
+    api project(':keycloak-spring-security-webflux')
+
+    // 사용자의 프로젝트 환경에 따라 필요한 의존성만 전이되도록 compileOnly로 설정
+    compileOnly 'org.springframework.boot:spring-boot-starter-webflux'
+}

@@ -2,6 +2,11 @@ plugins {
     id 'io.spring.dependency-management' version '1.1.5' apply false
 }
 
+println "=================================================="
+println "  Building Keycloak Spring Security Library"
+println "  Version: ${version}"
+println "=================================================="
+
 allprojects {
     group = 'com.ids.keycloak'
     version = '0.0.1'
@@ -16,6 +21,10 @@ subprojects {
     plugins.withId('java-base') {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+
+        tasks.withType(Test) {
+            useJUnitPlatform()
+        }
     }
 
     // 'io.spring.dependency-management' 플러그인이 적용된 프로젝트에만 의존성 관리 설정을 적용
@@ -27,11 +36,16 @@ subprojects {
         }
     }
 
-    // 하위 프로젝트의 평가가 끝난 후, 'java-base' 플러그인이 있는지 확인하고 의존성을 추가
     afterEvaluate { project ->
         if (project.plugins.hasPlugin('java-base')) {
             project.dependencies {
-                testImplementation 'org.springframework.boot:spring-boot-starter-test'
+                // Test dependencies
+                testImplementation 'org.junit.jupiter:junit-jupiter-api'
+                testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine'
+                testImplementation 'org.assertj:assertj-core'
+                testImplementation 'org.mockito:mockito-core'
+                testImplementation 'org.mockito:mockito-junit-jupiter'
+                testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 
                 // Common Lombok dependencies
                 compileOnly 'org.projectlombok:lombok'
@@ -39,6 +53,9 @@ subprojects {
 
                 // Common SLF4J dependency
                 implementation 'org.slf4j:slf4j-api'
+
+                // keycloak client library (etc. online, token exchange, ...)
+                implementation 'io.github.l-dxd:keycloak-client:1.0.0'
             }
         }
     }
