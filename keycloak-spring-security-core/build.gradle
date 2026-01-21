@@ -6,4 +6,6 @@ plugins {
 dependencies {
     // 순수 로직 모듈로, Spring Web/Servlet/Reactive 의존성 없음
     api 'org.springframework.security:spring-security-core'
+    api 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
+    implementation 'com.fasterxml.jackson.core:jackson-annotations'
 }

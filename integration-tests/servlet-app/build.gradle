@@ -1,0 +1,33 @@
+plugins {
+    id 'java'
+    id 'io.spring.dependency-management'
+    id 'org.springframework.boot' version '3.5.9'
+}
+
+version = '1.2.3-TEST'
+
+dependencies {
+    // 우리가 만든 스타터 모듈
+    implementation project(':keycloak-spring-security-web-starter')
+    // Spring Web (MVC)
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+
+    // Lombok for @Slf4j
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+
+    // SLF4J API (often brought transitively, but explicit for clarity)
+    implementation 'org.slf4j:slf4j-api'
+
+    // Test dependencies
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.security:spring-security-test'
+}
+
+bootJar {
+    enabled = true
+}
+
+jar {
+    enabled = false
+}

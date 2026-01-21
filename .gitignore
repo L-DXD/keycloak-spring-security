@@ -41,3 +41,7 @@ out/
 
 ### VS Code ###
 .vscode/
+
+# 의존성 파일
+*.yml
+*.yaml
