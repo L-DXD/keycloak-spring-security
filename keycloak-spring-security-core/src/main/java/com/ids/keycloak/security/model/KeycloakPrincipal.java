@@ -1,7 +1,9 @@
 package com.ids.keycloak.security.model;
 
+import java.security.Principal;
 import lombok.Getter;
 import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 
 import java.io.Serializable;

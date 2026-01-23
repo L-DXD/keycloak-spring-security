@@ -78,10 +78,11 @@ class OidcLoginSuccessHandlerTest {
     private static final String ACCESS_TOKEN_VALUE = "access-token-value";
     private static final String ID_TOKEN_VALUE = "id-token-value";
     private static final String REFRESH_TOKEN_VALUE = "refresh-token-value";
+    private static final String DEFAULT_SUCCESS_URL = "/dashboard";
 
     @BeforeEach
     void setUp() {
-        handler = new OidcLoginSuccessHandler(authorizedClientRepository, sessionManager);
+        handler = new OidcLoginSuccessHandler(authorizedClientRepository, sessionManager, DEFAULT_SUCCESS_URL);
     }
 
     private ClientRegistration createClientRegistration() {
@@ -336,6 +337,52 @@ class OidcLoginSuccessHandlerTest {
                     never()
                 );
             }
+        }
+    }
+
+    @Nested
+    class DefaultSuccessUrl_설정 {
+
+        private String getDefaultTargetUrl(OidcLoginSuccessHandler handler) throws Exception {
+            // OidcLoginSuccessHandler → SavedRequestAwareAuthenticationSuccessHandler
+            // → SimpleUrlAuthenticationSuccessHandler → AbstractAuthenticationTargetUrlRequestHandler
+            Class<?> clazz = handler.getClass();
+            while (clazz != null) {
+                try {
+                    java.lang.reflect.Field field = clazz.getDeclaredField("defaultTargetUrl");
+                    field.setAccessible(true);
+                    return (String) field.get(handler);
+                } catch (NoSuchFieldException e) {
+                    clazz = clazz.getSuperclass();
+                }
+            }
+            throw new NoSuchFieldException("defaultTargetUrl");
+        }
+
+        @Test
+        void 생성자에서_전달된_defaultSuccessUrl이_설정된다() throws Exception {
+            // Given
+            String customUrl = "/custom-home";
+
+            // When
+            OidcLoginSuccessHandler customHandler = new OidcLoginSuccessHandler(
+                authorizedClientRepository, sessionManager, customUrl);
+
+            // Then
+            assert customUrl.equals(getDefaultTargetUrl(customHandler));
+        }
+
+        @Test
+        void 기본값_슬래시가_설정되면_루트로_리다이렉트된다() throws Exception {
+            // Given
+            String rootUrl = "/";
+
+            // When
+            OidcLoginSuccessHandler rootHandler = new OidcLoginSuccessHandler(
+                authorizedClientRepository, sessionManager, rootUrl);
+
+            // Then
+            assert "/".equals(getDefaultTargetUrl(rootHandler));
         }
     }
 }

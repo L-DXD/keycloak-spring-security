@@ -7,6 +7,9 @@ dependencies {
     // 자동 설정을 위한 필수 의존성
     api 'org.springframework.boot:spring-boot-autoconfigure'
 
+    // OAuth2 Client AutoConfiguration (OAuth2AuthorizedClientRepository 빈 자동 등록)
+    api 'org.springframework.boot:spring-boot-starter-oauth2-client'
+
     // 세션 관리를 위한 Spring Session Core 의존성
     api 'org.springframework.session:spring-session-core'
 
@@ -19,4 +22,8 @@ dependencies {
     // 사용자의 프로젝트 환경에 따라 필요한 의존성만 전이되도록 compileOnly로 설정
     compileOnly 'org.springframework.boot:spring-boot-starter-web'
 
+    // Redis Session Support (선택적 의존성)
+    // 사용자가 Redis 세션 저장소를 원할 경우 본인 프로젝트에 추가하면 동작
+    compileOnly 'org.springframework.boot:spring-boot-starter-data-redis'
+    compileOnly 'org.springframework.session:spring-session-data-redis'
 }
