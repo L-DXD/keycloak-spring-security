@@ -5,6 +5,7 @@ import com.ids.keycloak.security.authentication.KeycloakAuthenticationProvider;
 import com.ids.keycloak.security.exception.AuthenticationFailedException;
 import com.ids.keycloak.security.exception.IntrospectionFailedException;
 import com.ids.keycloak.security.exception.RefreshTokenException;
+import com.ids.keycloak.security.exception.UserInfoFetchException;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
 import com.ids.keycloak.security.util.CookieUtil;
@@ -95,7 +96,7 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
                 successfulAuthentication = authenticationManager.authenticate(authRequest);
                 log.debug("[Filter] 인증 성공: {}", successfulAuthentication.getName());
 
-            } catch (IntrospectionFailedException | NullPointerException e) {
+            } catch (IntrospectionFailedException | NullPointerException | UserInfoFetchException e) {
                 // 온라인 검증 실패 또는 토큰 파싱 실패 시 Refresh Token으로 재발급 시도
                 log.warn("[Filter] 온라인 검증 실패, Refresh Token으로 재발급 시도. 원인: {}", e.getMessage());
                 successfulAuthentication = refreshAndAuthenticate(session, response, refreshToken);
@@ -196,6 +197,6 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
             subject = "unknown";
         }
         // 인증 전이므로 빈 authorities와 attributes로 생성
-        return new KeycloakPrincipal(subject, Collections.emptyList(), Collections.emptyMap());
+        return new KeycloakPrincipal(subject, Collections.emptyList(), null, null);
     }
 }

@@ -3,14 +3,15 @@ package com.ids.keycloak.security.authentication;
 import com.ids.keycloak.security.exception.AuthenticationFailedException;
 import com.ids.keycloak.security.exception.ConfigurationException;
 import com.ids.keycloak.security.exception.IntrospectionFailedException;
+import com.ids.keycloak.security.exception.UserInfoFetchException;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.util.JwtUtil;
+import com.ids.keycloak.security.util.KeycloakAuthorityExtractor;
 import com.sd.KeycloakClient.dto.KeycloakResponse;
 import com.sd.KeycloakClient.dto.auth.KeycloakIntrospectResponse;
 import com.sd.KeycloakClient.dto.user.KeycloakUserInfo;
 import com.sd.KeycloakClient.factory.KeycloakClient;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
@@ -34,9 +35,11 @@ import org.springframework.web.client.RestClientException;
 public class KeycloakAuthenticationProvider implements AuthenticationProvider {
 
    private final KeycloakClient keycloakClient;
+   private final String clientId;
 
-   public KeycloakAuthenticationProvider(KeycloakClient keycloakClient) {
+   public KeycloakAuthenticationProvider(KeycloakClient keycloakClient, String clientId) {
       this.keycloakClient = keycloakClient;
+      this.clientId = clientId;
    }
 
    /**
@@ -112,15 +115,15 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
                   return convertToOidcUserInfo(keycloakUserInfo);
                }
                log.warn("[Provider] UserInfo 응답 본문이 비어있습니다.");
-               return null;
+               throw new UserInfoFetchException("UserInfo 응답 본문이 비어있습니다.");
             }
             case 401 -> {
                log.warn("[Provider] UserInfo 조회 실패 (401 Unauthorized).");
-               return null;
+               throw new UserInfoFetchException("UserInfo 조회 실패 (401 Unauthorized).");
             }
             default -> {
                log.warn("[Provider] UserInfo 조회 중 예상치 못한 응답. 상태 코드: {}", status);
-               return null;
+               throw new UserInfoFetchException("UserInfo 조회 중 예상치 못한 응답. 상태 코드: " + status);
             }
          }
       } catch (RestClientException e) {
@@ -152,7 +155,7 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
          claims.put("name", keycloakUserInfo.getName());
       }
 
-      // 나머지 동적 필드들 (given_name, family_name 등)
+      // 나머지 동적 필드들 (given_name, family_name, resource_access 등)
       claims.putAll(keycloakUserInfo.getOtherInfo());
 
       return new OidcUserInfo(claims);
@@ -235,10 +238,11 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
     * @return Principal 객체
     */
    private KeycloakPrincipal createPrincipal(OidcIdToken oidcIdToken, OidcUserInfo oidcUserInfo, String subject) {
-      // TODO: 권한 정보 조회 구현 필요
-      Collection<GrantedAuthority> authorities = new ArrayList<>();
+      // UserInfo에서 권한 추출 (UserInfo 조회 실패 시 빈 권한)
+      Map<String, Object> claims = (oidcUserInfo != null) ? oidcUserInfo.getClaims() : Map.of();
+      Collection<GrantedAuthority> authorities = KeycloakAuthorityExtractor.extract(claims, clientId);
 
-      log.debug("[Provider] 사용자 '{}' Principal 생성 완료", subject);
+      log.debug("[Provider] 사용자 '{}' Principal 생성 완료. 권한: {}", subject, authorities);
 
       return new KeycloakPrincipal(subject, authorities, oidcIdToken, oidcUserInfo);
    }
