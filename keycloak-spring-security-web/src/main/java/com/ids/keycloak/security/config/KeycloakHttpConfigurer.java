@@ -79,10 +79,8 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         OidcClientInitiatedLogoutSuccessHandler oidcLogoutSuccessHandler = context.getBean(OidcClientInitiatedLogoutSuccessHandler.class);
 
         // === 1. Authentication Provider 등록 ===
-        KeycloakAuthenticationProvider provider = new KeycloakAuthenticationProvider(
-            keycloakClient,
-            clientRegistrationRepository
-        );
+        String clientId = clientRegistrationRepository.findByRegistrationId("keycloak").getClientId();
+        KeycloakAuthenticationProvider provider = new KeycloakAuthenticationProvider(keycloakClient, clientId);
         http.authenticationProvider(provider);
 
         // Filter에서 사용할 수 있도록 SharedObject로 저장

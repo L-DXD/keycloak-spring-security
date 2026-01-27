@@ -169,9 +169,12 @@ public class KeycloakServletAutoConfiguration {
 
         @Bean
         @ConditionalOnMissingBean(AuthenticationManager.class)
-        public AuthenticationManager authenticationManager(KeycloakClient keycloakClient) {
+        public AuthenticationManager authenticationManager(
+            KeycloakClient keycloakClient,
+            KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig
+        ) {
             log.info("핵심 Bean을 등록합니다: [AuthenticationManager] (Provider: KeycloakAuthenticationProvider)");
-            KeycloakAuthenticationProvider provider = new KeycloakAuthenticationProvider(keycloakClient);
+            KeycloakAuthenticationProvider provider = new KeycloakAuthenticationProvider(keycloakClient, keycloakConfig.getClientId());
             return new ProviderManager(provider);
         }
 
