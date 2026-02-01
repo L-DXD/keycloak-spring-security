@@ -10,6 +10,8 @@ import static org.mockito.Mockito.when;
 
 import com.ids.keycloak.security.authentication.KeycloakAuthentication;
 import com.ids.keycloak.security.authentication.KeycloakAuthenticationProvider;
+import com.ids.keycloak.security.exception.IntrospectionFailedException;
+import com.ids.keycloak.security.exception.UserInfoFetchException;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
 import com.ids.keycloak.security.util.CookieUtil;
@@ -19,8 +21,11 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
+import java.time.Instant;
 import java.util.Collections;
+import java.util.Map;
 import java.util.Optional;
+import org.springframework.security.oauth2.core.oidc.OidcIdToken;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -85,7 +90,13 @@ class KeycloakAuthenticationFilterTest {
     }
 
     private KeycloakAuthentication createSuccessfulAuthentication() {
-        KeycloakPrincipal principal = new KeycloakPrincipal(USER_SUB, Collections.emptyList(), Collections.emptyMap());
+        OidcIdToken idToken = new OidcIdToken(
+            ID_TOKEN_VALUE,
+            Instant.now(),
+            Instant.now().plusSeconds(3600),
+            Map.of("sub", USER_SUB)
+        );
+        KeycloakPrincipal principal = new KeycloakPrincipal(USER_SUB, Collections.emptyList(), idToken, null);
         return new KeycloakAuthentication(principal, ID_TOKEN_VALUE, ACCESS_TOKEN_VALUE, true);
     }
 
@@ -180,6 +191,66 @@ class KeycloakAuthenticationFilterTest {
             when(sessionManager.getRefreshToken(session)).thenReturn(Optional.of(REFRESH_TOKEN_VALUE));
             when(authenticationManager.authenticate(any()))
                 .thenThrow(new BadCredentialsException("Authentication failed"));
+
+            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class);
+                 MockedStatic<JwtUtil> jwtUtil = mockStatic(JwtUtil.class)) {
+
+                cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ID_TOKEN_NAME))
+                    .thenReturn(Optional.of(ID_TOKEN_VALUE));
+                cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ACCESS_TOKEN_NAME))
+                    .thenReturn(Optional.of(ACCESS_TOKEN_VALUE));
+
+                jwtUtil.when(() -> JwtUtil.parseSubjectWithoutValidation(anyString()))
+                    .thenReturn(USER_SUB);
+
+                // When
+                filter.doFilterInternal(request, response, filterChain);
+
+                // Then
+                cookieUtil.verify(() -> CookieUtil.deleteAllTokenCookies(response));
+                verify(filterChain).doFilter(request, response);
+                assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+            }
+        }
+
+        @Test
+        void IntrospectionFailedException_발생_시_SecurityContext를_비우고_쿠키를_삭제한다() throws Exception {
+            // Given
+            when(request.getSession(false)).thenReturn(session);
+            when(request.getSession()).thenReturn(session);
+            when(sessionManager.getRefreshToken(session)).thenReturn(Optional.of(REFRESH_TOKEN_VALUE));
+            when(authenticationManager.authenticate(any()))
+                .thenThrow(new IntrospectionFailedException("토큰 온라인 검증 실패"));
+
+            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class);
+                 MockedStatic<JwtUtil> jwtUtil = mockStatic(JwtUtil.class)) {
+
+                cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ID_TOKEN_NAME))
+                    .thenReturn(Optional.of(ID_TOKEN_VALUE));
+                cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ACCESS_TOKEN_NAME))
+                    .thenReturn(Optional.of(ACCESS_TOKEN_VALUE));
+
+                jwtUtil.when(() -> JwtUtil.parseSubjectWithoutValidation(anyString()))
+                    .thenReturn(USER_SUB);
+
+                // When
+                filter.doFilterInternal(request, response, filterChain);
+
+                // Then
+                cookieUtil.verify(() -> CookieUtil.deleteAllTokenCookies(response));
+                verify(filterChain).doFilter(request, response);
+                assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+            }
+        }
+
+        @Test
+        void UserInfoFetchException_발생_시_SecurityContext를_비우고_쿠키를_삭제한다() throws Exception {
+            // Given
+            when(request.getSession(false)).thenReturn(session);
+            when(request.getSession()).thenReturn(session);
+            when(sessionManager.getRefreshToken(session)).thenReturn(Optional.of(REFRESH_TOKEN_VALUE));
+            when(authenticationManager.authenticate(any()))
+                .thenThrow(new UserInfoFetchException("UserInfo 조회 실패"));
 
             try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class);
                  MockedStatic<JwtUtil> jwtUtil = mockStatic(JwtUtil.class)) {
