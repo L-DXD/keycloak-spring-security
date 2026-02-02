@@ -22,6 +22,7 @@ import java.util.List;
  * </p>
  */
 @Getter
+@Setter
 public class KeycloakAuthenticationProperties {
 
     /**
