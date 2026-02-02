@@ -12,6 +12,7 @@ import com.sd.KeycloakClient.config.AbstractKeycloakConfig;
 import com.sd.KeycloakClient.config.ClientConfiguration;
 import com.sd.KeycloakClient.factory.KeycloakClient;
 import jakarta.annotation.PostConstruct;
+import jakarta.servlet.DispatcherType;
 import java.util.concurrent.ConcurrentHashMap;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -252,6 +253,11 @@ public class KeycloakServletAutoConfiguration {
 
             // 2. 인가 설정 - permitAllPaths는 인증 없이 접근, 나머지는 인증 필요
             http.authorizeHttpRequests(authorize -> {
+                // 비동기(ASYNC) 및 에러(ERROR) 디스패치는 인증 없이 통과 허용
+                // StreamingResponseBody 등 비동기 처리 시 SecurityContext가 전파되지 않는 문제 해결
+                // (이미 REQUEST 단계에서 인증/인가가 완료되었으므로 안전함)
+                authorize.dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll();
+
                 // permit-all-paths 설정된 경로들은 인증 없이 접근 허용
                 if (!securityProperties.getAuthentication().getPermitAllPaths().isEmpty()) {
                     String[] permitAllPaths = securityProperties.getAuthentication().getPermitAllPaths().toArray(new String[0]);
