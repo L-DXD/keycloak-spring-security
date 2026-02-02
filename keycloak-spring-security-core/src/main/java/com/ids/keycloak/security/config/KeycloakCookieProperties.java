@@ -18,7 +18,6 @@ import lombok.Setter;
  * </p>
  */
 @Getter
-@Setter
 public class KeycloakCookieProperties {
     private boolean httpOnly = true;
     private boolean secure = false;

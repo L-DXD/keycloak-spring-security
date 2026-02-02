@@ -9,9 +9,12 @@ version = '1.0.0-TEST'
 dependencies {
     // 우리가 만든 스타터 모듈
     implementation project(':keycloak-spring-security-webflux-starter')
-
     // Spring WebFlux
     implementation 'org.springframework.boot:spring-boot-starter-webflux'
+
+    // Lombok
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
 
     // Test dependencies
     testImplementation 'org.springframework.boot:spring-boot-starter-test'

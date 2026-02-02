@@ -1,10 +1,17 @@
+import com.vanniktech.maven.publish.SonatypeHost
+
 plugins {
     id 'java-library'
     id 'io.spring.dependency-management'
+    id 'com.vanniktech.maven.publish'
+    id 'signing'
 }
 
+version = projectVersion
+description = 'Keycloak Spring Security Web - Servlet-based security implementation'
+
 dependencies {
-    // Core 모듈에 의존
+    // Core 모듈에 의존 (배포 시 자동으로 Maven 좌표로 변환됨)
     api project(':keycloak-spring-security-core')
 
     // Spring MVC 및 Servlet API 의존성
@@ -18,5 +25,54 @@ dependencies {
 
     // ErrorHandler에서 JSON 응답을 생성하기 위해 사용
     implementation 'com.fasterxml.jackson.core:jackson-databind'
+}
 
+signing {
+    def secretFile = file("${rootDir}/secret.asc")
+    def signingPassword = findProperty("signingInMemoryKeyPassword")
+        ?: findProperty("signing.password")
+
+    if (secretFile.exists()) {
+        def signingKey = secretFile.text
+        useInMemoryPgpKeys(signingKey, signingPassword as String)
+        sign publishing.publications
+    } else {
+        println "secret.asc 파일이 없습니다. GPG 서명을 건너뜁니다."
+    }
+}
+
+mavenPublishing {
+    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
+    signAllPublications()
+
+    coordinates(mavenGroupId, "keycloak-spring-security-web", version as String)
+
+    pom {
+        name = "keycloak-spring-security-web"
+        description = project.description
+        inceptionYear = "2025"
+        url = mavenProjectUrl
+
+        licenses {
+            license {
+                name = "MIT License"
+                url = "https://opensource.org/licenses/MIT"
+                distribution = "repo"
+            }
+        }
+
+        developers {
+            developer {
+                id = developerId
+                name = developerName
+                url = developerUrl
+            }
+        }
+
+        scm {
+            url = mavenProjectUrl
+            connection = "scm:git:git://${mavenScmUrl}"
+            developerConnection = "scm:git:ssh://git@${mavenScmUrl}"
+        }
+    }
 }
