@@ -4,10 +4,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ids.keycloak.security.authentication.KeycloakAuthenticationProvider;
 import com.ids.keycloak.security.authentication.KeycloakLogoutHandler;
 import com.ids.keycloak.security.authentication.OidcLoginSuccessHandler;
+import com.ids.keycloak.security.manager.KeycloakAuthorizationManager;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
 import com.ids.keycloak.security.util.CookieUtil;
 import com.ids.keycloak.security.exception.KeycloakAuthenticationEntryPoint;
-import com.ids.keycloak.security.exception.KeycloakAccessDeniedHandler;
+import com.ids.keycloak.security.web.servlet.KeycloakAccessDeniedHandler;
 import com.sd.KeycloakClient.config.AbstractKeycloakConfig;
 import com.sd.KeycloakClient.config.ClientConfiguration;
 import com.sd.KeycloakClient.factory.KeycloakClient;
@@ -236,11 +237,19 @@ public class KeycloakServletAutoConfiguration {
         }
 
         @Bean
+        @ConditionalOnMissingBean
+        public KeycloakAuthorizationManager keycloakAuthorizationManager(KeycloakClient keycloakClient) {
+            log.debug("지원 Bean을 등록합니다: [KeycloakAuthorizationManager]");
+            return new KeycloakAuthorizationManager(keycloakClient);
+        }
+
+        @Bean
         @ConditionalOnMissingBean(SecurityFilterChain.class)
         public SecurityFilterChain keycloakSecurityFilterChain(
             HttpSecurity http,
             KeycloakSecurityProperties securityProperties,
-            ObjectProvider<FindByIndexNameSessionRepository<? extends Session>> sessionRepositoryProvider
+            ObjectProvider<FindByIndexNameSessionRepository<? extends Session>> sessionRepositoryProvider,
+            KeycloakAuthorizationManager keycloakAuthorizationManager
         ) throws Exception {
             log.info("핵심 Bean을 등록합니다: [SecurityFilterChain]");
 
@@ -251,8 +260,11 @@ public class KeycloakServletAutoConfiguration {
                     .sessionRepository(sessionRepositoryProvider.getIfAvailable()),
                 Customizer.withDefaults());
 
-            // 2. 인가 설정 - permitAllPaths는 인증 없이 접근, 나머지는 인증 필요
+            // 2. 인가 설정
             http.authorizeHttpRequests(authorize -> {
+                // 에러 페이지는 인증 없이 접근 허용 (정적 리소스 누락 시 로그인 리디렉션 방지)
+                authorize.requestMatchers("/error").permitAll();
+
                 // 비동기(ASYNC) 및 에러(ERROR) 디스패치는 인증 없이 통과 허용
                 // StreamingResponseBody 등 비동기 처리 시 SecurityContext가 전파되지 않는 문제 해결
                 // (이미 REQUEST 단계에서 인증/인가가 완료되었으므로 안전함)
@@ -268,8 +280,14 @@ public class KeycloakServletAutoConfiguration {
                 // 에러 페이지는 인증 없이 접근 허용 (정적 리소스 누락 시 로그인 리디렉션 방지)
                 authorize.requestMatchers("/error").permitAll();
 
-                // 나머지 모든 요청은 인증 필요
-                authorize.anyRequest().authenticated();
+                // authorization-enabled 여부에 따라 인가 방식 결정
+                if (securityProperties.getAuthorization().isEnabled()) {
+                    log.info("Keycloak Authorization Services 활성화: 모든 요청에 대해 Keycloak 인가 검증");
+                    authorize.anyRequest().access(keycloakAuthorizationManager);
+                } else {
+                    // 나머지 모든 요청은 인증만 필요
+                    authorize.anyRequest().authenticated();
+                }
             });
 
             return http.build();
