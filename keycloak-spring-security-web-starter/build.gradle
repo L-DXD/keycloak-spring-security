@@ -53,4 +53,34 @@ mavenPublishing {
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
     signAllPublications()
 
+    coordinates(mavenGroupId, "keycloak-spring-security-web-starter", version as String)
+
+    pom {
+        name = "keycloak-spring-security-web-starter"
+        description = project.description
+        inceptionYear = "2025"
+        url = mavenProjectUrl
+
+        licenses {
+            license {
+                name = "MIT License"
+                url = "https://opensource.org/licenses/MIT"
+                distribution = "repo"
+            }
+        }
+
+        developers {
+            developer {
+                id = developerId
+                name = developerName
+                url = developerUrl
+            }
+        }
+
+        scm {
+            url = mavenProjectUrl
+            connection = "scm:git:git://${mavenScmUrl}"
+            developerConnection = "scm:git:ssh://git@${mavenScmUrl}"
+        }
+    }
 }
