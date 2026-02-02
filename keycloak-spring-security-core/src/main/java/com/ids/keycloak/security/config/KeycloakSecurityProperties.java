@@ -51,4 +51,10 @@ public class KeycloakSecurityProperties {
      */
     @NestedConfigurationProperty
     private KeycloakCookieProperties cookie = new KeycloakCookieProperties();
+
+    /**
+     * 에러 처리 관련 설정 (리다이렉트 URL 등)
+     */
+    @NestedConfigurationProperty
+    private KeycloakErrorProperties error = new KeycloakErrorProperties();
 }
