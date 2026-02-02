@@ -7,7 +7,7 @@ import com.ids.keycloak.security.authentication.OidcLoginSuccessHandler;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
 import com.ids.keycloak.security.exception.KeycloakAuthenticationEntryPoint;
 import com.ids.keycloak.security.filter.KeycloakAuthenticationFilter;
-import com.ids.keycloak.security.web.servlet.KeycloakAccessDeniedHandler;
+import com.ids.keycloak.security.exception.KeycloakAccessDeniedHandler;
 import com.sd.KeycloakClient.factory.KeycloakClient;
 import org.springframework.context.ApplicationContext;
 import org.springframework.security.authentication.AuthenticationManager;
