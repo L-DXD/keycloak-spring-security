@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew clean build:*)",
+      "Bash(cmd /c \"gradlew.bat clean build -x test --console=plain\")",
+      "Bash(gradle clean build:*)",
+      "Bash(java -jar gradle/wrapper/gradle-wrapper.jar clean build:*)",
+      "Bash(/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -Command \"gradle clean build --console=plain\")",
+      "Bash(/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -Command \"gradle --version\")",
+      "Bash(/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -Command \"gradle wrapper --gradle-version=8.5\")",
+      "Bash(/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -Command \"./gradlew.bat clean build --console=plain\")",
+      "Bash(/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -Command \"./gradlew.bat clean compileJava -x test --console=plain -Dfile.encoding=UTF-8\")",
+      "Bash(/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -Command '$env:GRADLE_OPTS=\"\"-Dfile.encoding=UTF-8\"\"; ./gradlew.bat clean compileJava -x test --console=plain')",
+      "Bash(/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -Command '$env:GRADLE_OPTS=\"\"-Dfile.encoding=UTF-8\"\"; ./gradlew.bat test --console=plain')",
+      "Bash(./gradlew :keycloak-spring-security-web:test:*)",
+      "Bash(./gradlew :keycloak-spring-security-core:compileJava :keycloak-spring-security-web-starter:compileJava:*)",
+      "Bash(./gradlew :keycloak-spring-security-web-starter:test:*)",
+      "Bash(./gradlew build:*)"
+    ]
+  }
+}

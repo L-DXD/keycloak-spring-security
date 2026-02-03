@@ -23,6 +23,8 @@ import java.util.List;
  *       enabled: true
  *     logging:
  *       include-query-string: true
+ *     async:
+ *       security-context-propagation: true
  *     cookie:
  *       http-only: true
  *       secure: true
@@ -30,6 +32,7 @@ import java.util.List;
  * </p>
  */
 @Getter
+@Setter
 @ConfigurationProperties(prefix = "keycloak.security")
 public class KeycloakSecurityProperties {
 
@@ -68,4 +71,10 @@ public class KeycloakSecurityProperties {
      */
     @NestedConfigurationProperty
     private KeycloakLoggingProperties logging = new KeycloakLoggingProperties();
+
+    /**
+     * 비동기 처리 시 SecurityContext 전파 관련 설정
+     */
+    @NestedConfigurationProperty
+    private KeycloakAsyncProperties async = new KeycloakAsyncProperties();
 }

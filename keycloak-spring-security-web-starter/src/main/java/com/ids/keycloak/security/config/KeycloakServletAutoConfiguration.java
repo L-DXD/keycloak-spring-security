@@ -54,7 +54,9 @@ import org.springframework.session.Session;
     RedisSessionConfiguration.class,
     KeycloakServletAutoConfiguration.KeycloakInfrastructureConfiguration.class,
     KeycloakServletAutoConfiguration.KeycloakAuthenticationConfiguration.class,
-    KeycloakServletAutoConfiguration.KeycloakWebSecurityConfiguration.class
+    KeycloakServletAutoConfiguration.KeycloakWebSecurityConfiguration.class,
+    // 비동기 SecurityContext 전파 설정
+    KeycloakAsyncSecurityConfiguration.class
 })
 @Slf4j
 public class KeycloakServletAutoConfiguration {
