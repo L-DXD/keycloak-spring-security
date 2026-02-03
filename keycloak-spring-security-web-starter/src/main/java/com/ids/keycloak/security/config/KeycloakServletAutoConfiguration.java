@@ -48,7 +48,9 @@ import org.springframework.session.config.annotation.web.http.EnableSpringHttpSe
     KeycloakServletAutoConfiguration.SessionConfiguration.class,
     KeycloakServletAutoConfiguration.KeycloakInfrastructureConfiguration.class,
     KeycloakServletAutoConfiguration.KeycloakAuthenticationConfiguration.class,
-    KeycloakServletAutoConfiguration.KeycloakWebSecurityConfiguration.class
+    KeycloakServletAutoConfiguration.KeycloakWebSecurityConfiguration.class,
+    // 비동기 SecurityContext 전파 설정
+    KeycloakAsyncSecurityConfiguration.class
 })
 @Slf4j
 public class KeycloakServletAutoConfiguration {

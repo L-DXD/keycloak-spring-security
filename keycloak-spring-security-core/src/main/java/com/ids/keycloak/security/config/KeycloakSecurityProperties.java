@@ -21,8 +21,8 @@ import java.util.List;
  *         - /health
  *     authorization:
  *       enabled: true
- *     logging:
- *       include-query-string: true
+ *     async:
+ *       security-context-propagation: true
  *     cookie:
  *       http-only: true
  *       secure: true
@@ -57,4 +57,10 @@ public class KeycloakSecurityProperties {
      */
     @NestedConfigurationProperty
     private KeycloakErrorProperties error = new KeycloakErrorProperties();
+
+    /**
+     * 비동기 처리 시 SecurityContext 전파 관련 설정
+     */
+    @NestedConfigurationProperty
+    private KeycloakAsyncProperties async = new KeycloakAsyncProperties();
 }

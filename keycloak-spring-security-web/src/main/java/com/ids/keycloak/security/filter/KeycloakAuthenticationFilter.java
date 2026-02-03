@@ -57,6 +57,20 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
         this.keycloakClient = keycloakClient;
     }
 
+    /**
+     * "false"인 경우 단일 스레드 내에서 요청하는 동안 한 번만 호출된다는 동일한 보장을 통해 비동기 디스패치 중에 필터가 호출됩니다.
+     * @return
+     */
+    @Override
+    protected boolean shouldNotFilterAsyncDispatch() {
+        return false;
+    }
+
+    @Override
+    protected boolean shouldNotFilterErrorDispatch() {
+        return false;
+    }
+
     @Override
     protected void doFilterInternal(
         HttpServletRequest request,
