@@ -34,7 +34,7 @@ public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoin
                 cause.getErrorCode(), cause.getMessage());
         }
 
-        // 풀스택 모드: 리다이렉트 활성화 시 설정된 URL로 리다이렉트
+        // 페이지 이동 모드: true 시 브라우저 주소창을 실패 URL로 리다이렉트 (HTML 렌더링 환경)
         if (errorProperties.isRedirectEnabled()) {
             // AJAX 요청이고 ajaxReturnsJson이 true면 JSON 응답
             if (errorProperties.isAjaxReturnsJson() && SecurityHandlerUtil.isAjaxRequest(request)) {
