@@ -2,20 +2,18 @@
 package com.ids.keycloak.security.exception;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.ids.keycloak.security.error.ErrorResponse;
-import com.ids.keycloak.security.exception.ErrorCode;
-import com.ids.keycloak.security.exception.KeycloakSecurityException;
+import com.ids.keycloak.security.config.KeycloakErrorProperties;
+import com.ids.keycloak.security.util.SecurityHandlerUtil;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.MediaType;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.web.AuthenticationEntryPoint;
 
 import java.io.IOException;
-import java.io.OutputStream;
 
 /**
  * 인증(Authentication) 과정에서 실패하는 경우 호출되는 핸들러 KeycloakSecurityException 예외를 캐치하여 ErrorCode에 맞는 HTTP 응답을 생성
@@ -25,6 +23,7 @@ import java.io.OutputStream;
 public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoint {
 
     private final ObjectMapper objectMapper;
+    private final KeycloakErrorProperties errorProperties;
 
     @Override
     public void commence(HttpServletRequest request, HttpServletResponse response, AuthenticationException authException)
@@ -35,13 +34,49 @@ public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoin
                 cause.getErrorCode(), cause.getMessage());
         }
 
-        // 그 외 인증 예외는 기본 401 응답
-        ErrorCode defaultError = ErrorCode.AUTHENTICATION_FAILED;
-        response.setStatus(defaultError.getHttpStatus());
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        try (OutputStream os = response.getOutputStream()) {
-            objectMapper.writeValue(os, new ErrorResponse(defaultError.getCode(), defaultError.getDefaultMessage()));
-            os.flush();
+        // 페이지 이동 모드: true 시 브라우저 주소창을 실패 URL로 리다이렉트 (HTML 렌더링 환경)
+        if (errorProperties.isRedirectEnabled()) {
+            // AJAX 요청이고 ajaxReturnsJson이 true면 JSON 응답
+            if (errorProperties.isAjaxReturnsJson() && SecurityHandlerUtil.isAjaxRequest(request)) {
+                log.debug("KeycloakAuthenticationEntryPoint: AJAX 요청 - JSON 응답 반환");
+                SecurityHandlerUtil.sendJsonResponse(response, objectMapper, ErrorCode.AUTHENTICATION_FAILED);
+                return;
+            }
+
+            // 세션 만료 여부 확인
+            String redirectUrl = determineRedirectUrl(request);
+            log.debug("KeycloakAuthenticationEntryPoint: 인증 실패 - 리다이렉트 URL: {}", redirectUrl);
+            response.sendRedirect(redirectUrl);
+            return;
         }
+
+        // API 모드: 기본 401 JSON 응답
+        SecurityHandlerUtil.sendJsonResponse(response, objectMapper, ErrorCode.AUTHENTICATION_FAILED);
+    }
+
+    /**
+     * 세션 만료 여부에 따라 리다이렉트 URL을 결정합니다.
+     */
+    private String determineRedirectUrl(HttpServletRequest request) {
+        // 세션이 존재했으나 만료된 경우 (requestedSessionId가 있지만 유효하지 않음)
+        if (isSessionExpired(request)) {
+            log.debug("KeycloakAuthenticationEntryPoint: 세션 만료 감지");
+            return errorProperties.getEffectiveSessionExpiredRedirectUrl();
+        }
+        return errorProperties.getAuthenticationFailedRedirectUrl();
+    }
+
+    /**
+     * 세션이 만료되었는지 확인합니다.
+     * 요청에 세션 ID가 있지만 유효하지 않은 경우 세션이 만료된 것으로 판단합니다.
+     */
+    private boolean isSessionExpired(HttpServletRequest request) {
+        String requestedSessionId = request.getRequestedSessionId();
+        if (requestedSessionId != null) {
+            HttpSession session = request.getSession(false);
+            // 세션 ID가 요청에 있었지만 현재 유효한 세션이 없는 경우
+            return session == null || !request.isRequestedSessionIdValid();
+        }
+        return false;
     }
 }
