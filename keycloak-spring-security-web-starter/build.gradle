@@ -7,6 +7,9 @@ dependencies {
     // 자동 설정을 위한 필수 의존성
     api 'org.springframework.boot:spring-boot-autoconfigure'
 
+    // OAuth2 Client AutoConfiguration (OAuth2AuthorizedClientRepository 빈 자동 등록)
+    api 'org.springframework.boot:spring-boot-starter-oauth2-client'
+
     // 세션 관리를 위한 Spring Session Core 의존성
     api 'org.springframework.session:spring-session-core'
 

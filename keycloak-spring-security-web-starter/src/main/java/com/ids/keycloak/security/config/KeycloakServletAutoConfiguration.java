@@ -7,7 +7,7 @@ import com.ids.keycloak.security.authentication.OidcLoginSuccessHandler;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
 import com.ids.keycloak.security.util.CookieUtil;
 import com.ids.keycloak.security.exception.KeycloakAuthenticationEntryPoint;
-import com.ids.keycloak.security.web.servlet.KeycloakAccessDeniedHandler;
+import com.ids.keycloak.security.exception.KeycloakAccessDeniedHandler;
 import com.sd.KeycloakClient.config.AbstractKeycloakConfig;
 import com.sd.KeycloakClient.config.ClientConfiguration;
 import com.sd.KeycloakClient.factory.KeycloakClient;
@@ -166,12 +166,10 @@ public class KeycloakServletAutoConfiguration {
         @ConditionalOnMissingBean(AuthenticationManager.class)
         public AuthenticationManager authenticationManager(
             KeycloakClient keycloakClient,
-            ClientRegistrationRepository clientRegistrationRepository) {
+            KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig
+        ) {
             log.info("핵심 Bean을 등록합니다: [AuthenticationManager] (Provider: KeycloakAuthenticationProvider)");
-            KeycloakAuthenticationProvider provider = new KeycloakAuthenticationProvider(
-                keycloakClient,
-                clientRegistrationRepository
-            );
+            KeycloakAuthenticationProvider provider = new KeycloakAuthenticationProvider(keycloakClient, keycloakConfig.getClientId());
             return new ProviderManager(provider);
         }
 
@@ -186,16 +184,22 @@ public class KeycloakServletAutoConfiguration {
 
         @Bean
         @ConditionalOnMissingBean
-        public KeycloakAuthenticationEntryPoint keycloakAuthenticationEntryPoint(ObjectMapper objectMapper) {
+        public KeycloakAuthenticationEntryPoint keycloakAuthenticationEntryPoint(
+            ObjectMapper objectMapper,
+            KeycloakSecurityProperties securityProperties
+        ) {
             log.debug("지원 Bean을 등록합니다: [KeycloakAuthenticationEntryPoint]");
-            return new KeycloakAuthenticationEntryPoint(objectMapper);
+            return new KeycloakAuthenticationEntryPoint(objectMapper, securityProperties.getError());
         }
 
         @Bean
         @ConditionalOnMissingBean
-        public KeycloakAccessDeniedHandler keycloakAccessDeniedHandler(ObjectMapper objectMapper) {
+        public KeycloakAccessDeniedHandler keycloakAccessDeniedHandler(
+            ObjectMapper objectMapper,
+            KeycloakSecurityProperties securityProperties
+        ) {
             log.debug("지원 Bean을 등록합니다: [KeycloakAccessDeniedHandler]");
-            return new KeycloakAccessDeniedHandler(objectMapper);
+            return new KeycloakAccessDeniedHandler(objectMapper, securityProperties.getError());
         }
 
         @Bean
