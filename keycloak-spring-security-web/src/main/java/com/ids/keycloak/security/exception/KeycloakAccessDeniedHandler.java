@@ -1,21 +1,18 @@
 
-package com.ids.keycloak.security.web.servlet;
+package com.ids.keycloak.security.exception;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.ids.keycloak.security.error.ErrorResponse;
-import com.ids.keycloak.security.exception.ErrorCode;
-import com.ids.keycloak.security.exception.KeycloakSecurityException;
+import com.ids.keycloak.security.config.KeycloakErrorProperties;
+import com.ids.keycloak.security.util.SecurityHandlerUtil;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.web.access.AccessDeniedHandler;
 
 import java.io.IOException;
-import java.io.OutputStream;
 
 /**
  * 인가(Authorization) 과정에서 실패하는 경우 호출되는 핸들러
@@ -26,6 +23,7 @@ import java.io.OutputStream;
 public class KeycloakAccessDeniedHandler implements AccessDeniedHandler {
 
     private final ObjectMapper objectMapper;
+    private final KeycloakErrorProperties errorProperties;
 
     @Override
     public void handle(HttpServletRequest request, HttpServletResponse response, AccessDeniedException accessDeniedException) throws IOException, ServletException {
@@ -35,13 +33,22 @@ public class KeycloakAccessDeniedHandler implements AccessDeniedHandler {
                 cause.getErrorCode(), cause.getMessage());
         }
 
-        // 그 외 인가 예외는 기본 403 응답
-        ErrorCode defaultError = ErrorCode.ACCESS_DENIED;
-        response.setStatus(defaultError.getHttpStatus());
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        try (OutputStream os = response.getOutputStream()) {
-            objectMapper.writeValue(os, new ErrorResponse(defaultError.getCode(), defaultError.getDefaultMessage()));
-            os.flush();
+        // 페이지 이동 모드: true 시 브라우저 주소창을 실패 URL로 리다이렉트 (HTML 렌더링 환경)
+        if (errorProperties.isRedirectEnabled()) {
+            // AJAX 요청이고 ajaxReturnsJson이 true면 JSON 응답
+            if (errorProperties.isAjaxReturnsJson() && SecurityHandlerUtil.isAjaxRequest(request)) {
+                log.debug("KeycloakAccessDeniedHandler: AJAX 요청 - JSON 응답 반환");
+                SecurityHandlerUtil.sendJsonResponse(response, objectMapper, ErrorCode.ACCESS_DENIED);
+                return;
+            }
+
+            String redirectUrl = errorProperties.getAccessDeniedRedirectUrl();
+            log.debug("KeycloakAccessDeniedHandler: 인가 실패 - 리다이렉트 URL: {}", redirectUrl);
+            response.sendRedirect(redirectUrl);
+            return;
         }
+
+        // API 모드: 기본 403 JSON 응답
+        SecurityHandlerUtil.sendJsonResponse(response, objectMapper, ErrorCode.ACCESS_DENIED);
     }
 }

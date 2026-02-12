@@ -1,28 +1,27 @@
 package com.ids.keycloak.security.authentication;
 
-import static com.ids.keycloak.security.config.KeycloakSecurityConstants.REGISTRATION_ID;
-import static com.ids.keycloak.security.config.KeycloakSecurityConstants.ROLE_PREFIX;
-
 import com.ids.keycloak.security.exception.AuthenticationFailedException;
 import com.ids.keycloak.security.exception.ConfigurationException;
 import com.ids.keycloak.security.exception.IntrospectionFailedException;
+import com.ids.keycloak.security.exception.UserInfoFetchException;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.util.JwtUtil;
+import com.ids.keycloak.security.util.KeycloakAuthorityExtractor;
 import com.sd.KeycloakClient.dto.KeycloakResponse;
 import com.sd.KeycloakClient.dto.auth.KeycloakIntrospectResponse;
+import com.sd.KeycloakClient.dto.user.KeycloakUserInfo;
 import com.sd.KeycloakClient.factory.KeycloakClient;
-import java.util.ArrayList;
+import java.time.Instant;
 import java.util.Collection;
-import java.util.List;
+import java.util.HashMap;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.oauth2.client.registration.ClientRegistration;
-import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.core.oidc.OidcIdToken;
+import org.springframework.security.oauth2.core.oidc.OidcUserInfo;
 import org.springframework.web.client.RestClientException;
 
 /**
@@ -36,14 +35,11 @@ import org.springframework.web.client.RestClientException;
 public class KeycloakAuthenticationProvider implements AuthenticationProvider {
 
    private final KeycloakClient keycloakClient;
-   private final ClientRegistrationRepository clientRegistrationRepository;
+   private final String clientId;
 
-   public KeycloakAuthenticationProvider(
-       KeycloakClient keycloakClient,
-       ClientRegistrationRepository clientRegistrationRepository
-   ) {
+   public KeycloakAuthenticationProvider(KeycloakClient keycloakClient, String clientId) {
       this.keycloakClient = keycloakClient;
-      this.clientRegistrationRepository = clientRegistrationRepository;
+      this.clientId = clientId;
    }
 
    /**
@@ -83,24 +79,110 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
     * @return 인증된 Authentication 객체
     */
    public Authentication createAuthenticatedToken(String idTokenValue, String accessTokenValue) {
-      ClientRegistration clientRegistration = clientRegistrationRepository.findByRegistrationId(REGISTRATION_ID);
-      if (clientRegistration == null) {
-         throw new ConfigurationException("clientRegistration에 id를 찾을 수 없습니다. ");
-      }
-      String clientId = clientRegistration.getClientId();
-
       // ID Token에서 subject(사용자 ID)와 클레임 추출
       Map<String, Object> idTokenClaims = JwtUtil.parseClaimsWithoutValidation(idTokenValue);
       String subject = JwtUtil.parseSubjectWithoutValidation(idTokenValue);
 
-      // Access Token에서 역할(roles) 정보 추출을 위한 클레임 파싱
-      Map<String, Object> accessTokenClaims = JwtUtil.parseClaimsWithoutValidation(accessTokenValue);
+      // UserInfo 엔드포인트 호출
+      OidcUserInfo oidcUserInfo = fetchUserInfo(accessTokenValue);
 
-      KeycloakPrincipal principal = createPrincipal(idTokenClaims, accessTokenClaims, subject, clientId);
+      // OidcIdToken 객체 생성
+      OidcIdToken oidcIdToken = createOidcIdToken(idTokenValue, idTokenClaims);
+
+      KeycloakPrincipal principal = createPrincipal(oidcIdToken, oidcUserInfo, subject);
       KeycloakAuthentication authenticatedToken = new KeycloakAuthentication(principal, idTokenValue, accessTokenValue, true);
 
       log.debug("[Provider] 최종 인증 객체 생성 완료: {}", principal.getName());
       return authenticatedToken;
+   }
+
+   /**
+    * Keycloak UserInfo 엔드포인트를 호출하여 사용자 정보를 조회합니다.
+    *
+    * @param accessToken Access Token
+    * @return OidcUserInfo 객체 (실패 시 null)
+    */
+   private OidcUserInfo fetchUserInfo(String accessToken) {
+      try {
+         KeycloakResponse<KeycloakUserInfo> response = keycloakClient.user().getUserInfo(accessToken);
+         int status = response.getStatus();
+
+         switch (status) {
+            case 200 -> {
+               KeycloakUserInfo keycloakUserInfo = response.getBody().orElse(null);
+               if (keycloakUserInfo != null) {
+                  log.debug("[Provider] UserInfo 조회 성공.");
+                  return convertToOidcUserInfo(keycloakUserInfo);
+               }
+               log.warn("[Provider] UserInfo 응답 본문이 비어있습니다.");
+               throw new UserInfoFetchException("UserInfo 응답 본문이 비어있습니다.");
+            }
+            case 401 -> {
+               log.warn("[Provider] UserInfo 조회 실패 (401 Unauthorized).");
+               throw new UserInfoFetchException("UserInfo 조회 실패 (401 Unauthorized).");
+            }
+            default -> {
+               log.warn("[Provider] UserInfo 조회 중 예상치 못한 응답. 상태 코드: {}", status);
+               throw new UserInfoFetchException("UserInfo 조회 중 예상치 못한 응답. 상태 코드: " + status);
+            }
+         }
+      } catch (RestClientException e) {
+         log.warn("[Provider] UserInfo 조회 중 오류 발생: {}", e.getMessage());
+         return null;
+      }
+   }
+
+   /**
+    * KeycloakUserInfo를 OidcUserInfo로 변환합니다.
+    *
+    * @param keycloakUserInfo Keycloak UserInfo 응답
+    * @return OidcUserInfo 객체
+    */
+   private OidcUserInfo convertToOidcUserInfo(KeycloakUserInfo keycloakUserInfo) {
+      Map<String, Object> claims = new HashMap<>();
+
+      // 고정 필드
+      if (keycloakUserInfo.getSubject() != null) {
+         claims.put("sub", keycloakUserInfo.getSubject());
+      }
+      if (keycloakUserInfo.getPreferredUsername() != null) {
+         claims.put("preferred_username", keycloakUserInfo.getPreferredUsername());
+      }
+      if (keycloakUserInfo.getEmail() != null) {
+         claims.put("email", keycloakUserInfo.getEmail());
+      }
+      if (keycloakUserInfo.getName() != null) {
+         claims.put("name", keycloakUserInfo.getName());
+      }
+
+      // 나머지 동적 필드들 (given_name, family_name, resource_access 등)
+      claims.putAll(keycloakUserInfo.getOtherInfo());
+
+      return new OidcUserInfo(claims);
+   }
+
+   /**
+    * ID Token 문자열과 클레임에서 OidcIdToken 객체를 생성합니다.
+    *
+    * @param idTokenValue ID Token 문자열
+    * @param claims       파싱된 클레임
+    * @return OidcIdToken 객체
+    */
+   private OidcIdToken createOidcIdToken(String idTokenValue, Map<String, Object> claims) {
+      Instant issuedAt = extractInstant(claims, "iat");
+      Instant expiresAt = extractInstant(claims, "exp");
+      return new OidcIdToken(idTokenValue, issuedAt, expiresAt, claims);
+   }
+
+   /**
+    * 클레임에서 Instant 값을 추출합니다.
+    */
+   private Instant extractInstant(Map<String, Object> claims, String claimName) {
+      Object value = claims.get(claimName);
+      if (value instanceof Number) {
+         return Instant.ofEpochSecond(((Number) value).longValue());
+      }
+      return null;
    }
 
    /**
@@ -148,27 +230,21 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
    }
 
    /**
-    * ID Token과 Access Token 클레임에서 Principal 객체를 생성합니다.
+    * OidcIdToken과 OidcUserInfo에서 Principal 객체를 생성합니다.
     *
-    * @param idTokenClaims     ID Token 클레임 (사용자 정보)
-    * @param accessTokenClaims Access Token 클레임 (역할 정보)
-    * @param subject           사용자 ID (ID Token에서 추출)
-    * @param clientId          역할을 추출할 대상 클라이언트 ID
-    * @return 권한 정보가 포함된 Principal 객체
+    * @param oidcIdToken  OidcIdToken 객체
+    * @param oidcUserInfo OidcUserInfo 객체 (null 가능)
+    * @param subject      사용자 ID (ID Token에서 추출)
+    * @return Principal 객체
     */
-   private KeycloakPrincipal createPrincipal(Map<String, Object> idTokenClaims, Map<String, Object> accessTokenClaims, String subject, String clientId) {
-      // Access Token의 'resource_access' 클레임에서 clientId에 해당하는 역할(role) 목록을 추출합니다.
-      List<String> roles = JwtUtil.extractRoles(accessTokenClaims, clientId);
+   private KeycloakPrincipal createPrincipal(OidcIdToken oidcIdToken, OidcUserInfo oidcUserInfo, String subject) {
+      // UserInfo에서 권한 추출 (UserInfo 조회 실패 시 빈 권한)
+      Map<String, Object> claims = (oidcUserInfo != null) ? oidcUserInfo.getClaims() : Map.of();
+      Collection<GrantedAuthority> authorities = KeycloakAuthorityExtractor.extract(claims, clientId);
 
-      Collection<GrantedAuthority> authorities = new ArrayList<>();
-      for (String role : roles) {
-         // "ROLE_" 접두사는 Spring Security의 기본 규칙을 따릅니다.
-         authorities.add(new SimpleGrantedAuthority(ROLE_PREFIX + role));
-      }
+      log.debug("[Provider] 사용자 '{}' Principal 생성 완료. 권한: {}", subject, authorities);
 
-      log.debug("[Provider] 사용자 '{}'의 권한 매핑 완료: {}", subject, authorities);
-      // Principal에는 ID Token 클레임을 저장 (사용자 정보)
-      return new KeycloakPrincipal(subject, authorities, idTokenClaims);
+      return new KeycloakPrincipal(subject, authorities, oidcIdToken, oidcUserInfo);
    }
 
    @Override

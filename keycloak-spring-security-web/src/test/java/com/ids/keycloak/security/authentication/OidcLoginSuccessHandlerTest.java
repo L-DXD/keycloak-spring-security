@@ -15,6 +15,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import java.time.Instant;
+import java.util.Collections;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -107,6 +108,9 @@ class OidcLoginSuccessHandlerTest {
 
             when(request.getSession(false)).thenReturn(session);
 
+            when(oidcUser.getName()).thenReturn(PRINCIPAL_NAME);
+            when(oidcUser.getAuthorities()).thenReturn(Collections.emptyList());
+            when(oidcUser.getUserInfo()).thenReturn(null);
             when(oidcUser.getIdToken()).thenReturn(idToken);
             when(idToken.getClaimAsString("sid")).thenReturn(KEYCLOAK_SID);
             when(idToken.getTokenValue()).thenReturn(ID_TOKEN_VALUE);
@@ -171,6 +175,9 @@ class OidcLoginSuccessHandlerTest {
 
             when(request.getSession(false)).thenReturn(null);
 
+            when(oidcUser.getName()).thenReturn(PRINCIPAL_NAME);
+            when(oidcUser.getAuthorities()).thenReturn(Collections.emptyList());
+            when(oidcUser.getUserInfo()).thenReturn(null);
             when(oidcUser.getIdToken()).thenReturn(idToken);
             when(idToken.getTokenValue()).thenReturn(ID_TOKEN_VALUE);
             when(idToken.getExpiresAt()).thenReturn(Instant.now().plusSeconds(3600));
@@ -206,6 +213,9 @@ class OidcLoginSuccessHandlerTest {
 
             when(request.getSession(false)).thenReturn(session);
 
+            when(oidcUser.getName()).thenReturn(PRINCIPAL_NAME);
+            when(oidcUser.getAuthorities()).thenReturn(Collections.emptyList());
+            when(oidcUser.getUserInfo()).thenReturn(null);
             when(oidcUser.getIdToken()).thenReturn(idToken);
             when(idToken.getClaimAsString("sid")).thenReturn(KEYCLOAK_SID);
             when(idToken.getTokenValue()).thenReturn(ID_TOKEN_VALUE);
@@ -246,6 +256,9 @@ class OidcLoginSuccessHandlerTest {
 
             when(request.getSession(false)).thenReturn(session);
 
+            when(oidcUser.getName()).thenReturn(PRINCIPAL_NAME);
+            when(oidcUser.getAuthorities()).thenReturn(Collections.emptyList());
+            when(oidcUser.getUserInfo()).thenReturn(null);
             when(oidcUser.getIdToken()).thenReturn(idToken);
             when(idToken.getClaimAsString("sid")).thenReturn(null);
             when(idToken.getTokenValue()).thenReturn(ID_TOKEN_VALUE);
@@ -278,6 +291,9 @@ class OidcLoginSuccessHandlerTest {
 
             when(request.getSession(false)).thenReturn(session);
 
+            when(oidcUser.getName()).thenReturn(PRINCIPAL_NAME);
+            when(oidcUser.getAuthorities()).thenReturn(Collections.emptyList());
+            when(oidcUser.getUserInfo()).thenReturn(null);
             when(oidcUser.getIdToken()).thenReturn(idToken);
             when(idToken.getClaimAsString("sid")).thenReturn(KEYCLOAK_SID);
             when(idToken.getTokenValue()).thenReturn(ID_TOKEN_VALUE);
@@ -305,35 +321,23 @@ class OidcLoginSuccessHandlerTest {
         }
 
         @Test
-        void Principal이_OidcUser가_아니면_ID_Token_쿠키를_생성하지_않는다() throws Exception {
+        void Principal이_OidcUser가_아니면_토큰_처리를_건너뛴다() throws Exception {
             // Given - OidcUser가 아닌 일반 OAuth2User 사용
             OAuth2User nonOidcPrincipal = org.mockito.Mockito.mock(OAuth2User.class);
 
-            when(oauthToken.getName()).thenReturn(PRINCIPAL_NAME);
             when(oauthToken.getPrincipal()).thenReturn(nonOidcPrincipal);
-            when(oauthToken.getAuthorizedClientRegistrationId()).thenReturn(REGISTRATION_ID);
-
-            when(request.getSession(false)).thenReturn(session);
-
-            when(authorizedClientRepository.loadAuthorizedClient(eq(REGISTRATION_ID), any(), eq(request)))
-                .thenReturn(authorizedClient);
-            when(authorizedClient.getAccessToken()).thenReturn(accessToken);
-            when(accessToken.getTokenValue()).thenReturn(ACCESS_TOKEN_VALUE);
-            when(accessToken.getExpiresAt()).thenReturn(Instant.now().plusSeconds(300));
 
             try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class)) {
-                cookieUtil.when(() -> CookieUtil.calculateRestMaxAge(any(Instant.class))).thenReturn(300);
-
                 // When
                 handler.onAuthenticationSuccess(request, response, oauthToken);
 
-                // Then
-                verify(sessionManager).savePrincipalName(session, PRINCIPAL_NAME);
+                // Then - OidcUser가 아니면 early return하므로 아무 작업도 하지 않음
+                verify(sessionManager, never()).savePrincipalName(any(), anyString());
                 verify(sessionManager, never()).saveKeycloakSessionId(any(), anyString());
+                verify(sessionManager, never()).saveRefreshToken(any(), anyString());
 
-                cookieUtil.verify(() -> CookieUtil.addCookie(response, CookieUtil.ACCESS_TOKEN_NAME, ACCESS_TOKEN_VALUE, 300));
                 cookieUtil.verify(
-                    () -> CookieUtil.addCookie(eq(response), eq(CookieUtil.ID_TOKEN_NAME), anyString(), anyInt()),
+                    () -> CookieUtil.addCookie(any(), anyString(), anyString(), anyInt()),
                     never()
                 );
             }
