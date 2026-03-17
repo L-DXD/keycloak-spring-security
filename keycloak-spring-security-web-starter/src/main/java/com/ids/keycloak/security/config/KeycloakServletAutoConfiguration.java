@@ -27,6 +27,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInitiatedLogoutSuccessHandler;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
@@ -50,6 +51,7 @@ import org.springframework.session.config.annotation.web.http.EnableSpringHttpSe
     KeycloakServletAutoConfiguration.KeycloakAuthenticationConfiguration.class,
     KeycloakServletAutoConfiguration.KeycloakWebSecurityConfiguration.class
 })
+@EnableMethodSecurity
 @Slf4j
 public class KeycloakServletAutoConfiguration {
     public KeycloakServletAutoConfiguration() {
