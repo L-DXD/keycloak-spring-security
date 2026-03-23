@@ -1,11 +1,13 @@
 package com.ids.keycloak.security.config;
 
+import com.ids.keycloak.security.authentication.BasicAuthenticationProvider;
 import com.ids.keycloak.security.authentication.KeycloakAuthenticationProvider;
 import com.ids.keycloak.security.authentication.KeycloakLogoutHandler;
 import com.ids.keycloak.security.authentication.OidcBackChannelSessionLogoutHandler;
 import com.ids.keycloak.security.authentication.OidcLoginSuccessHandler;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
 import com.ids.keycloak.security.exception.KeycloakAuthenticationEntryPoint;
+import com.ids.keycloak.security.filter.BasicAuthenticationFilter;
 import com.ids.keycloak.security.filter.KeycloakAuthenticationFilter;
 import com.ids.keycloak.security.filter.MdcAuthenticationFilter;
 import com.ids.keycloak.security.filter.MdcRequestFilter;
@@ -195,6 +197,12 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
             keycloakClient
         );
         http.addFilterBefore(authenticationFilter, UsernamePasswordAuthenticationFilter.class);
+
+        // === 9. Basic Auth 필터 등록 (조건부) ===
+        if (securityProperties.getBasicAuth().isEnabled()) {
+            BasicAuthenticationFilter basicAuthFilter = new BasicAuthenticationFilter(authenticationManager);
+            http.addFilterBefore(basicAuthFilter, KeycloakAuthenticationFilter.class);
+        }
     }
 
     /**

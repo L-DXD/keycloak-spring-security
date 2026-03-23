@@ -68,4 +68,10 @@ public class KeycloakSecurityProperties {
      */
     @NestedConfigurationProperty
     private KeycloakLoggingProperties logging = new KeycloakLoggingProperties();
+
+    /**
+     * Basic Authentication 관련 설정
+     */
+    @NestedConfigurationProperty
+    private KeycloakBasicAuthProperties basicAuth = new KeycloakBasicAuthProperties();
 }
