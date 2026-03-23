@@ -8,7 +8,6 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.web.AuthenticationEntryPoint;
@@ -19,11 +18,42 @@ import java.io.IOException;
  * 인증(Authentication) 과정에서 실패하는 경우 호출되는 핸들러 KeycloakSecurityException 예외를 캐치하여 ErrorCode에 맞는 HTTP 응답을 생성
  */
 @Slf4j
-@RequiredArgsConstructor
 public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoint {
 
     private final ObjectMapper objectMapper;
     private final KeycloakErrorProperties errorProperties;
+    private final boolean basicAuthEnabled;
+    private final String realmName;
+
+    /**
+     * 기존 생성자 (하위 호환성 유지).
+     *
+     * @param objectMapper    JSON 직렬화용 ObjectMapper
+     * @param errorProperties 에러 처리 관련 설정
+     */
+    public KeycloakAuthenticationEntryPoint(ObjectMapper objectMapper, KeycloakErrorProperties errorProperties) {
+        this(objectMapper, errorProperties, false, null);
+    }
+
+    /**
+     * Basic Auth 지원을 위한 확장 생성자.
+     *
+     * @param objectMapper    JSON 직렬화용 ObjectMapper
+     * @param errorProperties 에러 처리 관련 설정
+     * @param basicAuthEnabled Basic Auth 활성화 여부
+     * @param realmName        Keycloak realm 이름 (WWW-Authenticate 헤더용)
+     */
+    public KeycloakAuthenticationEntryPoint(
+        ObjectMapper objectMapper,
+        KeycloakErrorProperties errorProperties,
+        boolean basicAuthEnabled,
+        String realmName
+    ) {
+        this.objectMapper = objectMapper;
+        this.errorProperties = errorProperties;
+        this.basicAuthEnabled = basicAuthEnabled;
+        this.realmName = realmName;
+    }
 
     @Override
     public void commence(HttpServletRequest request, HttpServletResponse response, AuthenticationException authException)
@@ -32,6 +62,12 @@ public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoin
         if (authException.getCause() instanceof KeycloakSecurityException cause) {
             log.debug("KeycloakAuthenticationEntryPoint: 인증 실패 - KeycloakSecurityException 발생 = {}, {}",
                 cause.getErrorCode(), cause.getMessage());
+        }
+
+        // Basic Auth 요청인 경우 WWW-Authenticate 헤더 추가
+        if (basicAuthEnabled && isBasicAuthRequest(request)) {
+            String realm = (realmName != null) ? realmName : "keycloak";
+            response.setHeader("WWW-Authenticate", "Basic realm=\"" + realm + "\"");
         }
 
         // 페이지 이동 모드: true 시 브라우저 주소창을 실패 URL로 리다이렉트 (HTML 렌더링 환경)
@@ -78,5 +114,13 @@ public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoin
             return session == null || !request.isRequestedSessionIdValid();
         }
         return false;
+    }
+
+    /**
+     * Basic Auth 요청인지 확인합니다.
+     */
+    private boolean isBasicAuthRequest(HttpServletRequest request) {
+        String authHeader = request.getHeader("Authorization");
+        return authHeader != null && authHeader.startsWith("Basic ");
     }
 }

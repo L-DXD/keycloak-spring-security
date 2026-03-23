@@ -1,6 +1,7 @@
 package com.ids.keycloak.security.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ids.keycloak.security.authentication.BasicAuthenticationProvider;
 import com.ids.keycloak.security.authentication.KeycloakAuthenticationProvider;
 import com.ids.keycloak.security.authentication.KeycloakLogoutHandler;
 import com.ids.keycloak.security.authentication.OidcLoginSuccessHandler;
@@ -14,6 +15,8 @@ import com.sd.KeycloakClient.config.ClientConfiguration;
 import com.sd.KeycloakClient.factory.KeycloakClient;
 import jakarta.annotation.PostConstruct;
 import jakarta.servlet.DispatcherType;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +31,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -171,11 +175,32 @@ public class KeycloakServletAutoConfiguration {
         @ConditionalOnMissingBean(AuthenticationManager.class)
         public AuthenticationManager authenticationManager(
             KeycloakClient keycloakClient,
-            KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig
+            KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig,
+            KeycloakSecurityProperties securityProperties
         ) {
-            log.info("핵심 Bean을 등록합니다: [AuthenticationManager] (Provider: KeycloakAuthenticationProvider)");
-            KeycloakAuthenticationProvider provider = new KeycloakAuthenticationProvider(keycloakClient, keycloakConfig.getClientId());
-            return new ProviderManager(provider);
+            List<AuthenticationProvider> providers = new ArrayList<>();
+
+            KeycloakAuthenticationProvider oidcProvider = new KeycloakAuthenticationProvider(keycloakClient, keycloakConfig.getClientId());
+            providers.add(oidcProvider);
+
+            if (securityProperties.getBasicAuth().isEnabled()) {
+                String tokenEndpoint = keycloakConfig.getBaseUrl()
+                    + keycloakConfig.getRelativePath()
+                    + "/realms/" + keycloakConfig.getRealmName()
+                    + "/protocol/openid-connect/token";
+                BasicAuthenticationProvider basicProvider = new BasicAuthenticationProvider(
+                    tokenEndpoint,
+                    keycloakConfig.getClientId(),
+                    keycloakConfig.getClientSecret(),
+                    oidcProvider
+                );
+                providers.add(basicProvider);
+                log.info("핵심 Bean을 등록합니다: [AuthenticationManager] (Providers: KeycloakAuthenticationProvider, BasicAuthenticationProvider)");
+            } else {
+                log.info("핵심 Bean을 등록합니다: [AuthenticationManager] (Provider: KeycloakAuthenticationProvider)");
+            }
+
+            return new ProviderManager(providers);
         }
 
     }
@@ -191,10 +216,16 @@ public class KeycloakServletAutoConfiguration {
         @ConditionalOnMissingBean
         public KeycloakAuthenticationEntryPoint keycloakAuthenticationEntryPoint(
             ObjectMapper objectMapper,
-            KeycloakSecurityProperties securityProperties
+            KeycloakSecurityProperties securityProperties,
+            KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig
         ) {
             log.debug("지원 Bean을 등록합니다: [KeycloakAuthenticationEntryPoint]");
-            return new KeycloakAuthenticationEntryPoint(objectMapper, securityProperties.getError());
+            return new KeycloakAuthenticationEntryPoint(
+                objectMapper,
+                securityProperties.getError(),
+                securityProperties.getBasicAuth().isEnabled(),
+                keycloakConfig.getRealmName()
+            );
         }
 
         @Bean
