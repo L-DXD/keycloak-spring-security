@@ -76,6 +76,7 @@ public class BasicAuthenticationProvider implements AuthenticationProvider {
             body.add("client_secret", clientSecret);
             body.add("username", username);
             body.add("password", password);
+            body.add("scope", "openid");
 
             HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(body, headers);
 

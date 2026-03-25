@@ -64,6 +64,15 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
         FilterChain filterChain
     ) throws ServletException, IOException
     {
+        // 이미 인증된 경우 스킵 (Basic Auth 등 선행 필터에서 인증 완료)
+        Authentication existingAuth = SecurityContextHolder.getContext().getAuthentication();
+        if (existingAuth != null && existingAuth.isAuthenticated()
+                && !(existingAuth instanceof org.springframework.security.authentication.AnonymousAuthenticationToken)) {
+            log.debug("[Filter] 이미 인증된 사용자 '{}' — OIDC 쿠키 인증 스킵.", existingAuth.getName());
+            filterChain.doFilter(request, response);
+            return;
+        }
+
         String idTokenValue = CookieUtil.getCookieValue(request, CookieUtil.ID_TOKEN_NAME).orElse(null);
         String accessTokenValue = CookieUtil.getCookieValue(request, CookieUtil.ACCESS_TOKEN_NAME).orElse(null);
 
