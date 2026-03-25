@@ -20,6 +20,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 import java.util.Collections;
+import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.core.Authentication;
@@ -44,6 +45,7 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
     private final KeycloakAuthenticationProvider authenticationProvider;
     private final KeycloakSessionManager sessionManager;
     private final KeycloakClient keycloakClient;
+    private final List<String> skipPaths;
 
     public KeycloakAuthenticationFilter(
         AuthenticationManager authenticationManager,
@@ -51,10 +53,51 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
         KeycloakSessionManager sessionManager,
         KeycloakClient keycloakClient
     ) {
+        this(authenticationManager, authenticationProvider, sessionManager, keycloakClient, List.of());
+    }
+
+    public KeycloakAuthenticationFilter(
+        AuthenticationManager authenticationManager,
+        KeycloakAuthenticationProvider authenticationProvider,
+        KeycloakSessionManager sessionManager,
+        KeycloakClient keycloakClient,
+        List<String> skipPaths
+    ) {
         this.authenticationManager = authenticationManager;
         this.authenticationProvider = authenticationProvider;
         this.sessionManager = sessionManager;
         this.keycloakClient = keycloakClient;
+        this.skipPaths = skipPaths != null ? skipPaths : List.of();
+    }
+
+    /**
+     * Bearer Token 토큰 발급 API 경로는 미인증 상태에서 접근하는 것이 정상이므로
+     * 이 필터의 실행을 건너뜁니다.
+     * <p>
+     * 또한 {@code Authorization: Bearer} 헤더가 포함된 요청은
+     * {@code BearerTokenAuthenticationFilter}가 처리하므로 이 필터를 건너뜁니다.
+     * </p>
+     */
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        String path = request.getRequestURI();
+
+        // Bearer Token 토큰 발급 API 경로 스킵
+        for (String skipPath : skipPaths) {
+            if (path.equals(skipPath)) {
+                log.debug("[Filter] 토큰 API 경로 '{}' — 필터 스킵", path);
+                return true;
+            }
+        }
+
+        // Authorization: Bearer 헤더가 있는 요청은 BearerTokenAuthenticationFilter가 처리
+        String authorization = request.getHeader("Authorization");
+        if (authorization != null && authorization.startsWith("Bearer ")) {
+            log.debug("[Filter] Bearer 토큰 요청 — 필터 스킵 (BearerTokenAuthenticationFilter에서 처리)");
+            return true;
+        }
+
+        return false;
     }
 
     @Override

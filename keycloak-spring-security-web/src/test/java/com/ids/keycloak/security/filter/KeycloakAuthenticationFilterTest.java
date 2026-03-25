@@ -23,6 +23,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import java.time.Instant;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.security.oauth2.core.oidc.OidcIdToken;
@@ -271,6 +272,113 @@ class KeycloakAuthenticationFilterTest {
                 verify(filterChain).doFilter(request, response);
                 assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
             }
+        }
+    }
+
+    @Nested
+    class 필터_스킵_케이스 {
+
+        @Test
+        void 토큰_발급_API_경로는_필터를_스킵한다() throws Exception {
+            // Given
+            KeycloakAuthenticationFilter filterWithSkip = new KeycloakAuthenticationFilter(
+                authenticationManager, authenticationProvider, sessionManager, keycloakClient,
+                List.of("/auth/token", "/auth/refresh", "/auth/logout")
+            );
+            when(request.getRequestURI()).thenReturn("/auth/token");
+
+            // When
+            boolean result = filterWithSkip.shouldNotFilter(request);
+
+            // Then
+            assertThat(result).isTrue();
+        }
+
+        @Test
+        void 토큰_갱신_API_경로는_필터를_스킵한다() throws Exception {
+            // Given
+            KeycloakAuthenticationFilter filterWithSkip = new KeycloakAuthenticationFilter(
+                authenticationManager, authenticationProvider, sessionManager, keycloakClient,
+                List.of("/auth/token", "/auth/refresh", "/auth/logout")
+            );
+            when(request.getRequestURI()).thenReturn("/auth/refresh");
+
+            // When
+            boolean result = filterWithSkip.shouldNotFilter(request);
+
+            // Then
+            assertThat(result).isTrue();
+        }
+
+        @Test
+        void 토큰_로그아웃_API_경로는_필터를_스킵한다() throws Exception {
+            // Given
+            KeycloakAuthenticationFilter filterWithSkip = new KeycloakAuthenticationFilter(
+                authenticationManager, authenticationProvider, sessionManager, keycloakClient,
+                List.of("/auth/token", "/auth/refresh", "/auth/logout")
+            );
+            when(request.getRequestURI()).thenReturn("/auth/logout");
+
+            // When
+            boolean result = filterWithSkip.shouldNotFilter(request);
+
+            // Then
+            assertThat(result).isTrue();
+        }
+
+        @Test
+        void Bearer_헤더가_있는_요청은_필터를_스킵한다() throws Exception {
+            // Given
+            when(request.getRequestURI()).thenReturn("/api/some-resource");
+            when(request.getHeader("Authorization")).thenReturn("Bearer eyJhbGciOiJSUzI1NiIs...");
+
+            // When
+            boolean result = filter.shouldNotFilter(request);
+
+            // Then
+            assertThat(result).isTrue();
+        }
+
+        @Test
+        void 커스텀_prefix_경로도_필터를_스킵한다() throws Exception {
+            // Given
+            KeycloakAuthenticationFilter filterWithCustomPrefix = new KeycloakAuthenticationFilter(
+                authenticationManager, authenticationProvider, sessionManager, keycloakClient,
+                List.of("/api/auth/token", "/api/auth/refresh", "/api/auth/logout")
+            );
+            when(request.getRequestURI()).thenReturn("/api/auth/token");
+
+            // When
+            boolean result = filterWithCustomPrefix.shouldNotFilter(request);
+
+            // Then
+            assertThat(result).isTrue();
+        }
+
+        @Test
+        void 스킵_경로가_아닌_일반_요청은_필터를_실행한다() throws Exception {
+            // Given
+            when(request.getRequestURI()).thenReturn("/api/some-resource");
+            when(request.getHeader("Authorization")).thenReturn(null);
+
+            // When
+            boolean result = filter.shouldNotFilter(request);
+
+            // Then
+            assertThat(result).isFalse();
+        }
+
+        @Test
+        void Basic_헤더가_있는_요청은_필터를_실행한다() throws Exception {
+            // Given
+            when(request.getRequestURI()).thenReturn("/api/some-resource");
+            when(request.getHeader("Authorization")).thenReturn("Basic dXNlcjpwYXNz");
+
+            // When
+            boolean result = filter.shouldNotFilter(request);
+
+            // Then
+            assertThat(result).isFalse();
         }
     }
 

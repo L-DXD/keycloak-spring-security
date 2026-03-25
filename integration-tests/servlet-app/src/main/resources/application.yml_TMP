@@ -1,0 +1,230 @@
+
+logging:
+  level:
+    org.springframework.security: DEBUG
+    com.ids.keycloak.security: DEBUG
+    org.springframework.web: DEBUG
+    org.springframework.web.filter.CommonsRequestLoggingFilter: DEBUG
+#    org.springframework.data.redis: DEBUG
+#
+#
+#
+
+spring:
+  application:
+    name: pcms
+  security:
+    oauth2:
+      client:
+        provider:
+          keycloak:
+            issuer-uri: http://localhost:7071/realms/backoffice-test
+            authorization-uri: http://localhost:7071/realms/backoffice-test/protocol/openid-connect/auth
+            token-uri: http://localhost:7071/realms/backoffice-test/protocol/openid-connect/token
+            jwk-set-uri: http://localhost:7071/realms/backoffice-test/protocol/openid-connect/certs
+        registration:
+          keycloak:
+            provider: keycloak
+            # 실제 클라이언트 ID로 변경해야 합니다.
+            client-id: ${KEYCLOAK_CLIENT_ID:workmngm}
+            # 실제 클라이언트 시크릿으로 변경해야 합니다.
+            client-secret: ${KEYCLOAK_CLIENT_SECRET:IRzOtEShKSnK6fqQb3z576aU0FvsmXvH}
+            scope: openid, profile, email
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+      resourceserver:
+        jwt:
+          jwk-set-uri: http://localhost:7071/realms/backoffice-test/protocol/openid-connect/certs
+  # 데이터베이스_데이터소스 설정 (단일 데이터소스로 변경)
+
+
+---
+keycloak:
+  base-url: http://localhost:7071
+  relative-path:
+  realm-name: backoffice-test
+  logout:
+    redirect:
+      uri: http://localhost:8080/oauth2/authorization/keycloak
+  response:
+    type: code
+  uri: ${keycloak.base-url}${keycloak.relative-path}/realms/${keycloak.realm-name}
+  openid-uri: ${keycloak.uri}/protocol/openid-connect
+  security:
+    # 인증
+    authentication:
+      default-success-url: /api/me # 시스템 기본 리다이렉트 url
+      permit-all-paths:
+        - /health
+        - /favicon.ico
+        - /error
+    # 인가
+    authorization-enabled: false
+#    error:
+#      redirect-enabled: true  # true면 리다이렉트 (풀스택), false면 JSON 응답 (API)
+#      ajax-returns-json: true  # AJAX 요청은 리다이렉트 대신 JSON 응  답
+#      authentication-failed-redirect-url: /login  # 인증 실패 시 리다이렉트
+#      session-expired-redirect-url: /session-expired  # 세션 만료 시 리다이렉트
+#      access-denied-redirect-url: /error/403  # 접근 거부 시 리다이렉트
+    async:
+      security-context-propagation: true
+      core-pool-size: 20  # (CPU Core * 2) + 여유분
+      max-pool-size: 100
+      queue-capacity: 200
+    # 로깅
+    logging:
+      include_trace_id: true
+      include_http_method: true
+      include_request_uri: true
+      include_query_string: true
+      include_client_ip: true
+      include_user_id: true
+      include_username: true
+      include_session_id: true
+    # 쿠키 설정
+    cookie:
+      http-only: true
+      secure: false # 운영 환경(HTTPS)에서는 true로 설정 권장
+      domain: localhost  # 필요 시 설정
+      path: "/"
+      same-site: "Lax"     # Lax, Strict, None 중 선택
+    # 세션 설정
+    session:
+      store-type: redis
+      timeout: 10s  # refreshToken 최장 수명과 동일하게 설정해야 함.
+
+# redis 센티널 설정 파일
+spring:
+  data:
+    redis:
+      ssl:
+        enabled: false
+      sentinel:
+        master: mymaster
+        nodes:
+          - 121.78.169.247:5000
+          - 121.78.169.247:5001
+          - 121.78.169.247:5002
+      password: P@ssw0rd1!
+
+
+  #redis 설정파일
+#  data:
+#    redis:
+#      host: localhost
+#      password: 'P@ssW0rd!'
+#      port: 6379
+#      ssl:
+#        enabled: false
+
+
+#spring:
+#  application:
+#    name: psi-dev
+#  datasource:
+#    url: jdbc:mysql://10.1.20.105:3306/dwscm?characterEncoding=UTF-8
+#    driver-class-name: com.mysql.cj.jdbc.Driver
+#    username: dwscm
+#    password: dwscm
+#  jpa:
+#    hibernate:
+#      ddl-auto: none
+#    show-sql: true
+#    properties:
+#      hibernate:
+#        dialect: org.hibernate.dialect.MySQLDialect
+#sap:
+#  endpoint: http://dev-sap-server:8000/sap/bc/srt/rfc
+#
+#logging:
+#  level:
+#    org.springframework.security: DEBUG
+#    com.ids.keycloak.security: DEBUG
+#    org.springframework.web: DEBUG
+#    org.springframework.web.filter.CommonsRequestLoggingFilter: DEBUG
+##    org.springframework.data.redis: DEBUG
+
+
+#---
+#spring:
+#  security:
+#    oauth2:
+#      client:
+#        registration:
+#          keycloak:
+#            client-id: psi
+#            client-secret: MUHDke2NecZODYW1AEn7bQH7gruTaEu0
+#            authorization-grant-type: authorization_code
+#            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+#            scope:
+#              - openid
+#              - profile
+#              - email
+#        provider:
+#          keycloak:
+#            issuer-uri: https://authdev.daewoong.co.kr/keycloak/realms/backoffice-sso
+#            authorization-uri: https://authdev.daewoong.co.kr/keycloak/realms/backoffice-sso/protocol/openid-connect/auth
+#            token-uri: https://authdev.daewoong.co.kr/keycloak/realms/backoffice-sso/protocol/openid-connect/token
+#            jwk-set-uri: https://authdev.daewoong.co.kr/keycloak/realms/backoffice-sso/protocol/openid-connect/certs
+#      resourceserver:
+#        jwt:
+#          jwk-set-uri: https://authdev.daewoong.co.kr/keycloak/realms/backoffice-sso/protocol/openid-connect/certs
+#  # 데이터베이스_데이터소스 설정 (단일 데이터소스로 변경)
+#
+#
+#---
+#keycloak:
+#  base-url: https://authdev.daewoong.co.kr/keycloak
+#  relative-path:
+#  realm-name: backoffice-sso
+#  logout:
+#    redirect:
+#      uri: http://localhost:8080/oauth2/authorization/keycloak
+#  response:
+#    type: code
+#  uri: ${keycloak.base-url}${keycloak.relative-path}/realms/${keycloak.realm-name}
+#  openid-uri: ${keycloak.uri}/protocol/openid-connect
+#  security:
+#    # 인증
+#    authentication:
+#      default-success-url: /api/me # 시스템 기본 리다이렉트 url
+#      permit-all-paths:
+#        - /health
+#        - /favicon.ico
+#    # 인가
+#    authorization-enabled: true
+#    # 로깅
+#    logging:
+#      include_trace_id: true
+#      include_http_method: true
+#      include_request_uri: true
+#      include_query_string: true
+#      include_client_ip: true
+#      include_user_id: true
+#      include_username: true
+#      include_session_id: true
+#    # 쿠키 설정
+#    cookie:
+#      http-only: true
+#      secure: false # 운영 환경(HTTPS)에서는 true로 설정 권장
+#      domain: localhost  # 필요 시 설정
+#      path: "/"
+#      same-site: "Lax"     # Lax, Strict, None 중 선택
+#    # 세션 설정
+#    session:
+#      store-type: redis
+#      timeout: 180d  # refreshToken 최장 수명과 동일하게 설정해야 함.
+#
+## redis 센티널 설정 파일
+#spring:
+#  data:
+#    redis:
+#      ssl:
+#        enabled: false
+#      sentinel:
+#        master: mymaster
+#        nodes:
+#          - 121.78.169.247:5000
+#          - 121.78.169.247:5001
+#          - 121.78.169.247:5002
+#      password: P@ssw0rd1!

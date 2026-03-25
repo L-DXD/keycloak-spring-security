@@ -6,6 +6,7 @@ import java.util.HashMap;
 import java.util.Map;
 import lombok.Getter;
 import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.oauth2.core.OAuth2AuthenticatedPrincipal;
 import org.springframework.security.oauth2.core.oidc.OidcIdToken;
 import org.springframework.security.oauth2.core.oidc.OidcUserInfo;
 import org.springframework.security.oauth2.core.oidc.user.OidcUser;
@@ -18,7 +19,7 @@ import org.springframework.security.oauth2.core.oidc.user.OidcUser;
  * </p>
  */
 @Getter
-public class KeycloakPrincipal implements OidcUser, Serializable {
+public class KeycloakPrincipal implements OidcUser, OAuth2AuthenticatedPrincipal, Serializable {
 
     private static final long serialVersionUID = 1L;
 
