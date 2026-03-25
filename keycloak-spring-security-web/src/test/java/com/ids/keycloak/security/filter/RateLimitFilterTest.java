@@ -2,6 +2,7 @@ package com.ids.keycloak.security.filter;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -57,7 +58,7 @@ class RateLimitFilterTest {
         @Test
         void 토큰_발급_경로는_필터링_대상이다() throws Exception {
             request.setRequestURI("/auth/token");
-            when(rateLimiter.tryAcquire(anyString())).thenReturn(true);
+            when(rateLimiter.isBlocked(anyString())).thenReturn(false);
 
             filter.doFilterInternal(request, response, filterChain);
 
@@ -70,7 +71,7 @@ class RateLimitFilterTest {
             String credentials = Base64.getEncoder()
                 .encodeToString("user:pass".getBytes(StandardCharsets.UTF_8));
             request.addHeader("Authorization", "Basic " + credentials);
-            when(rateLimiter.tryAcquire(anyString())).thenReturn(true);
+            when(rateLimiter.isBlocked(anyString())).thenReturn(false);
 
             filter.doFilterInternal(request, response, filterChain);
 
@@ -113,7 +114,7 @@ class RateLimitFilterTest {
         void 차단_시_429_응답을_반환한다() throws Exception {
             request.setRequestURI("/auth/token");
             request.setRemoteAddr("192.168.1.1");
-            when(rateLimiter.tryAcquire("ip:192.168.1.1")).thenReturn(false);
+            when(rateLimiter.isBlocked("ip:192.168.1.1")).thenReturn(true);
             when(rateLimiter.getRetryAfterSeconds("ip:192.168.1.1")).thenReturn(245L);
 
             filter.doFilterInternal(request, response, filterChain);
@@ -126,7 +127,7 @@ class RateLimitFilterTest {
         void 차단_시_Retry_After_헤더를_포함한다() throws Exception {
             request.setRequestURI("/auth/token");
             request.setRemoteAddr("192.168.1.1");
-            when(rateLimiter.tryAcquire("ip:192.168.1.1")).thenReturn(false);
+            when(rateLimiter.isBlocked("ip:192.168.1.1")).thenReturn(true);
             when(rateLimiter.getRetryAfterSeconds("ip:192.168.1.1")).thenReturn(245L);
 
             filter.doFilterInternal(request, response, filterChain);
@@ -138,7 +139,7 @@ class RateLimitFilterTest {
         void 차단_시_JSON_에러_응답을_반환한다() throws Exception {
             request.setRequestURI("/auth/token");
             request.setRemoteAddr("192.168.1.1");
-            when(rateLimiter.tryAcquire("ip:192.168.1.1")).thenReturn(false);
+            when(rateLimiter.isBlocked("ip:192.168.1.1")).thenReturn(true);
             when(rateLimiter.getRetryAfterSeconds("ip:192.168.1.1")).thenReturn(245L);
 
             filter.doFilterInternal(request, response, filterChain);
@@ -151,12 +152,86 @@ class RateLimitFilterTest {
         void 허용_시_다음_필터로_넘긴다() throws Exception {
             request.setRequestURI("/auth/token");
             request.setRemoteAddr("192.168.1.1");
-            when(rateLimiter.tryAcquire("ip:192.168.1.1")).thenReturn(true);
+            when(rateLimiter.isBlocked("ip:192.168.1.1")).thenReturn(false);
 
             filter.doFilterInternal(request, response, filterChain);
 
             assertThat(response.getStatus()).isEqualTo(200);
             verify(filterChain).doFilter(request, response);
+        }
+    }
+
+    @Nested
+    class 인증_실패시만_카운트 {
+
+        @Test
+        void 인증_성공시_실패를_기록하지_않는다() throws Exception {
+            request.setRequestURI("/auth/token");
+            request.setRemoteAddr("192.168.1.1");
+            when(rateLimiter.isBlocked(anyString())).thenReturn(false);
+
+            // filterChain에서 200 응답 (기본값)
+            filter.doFilterInternal(request, response, filterChain);
+
+            assertThat(response.getStatus()).isEqualTo(200);
+            verify(rateLimiter, never()).recordFailure(anyString());
+        }
+
+        @Test
+        void 인증_실패_401시_실패를_기록한다() throws Exception {
+            request.setRequestURI("/auth/token");
+            request.setRemoteAddr("192.168.1.1");
+            when(rateLimiter.isBlocked(anyString())).thenReturn(false);
+
+            // filterChain에서 401 응답 설정
+            doAnswer(invocation -> {
+                response.setStatus(401);
+                return null;
+            }).when(filterChain).doFilter(request, response);
+
+            filter.doFilterInternal(request, response, filterChain);
+
+            verify(rateLimiter).recordFailure("ip:192.168.1.1");
+        }
+
+        @Test
+        void 인증_실패_403시_실패를_기록한다() throws Exception {
+            request.setRequestURI("/auth/token");
+            request.setRemoteAddr("192.168.1.1");
+            when(rateLimiter.isBlocked(anyString())).thenReturn(false);
+
+            // filterChain에서 403 응답 설정
+            doAnswer(invocation -> {
+                response.setStatus(403);
+                return null;
+            }).when(filterChain).doFilter(request, response);
+
+            filter.doFilterInternal(request, response, filterChain);
+
+            verify(rateLimiter).recordFailure("ip:192.168.1.1");
+        }
+
+        @Test
+        void IP_AND_USERNAME_전략에서_실패시_두_키_모두_기록한다() throws Exception {
+            properties.setKeyStrategy(RateLimitKeyStrategy.IP_AND_USERNAME);
+            filter = new RateLimitFilter(rateLimiter, properties, List.of("/auth/token"));
+
+            request.setRequestURI("/api/data");
+            request.setRemoteAddr("192.168.1.1");
+            String credentials = Base64.getEncoder()
+                .encodeToString("admin:pass".getBytes(StandardCharsets.UTF_8));
+            request.addHeader("Authorization", "Basic " + credentials);
+            when(rateLimiter.isBlocked(anyString())).thenReturn(false);
+
+            doAnswer(invocation -> {
+                response.setStatus(401);
+                return null;
+            }).when(filterChain).doFilter(request, response);
+
+            filter.doFilterInternal(request, response, filterChain);
+
+            verify(rateLimiter).recordFailure("ip:192.168.1.1");
+            verify(rateLimiter).recordFailure("user:admin");
         }
     }
 
@@ -168,7 +243,7 @@ class RateLimitFilterTest {
             request.setRequestURI("/auth/token");
             request.addHeader("X-Forwarded-For", "10.0.0.5, 172.16.0.1, 192.168.1.1");
             request.setRemoteAddr("172.16.0.1");
-            when(rateLimiter.tryAcquire("ip:10.0.0.5")).thenReturn(true);
+            when(rateLimiter.isBlocked("ip:10.0.0.5")).thenReturn(false);
 
             filter.doFilterInternal(request, response, filterChain);
 
@@ -179,7 +254,7 @@ class RateLimitFilterTest {
         void X_Forwarded_For가_없으면_remoteAddr를_사용한다() throws Exception {
             request.setRequestURI("/auth/token");
             request.setRemoteAddr("192.168.1.100");
-            when(rateLimiter.tryAcquire("ip:192.168.1.100")).thenReturn(true);
+            when(rateLimiter.isBlocked("ip:192.168.1.100")).thenReturn(false);
 
             filter.doFilterInternal(request, response, filterChain);
 
@@ -197,7 +272,7 @@ class RateLimitFilterTest {
 
             request.setRequestURI("/auth/token");
             request.setRemoteAddr("192.168.1.1");
-            when(rateLimiter.tryAcquire("ip:192.168.1.1")).thenReturn(true);
+            when(rateLimiter.isBlocked("ip:192.168.1.1")).thenReturn(false);
 
             filter.doFilterInternal(request, response, filterChain);
 
@@ -214,7 +289,7 @@ class RateLimitFilterTest {
             String credentials = Base64.getEncoder()
                 .encodeToString("admin:pass".getBytes(StandardCharsets.UTF_8));
             request.addHeader("Authorization", "Basic " + credentials);
-            when(rateLimiter.tryAcquire("user:admin")).thenReturn(true);
+            when(rateLimiter.isBlocked("user:admin")).thenReturn(false);
 
             filter.doFilterInternal(request, response, filterChain);
 
@@ -231,8 +306,8 @@ class RateLimitFilterTest {
             String credentials = Base64.getEncoder()
                 .encodeToString("admin:pass".getBytes(StandardCharsets.UTF_8));
             request.addHeader("Authorization", "Basic " + credentials);
-            when(rateLimiter.tryAcquire("ip:192.168.1.1")).thenReturn(true);
-            when(rateLimiter.tryAcquire("user:admin")).thenReturn(false);
+            when(rateLimiter.isBlocked("ip:192.168.1.1")).thenReturn(false);
+            when(rateLimiter.isBlocked("user:admin")).thenReturn(true);
             when(rateLimiter.getRetryAfterSeconds("ip:192.168.1.1")).thenReturn(100L);
 
             filter.doFilterInternal(request, response, filterChain);

@@ -2,8 +2,6 @@ package com.ids.keycloak.security.ratelimit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -34,35 +32,48 @@ class InMemoryRateLimiterTest {
         }
 
         @Test
-        void maxRequests까지_허용된다() {
+        void maxRequests까지_실패해도_차단되지_않는다() {
             String key = "ip:192.168.1.1";
 
-            assertThat(rateLimiter.tryAcquire(key)).isTrue();
-            assertThat(rateLimiter.tryAcquire(key)).isTrue();
-            assertThat(rateLimiter.tryAcquire(key)).isTrue();
+            rateLimiter.recordFailure(key);
+            rateLimiter.recordFailure(key);
+            rateLimiter.recordFailure(key);
+
+            assertThat(rateLimiter.isBlocked(key)).isFalse();
         }
 
         @Test
-        void maxRequests_초과시_차단된다() {
+        void maxRequests_초과_실패시_차단된다() {
             String key = "ip:192.168.1.1";
 
-            // 3회 허용
+            // 3회 실패 (허용 범위)
             for (int i = 0; i < 3; i++) {
-                assertThat(rateLimiter.tryAcquire(key)).isTrue();
+                rateLimiter.recordFailure(key);
             }
+            assertThat(rateLimiter.isBlocked(key)).isFalse();
 
-            // 4회째부터 차단
-            assertThat(rateLimiter.tryAcquire(key)).isFalse();
-            assertThat(rateLimiter.tryAcquire(key)).isFalse();
+            // 4회째 실패 → 차단
+            rateLimiter.recordFailure(key);
+            assertThat(rateLimiter.isBlocked(key)).isTrue();
+        }
+
+        @Test
+        void 실패_기록_없이는_차단되지_않는다() {
+            String key = "ip:192.168.1.1";
+
+            // recordFailure 호출 없이 isBlocked만 반복 호출
+            for (int i = 0; i < 100; i++) {
+                assertThat(rateLimiter.isBlocked(key)).isFalse();
+            }
         }
 
         @Test
         void 차단_시_retryAfterSeconds가_양수를_반환한다() {
             String key = "ip:192.168.1.1";
 
-            // 한도 초과
+            // 한도 초과 실패
             for (int i = 0; i < 4; i++) {
-                rateLimiter.tryAcquire(key);
+                rateLimiter.recordFailure(key);
             }
 
             long retryAfter = rateLimiter.getRetryAfterSeconds(key);
@@ -73,7 +84,7 @@ class InMemoryRateLimiterTest {
         @Test
         void 차단되지_않은_키는_retryAfterSeconds가_0이다() {
             String key = "ip:192.168.1.1";
-            rateLimiter.tryAcquire(key);
+            rateLimiter.recordFailure(key);
 
             assertThat(rateLimiter.getRetryAfterSeconds(key)).isEqualTo(0);
         }
@@ -90,12 +101,12 @@ class InMemoryRateLimiterTest {
 
             // key1을 한도까지 소진
             for (int i = 0; i < 4; i++) {
-                rateLimiter.tryAcquire(key1);
+                rateLimiter.recordFailure(key1);
             }
-            assertThat(rateLimiter.tryAcquire(key1)).isFalse();
+            assertThat(rateLimiter.isBlocked(key1)).isTrue();
 
             // key2는 여전히 허용
-            assertThat(rateLimiter.tryAcquire(key2)).isTrue();
+            assertThat(rateLimiter.isBlocked(key2)).isFalse();
         }
     }
 
@@ -103,15 +114,16 @@ class InMemoryRateLimiterTest {
     class 윈도우_경과_후_재허용 {
 
         @Test
-        void 윈도우_경과_후_요청이_다시_허용된다() {
+        void 차단_경과_후_요청이_다시_허용된다() {
             // windowSeconds=1 (1초), blockDurationSeconds=1로 빠른 테스트
             rateLimiter = new InMemoryRateLimiter(2, 1, 1);
             String key = "ip:10.0.0.1";
 
-            // 한도 초과
-            assertThat(rateLimiter.tryAcquire(key)).isTrue();
-            assertThat(rateLimiter.tryAcquire(key)).isTrue();
-            assertThat(rateLimiter.tryAcquire(key)).isFalse();
+            // 한도 초과 실패
+            rateLimiter.recordFailure(key);
+            rateLimiter.recordFailure(key);
+            rateLimiter.recordFailure(key);
+            assertThat(rateLimiter.isBlocked(key)).isTrue();
 
             // 차단 시간 대기 (1초 + 여유)
             try {
@@ -121,7 +133,7 @@ class InMemoryRateLimiterTest {
             }
 
             // 다시 허용
-            assertThat(rateLimiter.tryAcquire(key)).isTrue();
+            assertThat(rateLimiter.isBlocked(key)).isFalse();
         }
     }
 
@@ -129,21 +141,18 @@ class InMemoryRateLimiterTest {
     class 동시_접근_스레드_안전성 {
 
         @Test
-        void 동시에_여러_스레드가_접근해도_maxRequests를_초과하여_허용하지_않는다() throws InterruptedException {
+        void 동시에_여러_스레드가_실패를_기록해도_정상_동작한다() throws InterruptedException {
             rateLimiter = new InMemoryRateLimiter(10, 60, 300);
             String key = "ip:concurrent-test";
             int threadCount = 50;
 
             ExecutorService executor = Executors.newFixedThreadPool(threadCount);
             CountDownLatch latch = new CountDownLatch(threadCount);
-            AtomicInteger acquiredCount = new AtomicInteger(0);
 
             for (int i = 0; i < threadCount; i++) {
                 executor.submit(() -> {
                     try {
-                        if (rateLimiter.tryAcquire(key)) {
-                            acquiredCount.incrementAndGet();
-                        }
+                        rateLimiter.recordFailure(key);
                     } finally {
                         latch.countDown();
                     }
@@ -153,9 +162,8 @@ class InMemoryRateLimiterTest {
             latch.await();
             executor.shutdown();
 
-            // maxRequests=10이므로 최대 10번까지만 허용
-            assertThat(acquiredCount.get()).isLessThanOrEqualTo(10);
-            assertThat(acquiredCount.get()).isGreaterThan(0);
+            // 50회 실패 기록 → maxRequests=10 초과이므로 차단
+            assertThat(rateLimiter.isBlocked(key)).isTrue();
         }
     }
 
@@ -168,8 +176,8 @@ class InMemoryRateLimiterTest {
             rateLimiter = new InMemoryRateLimiter(1, 1, 0);
             String key = "ip:block-test";
 
-            rateLimiter.tryAcquire(key);
-            rateLimiter.tryAcquire(key); // 차단
+            rateLimiter.recordFailure(key);
+            rateLimiter.recordFailure(key); // 차단
 
             long retryAfter = rateLimiter.getRetryAfterSeconds(key);
             // windowSeconds(1)와 동일하게 적용되므로 0~1초 사이

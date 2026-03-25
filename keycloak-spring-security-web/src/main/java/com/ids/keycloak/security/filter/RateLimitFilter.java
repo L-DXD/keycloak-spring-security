@@ -26,6 +26,11 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * 필터 체인 순서: MdcRequestFilter → <b>RateLimitFilter</b> → BasicAuthenticationFilter → ...
  * </p>
  * <p>
+ * 인증 실패 시에만 카운트하여, 정상 사용자가 피해를 받지 않도록 합니다.
+ * 요청 전에는 차단 여부만 확인하고, 요청 후(post-filter) 인증 실패 응답(401, 403)이
+ * 반환된 경우에만 실패를 기록합니다.
+ * </p>
+ * <p>
  * Rate Limit 초과 시 429 Too Many Requests 응답을 반환하며,
  * {@code Retry-After} 헤더에 차단 해제까지 남은 시간(초)을 포함합니다.
  * </p>
@@ -82,9 +87,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String authMethod = detectAuthMethod(request);
 
         RateLimitKeyStrategy strategy = properties.getKeyStrategy();
-        boolean allowed = checkRateLimit(strategy, clientIp, username);
 
-        if (!allowed) {
+        // 1단계: 차단 여부만 확인 (카운트 증가 없음)
+        if (isBlocked(strategy, clientIp, username)) {
             String key = buildPrimaryKey(strategy, clientIp, username);
             long retryAfter = rateLimiter.getRetryAfterSeconds(key);
 
@@ -97,34 +102,67 @@ public class RateLimitFilter extends OncePerRequestFilter {
             return;
         }
 
+        // 2단계: 다음 필터 실행 (인증 처리)
         filterChain.doFilter(request, response);
+
+        // 3단계: 인증 실패 응답(401, 403)인 경우에만 실패 기록
+        int status = response.getStatus();
+        if (status == 401 || status == 403) {
+            recordFailure(strategy, clientIp, username);
+        }
     }
 
     /**
-     * Rate Limit 키 전략에 따라 허용 여부를 판단합니다.
-     * IP_AND_USERNAME 전략의 경우 두 기준 중 하나라도 초과하면 차단합니다.
+     * Rate Limit 키 전략에 따라 차단 여부를 판단합니다.
+     * IP_AND_USERNAME 전략의 경우 두 기준 중 하나라도 차단이면 차단합니다.
      */
-    private boolean checkRateLimit(RateLimitKeyStrategy strategy, String clientIp, String username) {
+    private boolean isBlocked(RateLimitKeyStrategy strategy, String clientIp, String username) {
         switch (strategy) {
             case IP:
-                return rateLimiter.tryAcquire("ip:" + clientIp);
+                return rateLimiter.isBlocked("ip:" + clientIp);
             case USERNAME:
                 if (username != null) {
-                    return rateLimiter.tryAcquire("user:" + username);
+                    return rateLimiter.isBlocked("user:" + username);
                 }
                 // username 추출 불가 시 IP 기반 폴백
-                return rateLimiter.tryAcquire("ip:" + clientIp);
+                return rateLimiter.isBlocked("ip:" + clientIp);
             case IP_AND_USERNAME:
-                boolean ipAllowed = rateLimiter.tryAcquire("ip:" + clientIp);
-                if (!ipAllowed) {
-                    return false;
+                if (rateLimiter.isBlocked("ip:" + clientIp)) {
+                    return true;
                 }
                 if (username != null) {
-                    return rateLimiter.tryAcquire("user:" + username);
+                    return rateLimiter.isBlocked("user:" + username);
                 }
-                return true;
+                return false;
             default:
-                return rateLimiter.tryAcquire("ip:" + clientIp);
+                return rateLimiter.isBlocked("ip:" + clientIp);
+        }
+    }
+
+    /**
+     * Rate Limit 키 전략에 따라 인증 실패를 기록합니다.
+     */
+    private void recordFailure(RateLimitKeyStrategy strategy, String clientIp, String username) {
+        switch (strategy) {
+            case IP:
+                rateLimiter.recordFailure("ip:" + clientIp);
+                break;
+            case USERNAME:
+                if (username != null) {
+                    rateLimiter.recordFailure("user:" + username);
+                } else {
+                    rateLimiter.recordFailure("ip:" + clientIp);
+                }
+                break;
+            case IP_AND_USERNAME:
+                rateLimiter.recordFailure("ip:" + clientIp);
+                if (username != null) {
+                    rateLimiter.recordFailure("user:" + username);
+                }
+                break;
+            default:
+                rateLimiter.recordFailure("ip:" + clientIp);
+                break;
         }
     }
 
