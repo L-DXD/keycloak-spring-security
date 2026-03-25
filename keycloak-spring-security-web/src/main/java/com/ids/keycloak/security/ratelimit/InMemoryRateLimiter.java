@@ -13,8 +13,12 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * {@link ConcurrentHashMap} 기반 인메모리 Rate Limiter 구현체입니다.
  * <p>
- * Sliding Window Counter 알고리즘을 사용하여 요청을 제한합니다.
+ * Sliding Window Counter 알고리즘을 사용하여 인증 실패를 제한합니다.
  * 윈도우 시간 내에 {@code maxRequests}를 초과하면 {@code blockDurationSeconds} 동안 차단합니다.
+ * </p>
+ * <p>
+ * 브루트포스 방지 목적이므로 인증 실패 시에만 카운트하며,
+ * 인증 성공 요청은 카운트에 영향을 주지 않습니다.
  * </p>
  * <p>
  * 주기적으로 만료된 엔트리를 정리하여 메모리 누수를 방지합니다.
@@ -45,7 +49,17 @@ public class InMemoryRateLimiter implements RateLimiter {
     }
 
     @Override
-    public boolean tryAcquire(String key) {
+    public boolean isBlocked(String key) {
+        Instant now = Instant.now();
+        SlidingWindowCounter counter = counters.get(key);
+        if (counter == null) {
+            return false;
+        }
+        return counter.isBlocked(now);
+    }
+
+    @Override
+    public void recordFailure(String key) {
         Instant now = Instant.now();
         SlidingWindowCounter counter = counters.compute(key, (k, existing) -> {
             if (existing == null) {
@@ -53,8 +67,7 @@ public class InMemoryRateLimiter implements RateLimiter {
             }
             return existing;
         });
-
-        return counter.tryAcquire(now);
+        counter.recordFailure(now);
     }
 
     @Override
@@ -99,7 +112,7 @@ public class InMemoryRateLimiter implements RateLimiter {
 
     /**
      * Sliding Window Counter.
-     * 윈도우 내 요청 수를 카운팅하고, 초과 시 차단 시각을 기록합니다.
+     * 윈도우 내 실패 수를 카운팅하고, 초과 시 차단 시각을 기록합니다.
      */
     private class SlidingWindowCounter {
         private volatile long windowStart;
@@ -112,37 +125,55 @@ public class InMemoryRateLimiter implements RateLimiter {
             this.blockedUntil = 0;
         }
 
-        synchronized boolean tryAcquire(Instant now) {
+        synchronized boolean isBlocked(Instant now) {
             long nowEpoch = now.getEpochSecond();
 
             // 차단 중인지 확인
             if (blockedUntil > 0 && nowEpoch < blockedUntil) {
-                return false;
+                return true;
             }
 
             // 차단이 만료되었으면 리셋
             if (blockedUntil > 0 && nowEpoch >= blockedUntil) {
                 resetWindow(nowEpoch);
-                return true;
+                return false;
             }
 
             // 윈도우가 만료되었으면 리셋
             if (nowEpoch - windowStart >= windowSeconds) {
                 resetWindow(nowEpoch);
-                return true;
+                return false;
             }
 
-            // 윈도우 내 카운트 증가
+            return false;
+        }
+
+        synchronized void recordFailure(Instant now) {
+            long nowEpoch = now.getEpochSecond();
+
+            // 차단 중이면 기록하지 않음
+            if (blockedUntil > 0 && nowEpoch < blockedUntil) {
+                return;
+            }
+
+            // 차단이 만료되었으면 리셋
+            if (blockedUntil > 0 && nowEpoch >= blockedUntil) {
+                resetWindow(nowEpoch);
+            }
+
+            // 윈도우가 만료되었으면 리셋
+            if (nowEpoch - windowStart >= windowSeconds) {
+                resetWindow(nowEpoch);
+            }
+
+            // 실패 카운트 증가
             int currentCount = count.incrementAndGet();
             if (currentCount > maxRequests) {
                 // 차단 시작
                 blockedUntil = nowEpoch + blockDurationSeconds;
-                log.debug("[RateLimiter] 차단 시작: 윈도우 내 {}회 초과 (최대: {}), 차단 해제: {}초 후",
+                log.debug("[RateLimiter] 차단 시작: 윈도우 내 실패 {}회 초과 (최대: {}), 차단 해제: {}초 후",
                     currentCount, maxRequests, blockDurationSeconds);
-                return false;
             }
-
-            return true;
         }
 
         long getRetryAfterSeconds(Instant now) {
@@ -164,7 +195,7 @@ public class InMemoryRateLimiter implements RateLimiter {
 
         private void resetWindow(long nowEpoch) {
             windowStart = nowEpoch;
-            count.set(1); // 현재 요청 포함
+            count.set(0); // 리셋 시 카운트 0으로 (실패 기록은 recordFailure에서)
             blockedUntil = 0;
         }
     }
