@@ -13,6 +13,9 @@ import com.ids.keycloak.security.logging.LoggingContextAccessor;
 import com.ids.keycloak.security.logging.WebMdcContextAccessor;
 import com.ids.keycloak.security.exception.KeycloakAccessDeniedHandler;
 import com.sd.KeycloakClient.factory.KeycloakClient;
+import java.util.ArrayList;
+import java.util.List;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationContext;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -21,7 +24,7 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInitiatedLogoutSuccessHandler;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
-import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.context.NullSecurityContextRepository;
@@ -58,6 +61,7 @@ import static com.ids.keycloak.security.config.KeycloakSecurityConstants.LOGOUT_
  * AutoConfiguration 또는 사용자 설정에서 직접 정의해야 합니다.
  * </p>
  */
+@Slf4j
 public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<KeycloakHttpConfigurer, HttpSecurity> {
 
    private FindByIndexNameSessionRepository<? extends Session> sessionRepository;
@@ -150,9 +154,35 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
 
       // === 5. CSRF 설정 ===
       // 로그아웃 엔드포인트는 CSRF 면제 (OIDC 리다이렉트 시 토큰 전달 어려움)
-      http.csrf(csrf -> csrf
-          .ignoringRequestMatchers(LOGOUT_URL, BACK_CHANNEL_LOGOUT_URL)
-      );
+      KeycloakSecurityProperties securityProperties = context.getBean(KeycloakSecurityProperties.class);
+      KeycloakBearerTokenProperties bearerTokenProperties = securityProperties.getBearerToken();
+
+      if (bearerTokenProperties.isEnabled()) {
+          String prefix = bearerTokenProperties.getTokenEndpoint().getPrefix();
+
+          // CSRF 면제: 로그아웃 + 토큰 발급 API 엔드포인트
+          http.csrf(csrf -> csrf
+              .ignoringRequestMatchers(
+                  LOGOUT_URL, BACK_CHANNEL_LOGOUT_URL,
+                  prefix + "/token", prefix + "/refresh", prefix + "/logout"
+              )
+          );
+
+          // === 6. Bearer Token Resource Server 설정 (Introspect 온라인 검증) ===
+          log.info("Bearer Token 인증 활성화 (검증 방식: introspect)");
+
+          OpaqueTokenIntrospector introspector = context.getBean(OpaqueTokenIntrospector.class);
+          http.oauth2ResourceServer(rs -> rs
+              .opaqueToken(opaque -> opaque
+                  .introspector(introspector)
+              )
+          );
+      } else {
+          // Bearer Token 비활성화 시 기본 CSRF 설정만 적용
+          http.csrf(csrf -> csrf
+              .ignoringRequestMatchers(LOGOUT_URL, BACK_CHANNEL_LOGOUT_URL)
+          );
+      }
    }
 
    @Override
@@ -188,11 +218,22 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         http.addFilterBefore(mdcAuthenticationFilter, AuthorizationFilter.class);
 
         // === 8. Keycloak 인증 필터 등록 ===
+        // Bearer Token 활성화 시 토큰 발급 API 경로를 필터 스킵 대상에 추가
+        List<String> skipPaths = new ArrayList<>();
+        if (securityProperties.getBearerToken().isEnabled()) {
+            String prefix = securityProperties.getBearerToken().getTokenEndpoint().getPrefix();
+            skipPaths.add(prefix + "/token");
+            skipPaths.add(prefix + "/refresh");
+            skipPaths.add(prefix + "/logout");
+            log.debug("KeycloakAuthenticationFilter 스킵 경로 설정: {}", skipPaths);
+        }
+
         KeycloakAuthenticationFilter authenticationFilter = new KeycloakAuthenticationFilter(
             authenticationManager,
             authenticationProvider,
             sessionManager,
-            keycloakClient
+            keycloakClient,
+            skipPaths
         );
         http.addFilterBefore(authenticationFilter, UsernamePasswordAuthenticationFilter.class);
     }
