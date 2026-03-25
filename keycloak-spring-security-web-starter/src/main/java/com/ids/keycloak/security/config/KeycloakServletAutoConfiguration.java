@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ids.keycloak.security.authentication.BasicAuthenticationProvider;
 import com.ids.keycloak.security.authentication.KeycloakAuthenticationProvider;
 import com.ids.keycloak.security.authentication.KeycloakLogoutHandler;
+import com.ids.keycloak.security.authentication.KeycloakOpaqueTokenIntrospector;
 import com.ids.keycloak.security.authentication.OidcLoginSuccessHandler;
+import com.ids.keycloak.security.controller.KeycloakTokenController;
 import com.ids.keycloak.security.exception.KeycloakAccessDeniedHandler;
 import com.ids.keycloak.security.manager.KeycloakAuthorizationManager;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
@@ -25,6 +27,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -39,6 +42,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInitiatedLogoutSuccessHandler;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
+import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.session.FindByIndexNameSessionRepository;
@@ -59,7 +63,8 @@ import org.springframework.session.Session;
     RedisSessionConfiguration.class,
     KeycloakServletAutoConfiguration.KeycloakInfrastructureConfiguration.class,
     KeycloakServletAutoConfiguration.KeycloakAuthenticationConfiguration.class,
-    KeycloakServletAutoConfiguration.KeycloakWebSecurityConfiguration.class
+    KeycloakServletAutoConfiguration.KeycloakWebSecurityConfiguration.class,
+    KeycloakServletAutoConfiguration.BearerTokenConfiguration.class
 })
 @EnableMethodSecurity
 @Slf4j
@@ -303,6 +308,13 @@ public class KeycloakServletAutoConfiguration {
                 // (이미 REQUEST 단계에서 인증/인가가 완료되었으므로 안전함)
                 authorize.dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll();
 
+                // Bearer Token 토큰 발급/갱신 엔드포인트는 미인증 허용
+                if (securityProperties.getBearerToken().isEnabled()) {
+                    String prefix = securityProperties.getBearerToken().getTokenEndpoint().getPrefix();
+                    authorize.requestMatchers(prefix + "/token", prefix + "/refresh", prefix + "/logout").permitAll();
+                    log.info("Bearer Token 엔드포인트 인증 제외: {}/token, {}/refresh, {}/logout", prefix, prefix, prefix);
+                }
+
                 // permit-all-paths 설정된 경로들은 인증 없이 접근 허용
                 if (!securityProperties.getAuthentication().getPermitAllPaths().isEmpty()) {
                     String[] permitAllPaths = securityProperties.getAuthentication().getPermitAllPaths().toArray(new String[0]);
@@ -324,6 +336,59 @@ public class KeycloakServletAutoConfiguration {
             });
 
             return http.build();
+        }
+    }
+
+    /**
+     * Bearer Token 인증 관련 Bean 설정.
+     * <p>
+     * {@code keycloak.security.bearer-token.enabled=true}일 때만 활성화됩니다.
+     * Keycloak Introspect API(RFC 7662) 기반 온라인 검증만 지원합니다.
+     * </p>
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnProperty(name = "keycloak.security.bearer-token.enabled", havingValue = "true")
+    @Slf4j
+    protected static class BearerTokenConfiguration {
+
+        /**
+         * Introspect 검증 방식 Bean 설정 (Keycloak Introspect API 온라인 검증)
+         */
+        @Bean
+        @ConditionalOnMissingBean(OpaqueTokenIntrospector.class)
+        public OpaqueTokenIntrospector keycloakOpaqueTokenIntrospector(
+            KeycloakClient keycloakClient,
+            KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig
+        ) {
+            log.info("Bearer Token Bean을 등록합니다: [OpaqueTokenIntrospector] (Keycloak Introspect)");
+            return new KeycloakOpaqueTokenIntrospector(keycloakClient, keycloakConfig.getClientId());
+        }
+
+        /**
+         * 토큰 발급 API Controller Bean
+         */
+        @Bean
+        @ConditionalOnMissingBean(KeycloakTokenController.class)
+        public KeycloakTokenController keycloakTokenController(
+            KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig,
+            KeycloakSecurityProperties securityProperties
+        ) {
+            String basePath = keycloakConfig.getBaseUrl()
+                + keycloakConfig.getRelativePath()
+                + "/realms/" + keycloakConfig.getRealmName()
+                + "/protocol/openid-connect";
+
+            String tokenEndpoint = basePath + "/token";
+            String logoutEndpoint = basePath + "/logout";
+            String prefix = securityProperties.getBearerToken().getTokenEndpoint().getPrefix();
+
+            log.info("Bearer Token Bean을 등록합니다: [KeycloakTokenController] (prefix: {})", prefix);
+
+            return new KeycloakTokenController(
+                tokenEndpoint, logoutEndpoint,
+                keycloakConfig.getClientId(), keycloakConfig.getClientSecret(),
+                prefix
+            );
         }
     }
 }

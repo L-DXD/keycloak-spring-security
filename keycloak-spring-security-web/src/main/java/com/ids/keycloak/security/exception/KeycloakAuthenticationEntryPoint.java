@@ -10,6 +10,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint;
 import org.springframework.security.web.AuthenticationEntryPoint;
 
 import java.io.IOException;
@@ -24,24 +25,17 @@ public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoin
     private final KeycloakErrorProperties errorProperties;
     private final boolean basicAuthEnabled;
     private final String realmName;
+    private final BearerTokenAuthenticationEntryPoint bearerTokenEntryPoint = new BearerTokenAuthenticationEntryPoint();
 
     /**
      * 기존 생성자 (하위 호환성 유지).
-     *
-     * @param objectMapper    JSON 직렬화용 ObjectMapper
-     * @param errorProperties 에러 처리 관련 설정
      */
     public KeycloakAuthenticationEntryPoint(ObjectMapper objectMapper, KeycloakErrorProperties errorProperties) {
         this(objectMapper, errorProperties, false, null);
     }
 
     /**
-     * Basic Auth 지원을 위한 확장 생성자.
-     *
-     * @param objectMapper    JSON 직렬화용 ObjectMapper
-     * @param errorProperties 에러 처리 관련 설정
-     * @param basicAuthEnabled Basic Auth 활성화 여부
-     * @param realmName        Keycloak realm 이름 (WWW-Authenticate 헤더용)
+     * Basic Auth + Bearer Token 지원을 위한 확장 생성자.
      */
     public KeycloakAuthenticationEntryPoint(
         ObjectMapper objectMapper,
@@ -58,6 +52,14 @@ public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoin
     @Override
     public void commence(HttpServletRequest request, HttpServletResponse response, AuthenticationException authException)
         throws IOException, ServletException {
+        // Bearer Token 요청인 경우 BearerTokenAuthenticationEntryPoint에 위임
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            log.debug("KeycloakAuthenticationEntryPoint: Bearer Token 요청 감지 - BearerTokenAuthenticationEntryPoint로 위임");
+            bearerTokenEntryPoint.commence(request, response, authException);
+            return;
+        }
+
         // KeycloakSecurityException이 원인인 경우, 해당 예외에서 errorCode를 추출
         if (authException.getCause() instanceof KeycloakSecurityException cause) {
             log.debug("KeycloakAuthenticationEntryPoint: 인증 실패 - KeycloakSecurityException 발생 = {}, {}",
