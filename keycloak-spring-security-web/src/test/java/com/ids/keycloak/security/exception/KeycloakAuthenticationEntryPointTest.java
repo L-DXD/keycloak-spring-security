@@ -43,6 +43,8 @@ class KeycloakAuthenticationEntryPointTest {
         outputStream = new ByteArrayOutputStream();
         // lenient를 사용하여 리다이렉트 테스트에서도 에러가 발생하지 않도록 함
         lenient().when(response.getOutputStream()).thenReturn(new DelegatingServletOutputStream(outputStream));
+        // Bearer Token 분기를 위해 Authorization 헤더 기본값 설정 (null = Bearer 아님)
+        lenient().when(request.getHeader("Authorization")).thenReturn(null);
     }
 
     @Nested

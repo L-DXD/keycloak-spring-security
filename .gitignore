@@ -47,5 +47,8 @@ out/
 *.yaml
 !.github/**/*.yml
 
+# Postman
+postman/
+
 # GPG signing key (절대 커밋 금지)
 secret.asc

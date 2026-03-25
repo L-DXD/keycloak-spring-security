@@ -68,4 +68,10 @@ public class KeycloakSecurityProperties {
      */
     @NestedConfigurationProperty
     private KeycloakLoggingProperties logging = new KeycloakLoggingProperties();
+
+    /**
+     * Bearer Token 인증 관련 설정
+     */
+    @NestedConfigurationProperty
+    private KeycloakBearerTokenProperties bearerToken = new KeycloakBearerTokenProperties();
 }
