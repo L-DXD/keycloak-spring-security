@@ -11,6 +11,7 @@ import jakarta.servlet.http.HttpSession;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.oauth2.server.resource.web.BearerTokenAuthenticationEntryPoint;
 import org.springframework.security.web.AuthenticationEntryPoint;
 
 import java.io.IOException;
@@ -24,10 +25,19 @@ public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoin
 
     private final ObjectMapper objectMapper;
     private final KeycloakErrorProperties errorProperties;
+    private final BearerTokenAuthenticationEntryPoint bearerTokenEntryPoint = new BearerTokenAuthenticationEntryPoint();
 
     @Override
     public void commence(HttpServletRequest request, HttpServletResponse response, AuthenticationException authException)
         throws IOException, ServletException {
+        // Bearer Token 요청인 경우 BearerTokenAuthenticationEntryPoint에 위임
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            log.debug("KeycloakAuthenticationEntryPoint: Bearer Token 요청 감지 - BearerTokenAuthenticationEntryPoint로 위임");
+            bearerTokenEntryPoint.commence(request, response, authException);
+            return;
+        }
+
         // KeycloakSecurityException이 원인인 경우, 해당 예외에서 errorCode를 추출
         if (authException.getCause() instanceof KeycloakSecurityException cause) {
             log.debug("KeycloakAuthenticationEntryPoint: 인증 실패 - KeycloakSecurityException 발생 = {}, {}",
