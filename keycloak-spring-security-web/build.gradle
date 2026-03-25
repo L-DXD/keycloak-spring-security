@@ -22,6 +22,7 @@ dependencies {
     api 'org.springframework.security:spring-security-oauth2-jose'
     compileOnly 'jakarta.servlet:jakarta.servlet-api'
     testImplementation 'jakarta.servlet:jakarta.servlet-api'
+    testImplementation 'org.springframework:spring-test'
 
     // ErrorHandler에서 JSON 응답을 생성하기 위해 사용
     implementation 'com.fasterxml.jackson.core:jackson-databind'

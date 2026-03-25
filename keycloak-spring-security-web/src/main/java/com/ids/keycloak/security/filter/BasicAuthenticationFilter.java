@@ -1,6 +1,7 @@
 package com.ids.keycloak.security.filter;
 
 import com.ids.keycloak.security.authentication.BasicAuthenticationToken;
+import com.ids.keycloak.security.ratelimit.AuthenticationEventLogger;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -31,6 +32,7 @@ public class BasicAuthenticationFilter extends OncePerRequestFilter {
 
     private static final String AUTHORIZATION_HEADER = "Authorization";
     private static final String BASIC_PREFIX = "Basic ";
+    private static final String X_FORWARDED_FOR_HEADER = "X-Forwarded-For";
 
     private final AuthenticationManager authenticationManager;
 
@@ -55,6 +57,7 @@ public class BasicAuthenticationFilter extends OncePerRequestFilter {
 
         log.debug("[BasicAuthFilter] Authorization: Basic 헤더 감지. 인증 시도.");
 
+        String parsedUsername = null;
         try {
             // Base64 디코딩 → username:password 분리
             String base64Credentials = authHeader.substring(BASIC_PREFIX.length()).trim();
@@ -68,20 +71,24 @@ public class BasicAuthenticationFilter extends OncePerRequestFilter {
                 return;
             }
 
-            String username = credentials.substring(0, colonIndex);
+            parsedUsername = credentials.substring(0, colonIndex);
             String password = credentials.substring(colonIndex + 1);
 
             // BasicAuthenticationToken 생성 및 인증 시도
-            BasicAuthenticationToken authRequest = new BasicAuthenticationToken(username, password);
+            BasicAuthenticationToken authRequest = new BasicAuthenticationToken(parsedUsername, password);
             Authentication result = authenticationManager.authenticate(authRequest);
 
             // 인증 성공 → SecurityContext에 설정
             SecurityContextHolder.getContext().setAuthentication(result);
             log.debug("[BasicAuthFilter] Basic Auth 인증 성공: {}", result.getName());
+            AuthenticationEventLogger.logSuccess(
+                AuthenticationEventLogger.METHOD_BASIC, getClientIp(request), parsedUsername);
 
         } catch (AuthenticationException e) {
             SecurityContextHolder.clearContext();
             log.warn("[BasicAuthFilter] Basic Auth 인증 실패: {}", e.getMessage());
+            AuthenticationEventLogger.logFailure(
+                AuthenticationEventLogger.METHOD_BASIC, getClientIp(request), parsedUsername, "invalid_credentials");
             // 인증 실패 시에도 filterChain을 진행하여 EntryPoint가 401 처리
         } catch (IllegalArgumentException e) {
             SecurityContextHolder.clearContext();
@@ -89,5 +96,13 @@ public class BasicAuthenticationFilter extends OncePerRequestFilter {
         }
 
         filterChain.doFilter(request, response);
+    }
+
+    private String getClientIp(HttpServletRequest request) {
+        String xff = request.getHeader(X_FORWARDED_FOR_HEADER);
+        if (xff != null && !xff.isBlank()) {
+            return xff.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 }

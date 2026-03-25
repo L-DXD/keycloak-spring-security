@@ -80,4 +80,10 @@ public class KeycloakSecurityProperties {
      */
     @NestedConfigurationProperty
     private KeycloakBearerTokenProperties bearerToken = new KeycloakBearerTokenProperties();
+
+    /**
+     * Rate Limiting 관련 설정
+     */
+    @NestedConfigurationProperty
+    private KeycloakRateLimitProperties rateLimit = new KeycloakRateLimitProperties();
 }

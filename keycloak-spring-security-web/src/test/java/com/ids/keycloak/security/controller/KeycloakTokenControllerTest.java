@@ -10,6 +10,7 @@ import com.ids.keycloak.security.dto.RefreshRequest;
 import com.ids.keycloak.security.dto.TokenErrorResponse;
 import com.ids.keycloak.security.dto.TokenRequest;
 import com.ids.keycloak.security.dto.TokenResponse;
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -35,6 +36,9 @@ class KeycloakTokenControllerTest {
 
     @Mock
     private RestTemplate restTemplate;
+
+    @Mock
+    private HttpServletRequest httpServletRequest;
 
     private static final String TOKEN_ENDPOINT = "https://keycloak.example.com/realms/test/protocol/openid-connect/token";
     private static final String LOGOUT_ENDPOINT = "https://keycloak.example.com/realms/test/protocol/openid-connect/logout";
@@ -73,7 +77,7 @@ class KeycloakTokenControllerTest {
             TokenRequest request = new TokenRequest("testuser", "testpass");
 
             // 실행
-            ResponseEntity<?> result = controller.issueToken(request);
+            ResponseEntity<?> result = controller.issueToken(request, httpServletRequest);
 
             // 검증
             assertThat(result.getStatusCode()).isEqualTo(HttpStatus.OK);
@@ -95,7 +99,7 @@ class KeycloakTokenControllerTest {
             TokenRequest request = new TokenRequest("wrong", "wrong");
 
             // 실행
-            ResponseEntity<?> result = controller.issueToken(request);
+            ResponseEntity<?> result = controller.issueToken(request, httpServletRequest);
 
             // 검증
             assertThat(result.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
@@ -112,7 +116,7 @@ class KeycloakTokenControllerTest {
             TokenRequest request = new TokenRequest("testuser", "testpass");
 
             // 실행
-            ResponseEntity<?> result = controller.issueToken(request);
+            ResponseEntity<?> result = controller.issueToken(request, httpServletRequest);
 
             // 검증
             assertThat(result.getStatusCode()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);

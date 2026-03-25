@@ -3,6 +3,7 @@ package com.ids.keycloak.security.filter;
 import com.ids.keycloak.security.authentication.KeycloakAuthentication;
 import com.ids.keycloak.security.authentication.KeycloakAuthenticationProvider;
 import com.ids.keycloak.security.exception.AuthenticationFailedException;
+import com.ids.keycloak.security.ratelimit.AuthenticationEventLogger;
 import com.ids.keycloak.security.exception.IntrospectionFailedException;
 import com.ids.keycloak.security.exception.RefreshTokenException;
 import com.ids.keycloak.security.exception.UserInfoFetchException;
@@ -158,15 +159,21 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
             SecurityContext securityContext = SecurityContextHolder.getContext();
             securityContext.setAuthentication(successfulAuthentication);
             log.debug("[Filter] SecurityContext에 인증된 사용자 '{}' 등록 완료.", successfulAuthentication.getName());
+            AuthenticationEventLogger.logSuccess(
+                AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(request), successfulAuthentication.getName());
 
         } catch (AuthenticationException e) {
             SecurityContextHolder.clearContext();
             log.warn("[Filter] Keycloak 인증에 실패했습니다: {}", e.getMessage());
+            AuthenticationEventLogger.logFailure(
+                AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(request), "unknown", e.getMessage());
             CookieUtil.deleteAllTokenCookies(response);
             sessionManager.invalidateSession(request.getSession());
         } catch (Exception e) {
             SecurityContextHolder.clearContext();
             log.error("[Filter] Keycloak 인증 과정에서 예상치 못한 오류가 발생했습니다.", e);
+            AuthenticationEventLogger.logFailure(
+                AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(request), "unknown", e.getMessage());
             CookieUtil.deleteAllTokenCookies(response);
             sessionManager.invalidateSession(request.getSession());
         }
@@ -240,6 +247,14 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
         log.debug("[Filter] 토큰이 재발급되어 쿠키를 업데이트합니다.");
         int maxAge = newTokens.getExpireTime();
         CookieUtil.addTokenCookies(response, newTokens.getAccessToken(), maxAge, newTokens.getIdToken(), maxAge);
+    }
+
+    private String getClientIp(HttpServletRequest request) {
+        String xff = request.getHeader("X-Forwarded-For");
+        if (xff != null && !xff.isBlank()) {
+            return xff.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 
     private KeycloakPrincipal createPrincipalFromIdToken(String idToken) {
