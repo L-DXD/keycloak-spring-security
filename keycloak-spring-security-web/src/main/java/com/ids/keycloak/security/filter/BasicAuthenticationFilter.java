@@ -84,7 +84,7 @@ public class BasicAuthenticationFilter extends OncePerRequestFilter {
             AuthenticationEventLogger.logSuccess(
                 AuthenticationEventLogger.METHOD_BASIC, getClientIp(request), parsedUsername);
 
-        } catch (AuthenticationException e) {
+        } catch (AuthenticationException | com.ids.keycloak.security.exception.KeycloakSecurityException e) {
             SecurityContextHolder.clearContext();
             log.warn("[BasicAuthFilter] Basic Auth 인증 실패: {}", e.getMessage());
             AuthenticationEventLogger.logFailure(
