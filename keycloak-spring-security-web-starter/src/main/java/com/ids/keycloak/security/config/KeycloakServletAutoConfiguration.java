@@ -8,6 +8,8 @@ import com.ids.keycloak.security.authentication.KeycloakOpaqueTokenIntrospector;
 import com.ids.keycloak.security.authentication.OidcLoginSuccessHandler;
 import com.ids.keycloak.security.controller.KeycloakTokenController;
 import com.ids.keycloak.security.exception.KeycloakAccessDeniedHandler;
+import com.ids.keycloak.security.ratelimit.InMemoryRateLimiter;
+import com.ids.keycloak.security.ratelimit.RateLimiter;
 import com.ids.keycloak.security.manager.KeycloakAuthorizationManager;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
 import com.ids.keycloak.security.util.CookieUtil;
@@ -64,7 +66,8 @@ import org.springframework.session.Session;
     KeycloakServletAutoConfiguration.KeycloakInfrastructureConfiguration.class,
     KeycloakServletAutoConfiguration.KeycloakAuthenticationConfiguration.class,
     KeycloakServletAutoConfiguration.KeycloakWebSecurityConfiguration.class,
-    KeycloakServletAutoConfiguration.BearerTokenConfiguration.class
+    KeycloakServletAutoConfiguration.BearerTokenConfiguration.class,
+    KeycloakServletAutoConfiguration.RateLimitConfiguration.class
 })
 @EnableMethodSecurity
 @Slf4j
@@ -336,6 +339,33 @@ public class KeycloakServletAutoConfiguration {
             });
 
             return http.build();
+        }
+    }
+
+    /**
+     * Rate Limiting 관련 Bean 설정.
+     * <p>
+     * {@code keycloak.security.rate-limit.enabled=true}일 때만 활성화됩니다.
+     * 기본 구현체로 {@link InMemoryRateLimiter}를 등록하며,
+     * 사용자가 {@link RateLimiter} 인터페이스를 구현한 빈을 등록하면 자동 교체됩니다.
+     * </p>
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnProperty(name = "keycloak.security.rate-limit.enabled", havingValue = "true")
+    @Slf4j
+    protected static class RateLimitConfiguration {
+
+        @Bean
+        @ConditionalOnMissingBean(RateLimiter.class)
+        public RateLimiter rateLimiter(KeycloakSecurityProperties properties) {
+            KeycloakRateLimitProperties rlProps = properties.getRateLimit();
+            log.info("Rate Limit Bean을 등록합니다: [InMemoryRateLimiter] (max={}, window={}s, block={}s)",
+                rlProps.getMaxRequests(), rlProps.getWindowSeconds(), rlProps.getBlockDurationSeconds());
+            return new InMemoryRateLimiter(
+                rlProps.getMaxRequests(),
+                rlProps.getWindowSeconds(),
+                rlProps.getBlockDurationSeconds()
+            );
         }
     }
 

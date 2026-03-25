@@ -11,6 +11,8 @@ import com.ids.keycloak.security.filter.BasicAuthenticationFilter;
 import com.ids.keycloak.security.filter.KeycloakAuthenticationFilter;
 import com.ids.keycloak.security.filter.MdcAuthenticationFilter;
 import com.ids.keycloak.security.filter.MdcRequestFilter;
+import com.ids.keycloak.security.filter.RateLimitFilter;
+import com.ids.keycloak.security.ratelimit.RateLimiter;
 import com.ids.keycloak.security.logging.LoggingContextAccessor;
 import com.ids.keycloak.security.logging.WebMdcContextAccessor;
 import com.ids.keycloak.security.exception.KeycloakAccessDeniedHandler;
@@ -243,6 +245,27 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         if (securityProperties.getBasicAuth().isEnabled()) {
             BasicAuthenticationFilter basicAuthFilter = new BasicAuthenticationFilter(authenticationManager);
             http.addFilterBefore(basicAuthFilter, KeycloakAuthenticationFilter.class);
+        }
+
+        // === 10. Rate Limit 필터 등록 (조건부) ===
+        if (securityProperties.getRateLimit().isEnabled()) {
+            RateLimiter rateLimiter = getBeanOrDefault(context, RateLimiter.class, null);
+            if (rateLimiter != null) {
+                List<String> rateLimitPaths = new ArrayList<>();
+                if (securityProperties.getBearerToken().isEnabled()) {
+                    String prefix = securityProperties.getBearerToken().getTokenEndpoint().getPrefix();
+                    rateLimitPaths.add(prefix + "/token");
+                }
+                RateLimitFilter rateLimitFilter = new RateLimitFilter(
+                    rateLimiter, securityProperties.getRateLimit(), rateLimitPaths
+                );
+                // BasicAuthenticationFilter보다 앞에 위치 (차단된 요청은 인증 시도 자체를 하지 않음)
+                http.addFilterBefore(rateLimitFilter, BasicAuthenticationFilter.class);
+                log.info("Rate Limit 필터 등록 완료 (대상 경로: {}, Basic Auth 포함: {})",
+                    rateLimitPaths, securityProperties.getRateLimit().isIncludeBasicAuth());
+            } else {
+                log.warn("Rate Limit이 활성화되었으나 RateLimiter 빈을 찾을 수 없습니다.");
+            }
         }
     }
 

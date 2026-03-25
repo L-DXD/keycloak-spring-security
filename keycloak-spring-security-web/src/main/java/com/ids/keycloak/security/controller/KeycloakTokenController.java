@@ -5,6 +5,8 @@ import com.ids.keycloak.security.dto.RefreshRequest;
 import com.ids.keycloak.security.dto.TokenErrorResponse;
 import com.ids.keycloak.security.dto.TokenRequest;
 import com.ids.keycloak.security.dto.TokenResponse;
+import com.ids.keycloak.security.ratelimit.AuthenticationEventLogger;
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpEntity;
@@ -62,8 +64,10 @@ public class KeycloakTokenController {
      * grant_type=password
      */
     @PostMapping("${keycloak.security.bearer-token.token-endpoint.prefix:/auth}/token")
-    public ResponseEntity<?> issueToken(@RequestBody TokenRequest request) {
+    public ResponseEntity<?> issueToken(@RequestBody TokenRequest request, HttpServletRequest httpRequest) {
         log.debug("[TokenAPI] 토큰 발급 요청: username={}", request.getUsername());
+
+        String clientIp = getClientIp(httpRequest);
 
         MultiValueMap<String, String> formData = new LinkedMultiValueMap<>();
         formData.add("grant_type", "password");
@@ -72,7 +76,15 @@ public class KeycloakTokenController {
         formData.add("username", request.getUsername());
         formData.add("password", request.getPassword());
 
-        return executeTokenRequest(formData);
+        ResponseEntity<?> response = executeTokenRequest(formData);
+        if (response.getStatusCode().is2xxSuccessful()) {
+            AuthenticationEventLogger.logSuccess(
+                AuthenticationEventLogger.METHOD_TOKEN_API, clientIp, request.getUsername());
+        } else {
+            AuthenticationEventLogger.logFailure(
+                AuthenticationEventLogger.METHOD_TOKEN_API, clientIp, request.getUsername(), "invalid_credentials");
+        }
+        return response;
     }
 
     /**
@@ -123,6 +135,14 @@ public class KeycloakTokenController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(new TokenErrorResponse("server_error", "Failed to communicate with authentication server"));
         }
+    }
+
+    private String getClientIp(HttpServletRequest request) {
+        String xff = request.getHeader("X-Forwarded-For");
+        if (xff != null && !xff.isBlank()) {
+            return xff.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 
     /**
