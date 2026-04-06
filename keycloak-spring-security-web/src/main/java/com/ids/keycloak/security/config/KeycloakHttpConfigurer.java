@@ -33,6 +33,8 @@ import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.context.NullSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
+import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.Session;
 
@@ -157,22 +159,53 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
       );
 
       // === 5. CSRF 설정 ===
-      // 로그아웃 엔드포인트는 CSRF 면제 (OIDC 리다이렉트 시 토큰 전달 어려움)
       KeycloakSecurityProperties securityProperties = context.getBean(KeycloakSecurityProperties.class);
       KeycloakBearerTokenProperties bearerTokenProperties = securityProperties.getBearerToken();
+      KeycloakCsrfProperties csrfProperties = securityProperties.getCsrf();
 
-      if (bearerTokenProperties.isEnabled()) {
-          String prefix = bearerTokenProperties.getTokenEndpoint().getPrefix();
+      if (!csrfProperties.isEnabled()) {
+          // CSRF 완전 비활성화
+          http.csrf(AbstractHttpConfigurer::disable);
+          log.info("CSRF 비활성화");
+      } else {
+          // 기본 면제 경로 (로그아웃)
+          List<String> ignorePaths = new ArrayList<>();
+          ignorePaths.add(LOGOUT_URL);
+          ignorePaths.add(BACK_CHANNEL_LOGOUT_URL);
 
-          // CSRF 면제: 로그아웃 + 토큰 발급 API 엔드포인트
+          // Bearer Token 경로 면제
+          if (bearerTokenProperties.isEnabled()) {
+              String prefix = bearerTokenProperties.getTokenEndpoint().getPrefix();
+              ignorePaths.add(prefix + "/token");
+              ignorePaths.add(prefix + "/refresh");
+              ignorePaths.add(prefix + "/logout");
+          }
+
+          // 사용자 지정 면제 경로 추가
+          ignorePaths.addAll(csrfProperties.getIgnorePaths());
+
+          // RequestMatcher 리스트 구성
+          List<RequestMatcher> ignoreMatchers = new ArrayList<>();
+          for (String path : ignorePaths) {
+              ignoreMatchers.add(new AntPathRequestMatcher(path));
+          }
+
+          // Basic Auth 요청 면제 (Authorization: Basic 헤더 기반 API 클라이언트)
+          if (securityProperties.getBasicAuth().isEnabled()) {
+              ignoreMatchers.add(request -> {
+                  String auth = request.getHeader("Authorization");
+                  return auth != null && auth.startsWith("Basic ");
+              });
+          }
+
           http.csrf(csrf -> csrf
-              .ignoringRequestMatchers(
-                  LOGOUT_URL, BACK_CHANNEL_LOGOUT_URL,
-                  prefix + "/token", prefix + "/refresh", prefix + "/logout"
-              )
+              .ignoringRequestMatchers(ignoreMatchers.toArray(new RequestMatcher[0]))
           );
+          log.info("CSRF 활성화 (면제 경로: {})", ignorePaths);
+      }
 
-          // === 6. Bearer Token Resource Server 설정 (Introspect 온라인 검증) ===
+      // === 6. Bearer Token Resource Server 설정 (Introspect 온라인 검증) ===
+      if (bearerTokenProperties.isEnabled()) {
           log.info("Bearer Token 인증 활성화 (검증 방식: introspect)");
 
           OpaqueTokenIntrospector introspector = context.getBean(OpaqueTokenIntrospector.class);
@@ -180,11 +213,6 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
               .opaqueToken(opaque -> opaque
                   .introspector(introspector)
               )
-          );
-      } else {
-          // Bearer Token 비활성화 시 기본 CSRF 설정만 적용
-          http.csrf(csrf -> csrf
-              .ignoringRequestMatchers(LOGOUT_URL, BACK_CHANNEL_LOGOUT_URL)
           );
       }
    }

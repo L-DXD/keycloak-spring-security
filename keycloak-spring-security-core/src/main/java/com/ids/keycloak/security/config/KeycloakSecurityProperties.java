@@ -82,6 +82,12 @@ public class KeycloakSecurityProperties {
     private KeycloakBearerTokenProperties bearerToken = new KeycloakBearerTokenProperties();
 
     /**
+     * CSRF 보호 관련 설정
+     */
+    @NestedConfigurationProperty
+    private KeycloakCsrfProperties csrf = new KeycloakCsrfProperties();
+
+    /**
      * Rate Limiting 관련 설정
      */
     @NestedConfigurationProperty
