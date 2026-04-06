@@ -159,8 +159,75 @@ public SecurityFilterChain filterChain(HttpSecurity http) {
 
 ```build.gradle
 // for MVC and Servlet environment
-implementation("com.ids.keycloak:keycloak-spring-security-servlet-starter:1.0.0")
+implementation("com.ids.keycloak:keycloak-spring-security-web-starter:1.0.0")
 
 // for WebFlux and Reactive environment
-implementation("com.ids.keycloak:keycloak-spring-security-reactive-starter:1.0.0")
+implementation("com.ids.keycloak:keycloak-spring-security-webflux-starter:1.0.0")
+```
+
+---
+
+## 7. Feature Toggle Configuration (기능별 설정 가이드)
+
+모든 기능은 `keycloak.security.*` 네임스페이스의 yaml 설정으로 제어됩니다.
+
+### 🔹 CSRF Protection
+
+CSRF(Cross-Site Request Forgery) 보호 설정입니다. 기본값은 **활성화(true)** 이며, 로그아웃 및 토큰 발급 엔드포인트는 자동으로 면제됩니다.
+
+```yaml
+keycloak:
+  security:
+    csrf:
+      enabled: true                     # 기본값: true (CSRF 보호 활성화)
+      ignore-paths:                     # 추가 CSRF 면제 경로 (Ant 패턴)
+        - /api/**
+        - /webhook/**
+```
+
+| 속성 | 타입 | 기본값 | 설명 |
+|------|------|--------|------|
+| `enabled` | boolean | `true` | CSRF 보호 활성화 여부. `false` 시 완전 비활성화 |
+| `ignore-paths` | List&lt;String&gt; | `[]` | 추가 CSRF 면제 경로. Ant 패턴 지원 (`/api/**` 등) |
+
+**기본 면제 경로 (하드코딩):**
+- `/logout` (Front-Channel 로그아웃)
+- `/logout/connect/back-channel/**` (Back-Channel 로그아웃)
+- Bearer Token 활성화 시: `/auth/token`, `/auth/refresh`, `/auth/logout`
+
+**Basic Auth 연동:**
+`basic-auth.enabled: true` 설정 시, `Authorization: Basic` 헤더가 포함된 요청은 자동으로 CSRF 면제됩니다. Basic Auth는 헤더 기반 API 클라이언트용이므로 CSRF 토큰을 전달할 수 없기 때문입니다.
+
+### 🔹 Basic Authentication
+
+```yaml
+keycloak:
+  security:
+    basic-auth:
+      enabled: false                    # 기본값: false (opt-in)
+```
+
+### 🔹 Bearer Token
+
+```yaml
+keycloak:
+  security:
+    bearer-token:
+      enabled: false                    # 기본값: false (opt-in)
+      token-endpoint:
+        prefix: /auth                   # 기본값: /auth
+```
+
+### 🔹 Rate Limiting
+
+```yaml
+keycloak:
+  security:
+    rate-limit:
+      enabled: false                    # 기본값: false (opt-in)
+      max-requests: 5                   # 시간 윈도우 내 최대 요청 수
+      window-seconds: 60               # 시간 윈도우 (초)
+      block-duration-seconds: 300      # 차단 지속 시간 (초)
+      key-strategy: IP_AND_USERNAME    # IP, USERNAME, IP_AND_USERNAME
+      include-basic-auth: true         # Basic Auth에도 적용
 ```

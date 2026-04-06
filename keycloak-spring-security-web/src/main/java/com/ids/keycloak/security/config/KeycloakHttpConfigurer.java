@@ -1,14 +1,25 @@
 package com.ids.keycloak.security.config;
 
+import com.ids.keycloak.security.authentication.BasicAuthenticationProvider;
 import com.ids.keycloak.security.authentication.KeycloakAuthenticationProvider;
 import com.ids.keycloak.security.authentication.KeycloakLogoutHandler;
 import com.ids.keycloak.security.authentication.OidcBackChannelSessionLogoutHandler;
 import com.ids.keycloak.security.authentication.OidcLoginSuccessHandler;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
 import com.ids.keycloak.security.exception.KeycloakAuthenticationEntryPoint;
+import com.ids.keycloak.security.filter.BasicAuthenticationFilter;
 import com.ids.keycloak.security.filter.KeycloakAuthenticationFilter;
+import com.ids.keycloak.security.filter.MdcAuthenticationFilter;
+import com.ids.keycloak.security.filter.MdcRequestFilter;
+import com.ids.keycloak.security.filter.RateLimitFilter;
+import com.ids.keycloak.security.ratelimit.RateLimiter;
+import com.ids.keycloak.security.logging.LoggingContextAccessor;
+import com.ids.keycloak.security.logging.WebMdcContextAccessor;
 import com.ids.keycloak.security.exception.KeycloakAccessDeniedHandler;
 import com.sd.KeycloakClient.factory.KeycloakClient;
+import java.util.ArrayList;
+import java.util.List;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationContext;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -17,8 +28,13 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInitiatedLogoutSuccessHandler;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
+import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.context.NullSecurityContextRepository;
+import org.springframework.security.web.context.SecurityContextHolderFilter;
+import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.Session;
 
@@ -26,11 +42,11 @@ import static com.ids.keycloak.security.config.KeycloakSecurityConstants.BACK_CH
 import static com.ids.keycloak.security.config.KeycloakSecurityConstants.LOGOUT_URL;
 
 /**
- * Keycloak 인증에 필요한 모든 핵심 설정을 {@link HttpSecurity}에 등록하는
- * {@link AbstractHttpConfigurer} 구현체입니다.
+ * Keycloak 인증에 필요한 모든 핵심 설정을 {@link HttpSecurity}에 등록하는 {@link AbstractHttpConfigurer} 구현체입니다.
  * <p>
  * 이 Configurer는 다음을 설정합니다:
  * <ul>
+ *   <li>MDC 로깅 필터 (MdcRequestFilter, MdcAuthenticationFilter)</li>
  *   <li>인증 필터 (KeycloakAuthenticationFilter)</li>
  *   <li>인증 프로바이더 (KeycloakAuthenticationProvider)</li>
  *   <li>OIDC 로그인 (OAuth2Login)</li>
@@ -51,87 +67,159 @@ import static com.ids.keycloak.security.config.KeycloakSecurityConstants.LOGOUT_
  * AutoConfiguration 또는 사용자 설정에서 직접 정의해야 합니다.
  * </p>
  */
+@Slf4j
 public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<KeycloakHttpConfigurer, HttpSecurity> {
 
-    private KeycloakHttpConfigurer() {
-    }
+   private FindByIndexNameSessionRepository<? extends Session> sessionRepository;
 
-    /**
-     * Configurer 인스턴스를 생성하는 정적 팩토리 메서드입니다.
-     */
-    public static KeycloakHttpConfigurer keycloak() {
-        return new KeycloakHttpConfigurer();
-    }
+   private KeycloakHttpConfigurer() {
+   }
 
-    @SuppressWarnings("unchecked")
-    @Override
-    public void init(HttpSecurity http) throws Exception {
-        ApplicationContext context = http.getSharedObject(ApplicationContext.class);
+   /**
+    * Configurer 인스턴스를 생성하는 정적 팩토리 메서드입니다.
+    */
+   public static KeycloakHttpConfigurer keycloak() {
+      return new KeycloakHttpConfigurer();
+   }
 
-        // === Bean 조회 ===
-        KeycloakClient keycloakClient = context.getBean(KeycloakClient.class);
-        ClientRegistrationRepository clientRegistrationRepository = context.getBean(ClientRegistrationRepository.class);
-        FindByIndexNameSessionRepository<? extends Session> sessionRepository =
-            context.getBean(FindByIndexNameSessionRepository.class);
-        OAuth2AuthorizedClientRepository authorizedClientRepository = context.getBean(OAuth2AuthorizedClientRepository.class);
-        OidcLoginSuccessHandler oidcLoginSuccessHandler = context.getBean(OidcLoginSuccessHandler.class);
-        KeycloakLogoutHandler keycloakLogoutHandler = context.getBean(KeycloakLogoutHandler.class);
-        OidcClientInitiatedLogoutSuccessHandler oidcLogoutSuccessHandler = context.getBean(OidcClientInitiatedLogoutSuccessHandler.class);
+   /**
+    * 세션 리포지토리를 명시적으로 설정합니다.
+    * <p>
+    * 자동 설정(AutoConfiguration)에서 의존성 주입 받은 빈을 전달할 때 사용합니다. 이를 통해 빈 생성 순서 문제를 해결할 수 있습니다.
+    * </p>
+    */
+   public KeycloakHttpConfigurer sessionRepository(FindByIndexNameSessionRepository<? extends Session> sessionRepository) {
+      this.sessionRepository = sessionRepository;
+      return this;
+   }
+
+   @SuppressWarnings("unchecked")
+   @Override
+   public void init(HttpSecurity http) throws Exception {
+      ApplicationContext context = http.getSharedObject(ApplicationContext.class);
+
+      // === Bean 조회 ===
+      KeycloakClient keycloakClient = context.getBean(KeycloakClient.class);
+      ClientRegistrationRepository clientRegistrationRepository = context.getBean(ClientRegistrationRepository.class);
+
+      // 세션 리포지토리가 명시적으로 설정되지 않았다면 컨텍스트에서 조회 시도 (ObjectProvider 사용)
+      if (this.sessionRepository == null) {
+         this.sessionRepository = context.getBeanProvider(FindByIndexNameSessionRepository.class).getIfAvailable();
+      }
+
+      OAuth2AuthorizedClientRepository authorizedClientRepository = context.getBean(OAuth2AuthorizedClientRepository.class);
+      OidcLoginSuccessHandler oidcLoginSuccessHandler = context.getBean(OidcLoginSuccessHandler.class);
+      KeycloakLogoutHandler keycloakLogoutHandler = context.getBean(KeycloakLogoutHandler.class);
+      OidcClientInitiatedLogoutSuccessHandler oidcLogoutSuccessHandler = context.getBean(OidcClientInitiatedLogoutSuccessHandler.class);
+      KeycloakSessionManager sessionManager = context.getBean(KeycloakSessionManager.class);
 
         // === 1. Authentication Provider 등록 ===
         String clientId = clientRegistrationRepository.findByRegistrationId("keycloak").getClientId();
         KeycloakAuthenticationProvider provider = new KeycloakAuthenticationProvider(keycloakClient, clientId);
         http.authenticationProvider(provider);
 
-        // Filter에서 사용할 수 있도록 SharedObject로 저장
-        http.setSharedObject(KeycloakAuthenticationProvider.class, provider);
-        http.setSharedObject(KeycloakClient.class, keycloakClient);
+      // === 2. 세션 관리 ===
+      // Spring Security가 세션을 생성하지 않음 (애플리케이션에서 관리)
+      http.sessionManagement(session -> session
+          .sessionCreationPolicy(SessionCreationPolicy.NEVER)
+          .sessionFixation(sf -> sf.none())
+      );
 
-        // === 2. 세션 관리 ===
-        // Spring Security가 세션을 생성하지 않음 (애플리케이션에서 관리)
-        http.sessionManagement(session -> session
-            .sessionCreationPolicy(SessionCreationPolicy.NEVER)
-        );
+      // Filter에서 사용할 수 있도록 SharedObject로 저장
+      http.setSharedObject(KeycloakAuthenticationProvider.class, provider);
+      http.setSharedObject(KeycloakClient.class, keycloakClient);
 
-        // SecurityContext를 세션에 저장하지 않음 - 매 요청마다 KeycloakAuthenticationFilter가 인증 처리
-        http.securityContext(securityContext -> securityContext
-            .securityContextRepository(new NullSecurityContextRepository())
-        );
+      // SecurityContext를 세션에 저장하지 않음 - 매 요청마다 KeycloakAuthenticationFilter가 인증 처리
+      http.securityContext(securityContext -> securityContext
+          .securityContextRepository(new NullSecurityContextRepository())
+      );
 
-        // === 3. OIDC 로그인 설정 ===
-        http.oauth2Login(login -> login
-            .successHandler(oidcLoginSuccessHandler)
-            .authorizedClientRepository(authorizedClientRepository)
-        );
+      // === 3. OIDC 로그인 설정 ===
+      http.oauth2Login(login -> login
+          .successHandler(oidcLoginSuccessHandler)
+          .authorizedClientRepository(authorizedClientRepository)
+      );
 
-        // === 4. 로그아웃 설정 ===
-        // 4-1. Front-Channel 로그아웃 (사용자가 직접 로그아웃)
-        http.logout(logout -> logout
-            .logoutUrl(LOGOUT_URL)
-            .addLogoutHandler(keycloakLogoutHandler)
-            .logoutSuccessHandler(oidcLogoutSuccessHandler)
-        );
+      // === 4. 로그아웃 설정 ===
+      // 4-1. Front-Channel 로그아웃 (사용자가 직접 로그아웃)
+      http.logout(logout -> logout
+          .logoutUrl(LOGOUT_URL)
+          .addLogoutHandler(keycloakLogoutHandler)
+          .logoutSuccessHandler(oidcLogoutSuccessHandler)
+      );
 
-        // 4-2. Back-Channel 로그아웃 (Keycloak에서 호출)
-        // 엔드포인트: /logout/connect/back-channel/keycloak (자동 생성)
-        OidcBackChannelSessionLogoutHandler backChannelLogoutHandler =
-            new OidcBackChannelSessionLogoutHandler(sessionRepository);
-        http.oidcLogout(oidc -> oidc
-            .backChannel(backChannel -> backChannel
-                .logoutHandler(backChannelLogoutHandler)
-            )
-        );
+      // 4-2. Back-Channel 로그아웃 (Keycloak에서 호출)
+      // 엔드포인트: /logout/connect/back-channel/keycloak (자동 생성)
+      OidcBackChannelSessionLogoutHandler backChannelLogoutHandler =
+          new OidcBackChannelSessionLogoutHandler(this.sessionRepository);
+      http.oidcLogout(oidc -> oidc
+          .backChannel(backChannel -> backChannel
+              .logoutHandler(backChannelLogoutHandler)
+          )
+      );
 
-        // === 5. CSRF 설정 ===
-        // 로그아웃 엔드포인트는 CSRF 면제 (OIDC 리다이렉트 시 토큰 전달 어려움)
-        http.csrf(csrf -> csrf
-            .ignoringRequestMatchers(LOGOUT_URL, BACK_CHANNEL_LOGOUT_URL)
-        );
-    }
+      // === 5. CSRF 설정 ===
+      KeycloakSecurityProperties securityProperties = context.getBean(KeycloakSecurityProperties.class);
+      KeycloakBearerTokenProperties bearerTokenProperties = securityProperties.getBearerToken();
+      KeycloakCsrfProperties csrfProperties = securityProperties.getCsrf();
 
-    @Override
-    public void configure(HttpSecurity http) throws Exception {
-        ApplicationContext context = http.getSharedObject(ApplicationContext.class);
+      if (!csrfProperties.isEnabled()) {
+          // CSRF 완전 비활성화
+          http.csrf(AbstractHttpConfigurer::disable);
+          log.info("CSRF 비활성화");
+      } else {
+          // 기본 면제 경로 (로그아웃)
+          List<String> ignorePaths = new ArrayList<>();
+          ignorePaths.add(LOGOUT_URL);
+          ignorePaths.add(BACK_CHANNEL_LOGOUT_URL);
+
+          // Bearer Token 경로 면제
+          if (bearerTokenProperties.isEnabled()) {
+              String prefix = bearerTokenProperties.getTokenEndpoint().getPrefix();
+              ignorePaths.add(prefix + "/token");
+              ignorePaths.add(prefix + "/refresh");
+              ignorePaths.add(prefix + "/logout");
+          }
+
+          // 사용자 지정 면제 경로 추가
+          ignorePaths.addAll(csrfProperties.getIgnorePaths());
+
+          // RequestMatcher 리스트 구성
+          List<RequestMatcher> ignoreMatchers = new ArrayList<>();
+          for (String path : ignorePaths) {
+              ignoreMatchers.add(new AntPathRequestMatcher(path));
+          }
+
+          // Basic Auth 요청 면제 (Authorization: Basic 헤더 기반 API 클라이언트)
+          if (securityProperties.getBasicAuth().isEnabled()) {
+              ignoreMatchers.add(request -> {
+                  String auth = request.getHeader("Authorization");
+                  return auth != null && auth.startsWith("Basic ");
+              });
+          }
+
+          http.csrf(csrf -> csrf
+              .ignoringRequestMatchers(ignoreMatchers.toArray(new RequestMatcher[0]))
+          );
+          log.info("CSRF 활성화 (면제 경로: {})", ignorePaths);
+      }
+
+      // === 6. Bearer Token Resource Server 설정 (Introspect 온라인 검증) ===
+      if (bearerTokenProperties.isEnabled()) {
+          log.info("Bearer Token 인증 활성화 (검증 방식: introspect)");
+
+          OpaqueTokenIntrospector introspector = context.getBean(OpaqueTokenIntrospector.class);
+          http.oauth2ResourceServer(rs -> rs
+              .opaqueToken(opaque -> opaque
+                  .introspector(introspector)
+              )
+          );
+      }
+   }
+
+   @Override
+   public void configure(HttpSecurity http) throws Exception {
+      ApplicationContext context = http.getSharedObject(ApplicationContext.class);
 
         // === Bean 및 SharedObject 조회 ===
         AuthenticationManager authenticationManager = http.getSharedObject(AuthenticationManager.class);
@@ -140,20 +228,83 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         KeycloakAuthenticationEntryPoint authenticationEntryPoint = context.getBean(KeycloakAuthenticationEntryPoint.class);
         KeycloakAccessDeniedHandler accessDeniedHandler = context.getBean(KeycloakAccessDeniedHandler.class);
         KeycloakSessionManager sessionManager = context.getBean(KeycloakSessionManager.class);
+        KeycloakSecurityProperties securityProperties = context.getBean(KeycloakSecurityProperties.class);
 
-        // === 6. 예외 처리기 설정 ===
-        http.exceptionHandling(customizer -> customizer
-            .authenticationEntryPoint(authenticationEntryPoint)
-            .accessDeniedHandler(accessDeniedHandler)
-        );
+        // LoggingContextAccessor: Bean이 있으면 사용, 없으면 기본 구현체 사용
+        LoggingContextAccessor loggingContextAccessor = getBeanOrDefault(
+            context, LoggingContextAccessor.class, new WebMdcContextAccessor());
 
-        // === 7. Keycloak 인증 필터 등록 ===
+      // === 6. 예외 처리기 설정 ===
+      http.exceptionHandling(customizer -> customizer
+          .authenticationEntryPoint(authenticationEntryPoint)
+          .accessDeniedHandler(accessDeniedHandler)
+      );
+
+        // 7. MDC 로깅 필터 등록
+        // 7-1. MdcRequestFilter: 인증 전 (최상단) - traceId, httpMethod, requestUri, clientIp
+        MdcRequestFilter mdcRequestFilter = new MdcRequestFilter(loggingContextAccessor, securityProperties);
+        http.addFilterBefore(mdcRequestFilter, SecurityContextHolderFilter.class);
+
+        // 7-2. MdcAuthenticationFilter: 인증 후 (AuthorizationFilter 앞) - userId, username, sessionId
+        MdcAuthenticationFilter mdcAuthenticationFilter = new MdcAuthenticationFilter(loggingContextAccessor, securityProperties);
+        http.addFilterBefore(mdcAuthenticationFilter, AuthorizationFilter.class);
+
+        // === 8. Keycloak 인증 필터 등록 ===
+        // Bearer Token 활성화 시 토큰 발급 API 경로를 필터 스킵 대상에 추가
+        List<String> skipPaths = new ArrayList<>();
+        if (securityProperties.getBearerToken().isEnabled()) {
+            String prefix = securityProperties.getBearerToken().getTokenEndpoint().getPrefix();
+            skipPaths.add(prefix + "/token");
+            skipPaths.add(prefix + "/refresh");
+            skipPaths.add(prefix + "/logout");
+            log.debug("KeycloakAuthenticationFilter 스킵 경로 설정: {}", skipPaths);
+        }
+
         KeycloakAuthenticationFilter authenticationFilter = new KeycloakAuthenticationFilter(
             authenticationManager,
             authenticationProvider,
             sessionManager,
-            keycloakClient
+            keycloakClient,
+            skipPaths
         );
         http.addFilterBefore(authenticationFilter, UsernamePasswordAuthenticationFilter.class);
+
+        // === 9. Basic Auth 필터 등록 (조건부) ===
+        if (securityProperties.getBasicAuth().isEnabled()) {
+            BasicAuthenticationFilter basicAuthFilter = new BasicAuthenticationFilter(authenticationManager);
+            http.addFilterBefore(basicAuthFilter, KeycloakAuthenticationFilter.class);
+        }
+
+        // === 10. Rate Limit 필터 등록 (조건부) ===
+        if (securityProperties.getRateLimit().isEnabled()) {
+            RateLimiter rateLimiter = getBeanOrDefault(context, RateLimiter.class, null);
+            if (rateLimiter != null) {
+                List<String> rateLimitPaths = new ArrayList<>();
+                if (securityProperties.getBearerToken().isEnabled()) {
+                    String prefix = securityProperties.getBearerToken().getTokenEndpoint().getPrefix();
+                    rateLimitPaths.add(prefix + "/token");
+                }
+                RateLimitFilter rateLimitFilter = new RateLimitFilter(
+                    rateLimiter, securityProperties.getRateLimit(), rateLimitPaths
+                );
+                // BasicAuthenticationFilter보다 앞에 위치 (차단된 요청은 인증 시도 자체를 하지 않음)
+                http.addFilterBefore(rateLimitFilter, BasicAuthenticationFilter.class);
+                log.info("Rate Limit 필터 등록 완료 (대상 경로: {}, Basic Auth 포함: {})",
+                    rateLimitPaths, securityProperties.getRateLimit().isIncludeBasicAuth());
+            } else {
+                log.warn("Rate Limit이 활성화되었으나 RateLimiter 빈을 찾을 수 없습니다.");
+            }
+        }
+    }
+
+    /**
+     * ApplicationContext에서 Bean을 조회하고, 없으면 기본값을 반환합니다.
+     */
+    private <T> T getBeanOrDefault(ApplicationContext context, Class<T> beanClass, T defaultValue) {
+        try {
+            return context.getBean(beanClass);
+        } catch (Exception e) {
+            return defaultValue;
+        }
     }
 }

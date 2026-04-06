@@ -3,6 +3,7 @@ package com.ids.keycloak.security.filter;
 import com.ids.keycloak.security.authentication.KeycloakAuthentication;
 import com.ids.keycloak.security.authentication.KeycloakAuthenticationProvider;
 import com.ids.keycloak.security.exception.AuthenticationFailedException;
+import com.ids.keycloak.security.ratelimit.AuthenticationEventLogger;
 import com.ids.keycloak.security.exception.IntrospectionFailedException;
 import com.ids.keycloak.security.exception.RefreshTokenException;
 import com.ids.keycloak.security.exception.UserInfoFetchException;
@@ -20,6 +21,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import java.io.IOException;
 import java.util.Collections;
+import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.core.Authentication;
@@ -44,6 +46,7 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
     private final KeycloakAuthenticationProvider authenticationProvider;
     private final KeycloakSessionManager sessionManager;
     private final KeycloakClient keycloakClient;
+    private final List<String> skipPaths;
 
     public KeycloakAuthenticationFilter(
         AuthenticationManager authenticationManager,
@@ -51,10 +54,51 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
         KeycloakSessionManager sessionManager,
         KeycloakClient keycloakClient
     ) {
+        this(authenticationManager, authenticationProvider, sessionManager, keycloakClient, List.of());
+    }
+
+    public KeycloakAuthenticationFilter(
+        AuthenticationManager authenticationManager,
+        KeycloakAuthenticationProvider authenticationProvider,
+        KeycloakSessionManager sessionManager,
+        KeycloakClient keycloakClient,
+        List<String> skipPaths
+    ) {
         this.authenticationManager = authenticationManager;
         this.authenticationProvider = authenticationProvider;
         this.sessionManager = sessionManager;
         this.keycloakClient = keycloakClient;
+        this.skipPaths = skipPaths != null ? skipPaths : List.of();
+    }
+
+    /**
+     * Bearer Token 토큰 발급 API 경로는 미인증 상태에서 접근하는 것이 정상이므로
+     * 이 필터의 실행을 건너뜁니다.
+     * <p>
+     * 또한 {@code Authorization: Bearer} 헤더가 포함된 요청은
+     * {@code BearerTokenAuthenticationFilter}가 처리하므로 이 필터를 건너뜁니다.
+     * </p>
+     */
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        String path = request.getRequestURI();
+
+        // Bearer Token 토큰 발급 API 경로 스킵
+        for (String skipPath : skipPaths) {
+            if (path.equals(skipPath)) {
+                log.debug("[Filter] 토큰 API 경로 '{}' — 필터 스킵", path);
+                return true;
+            }
+        }
+
+        // Authorization: Bearer 헤더가 있는 요청은 BearerTokenAuthenticationFilter가 처리
+        String authorization = request.getHeader("Authorization");
+        if (authorization != null && authorization.startsWith("Bearer ")) {
+            log.debug("[Filter] Bearer 토큰 요청 — 필터 스킵 (BearerTokenAuthenticationFilter에서 처리)");
+            return true;
+        }
+
+        return false;
     }
 
     @Override
@@ -64,6 +108,15 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
         FilterChain filterChain
     ) throws ServletException, IOException
     {
+        // 이미 인증된 경우 스킵 (Basic Auth 등 선행 필터에서 인증 완료)
+        Authentication existingAuth = SecurityContextHolder.getContext().getAuthentication();
+        if (existingAuth != null && existingAuth.isAuthenticated()
+                && !(existingAuth instanceof org.springframework.security.authentication.AnonymousAuthenticationToken)) {
+            log.debug("[Filter] 이미 인증된 사용자 '{}' — OIDC 쿠키 인증 스킵.", existingAuth.getName());
+            filterChain.doFilter(request, response);
+            return;
+        }
+
         String idTokenValue = CookieUtil.getCookieValue(request, CookieUtil.ID_TOKEN_NAME).orElse(null);
         String accessTokenValue = CookieUtil.getCookieValue(request, CookieUtil.ACCESS_TOKEN_NAME).orElse(null);
 
@@ -106,15 +159,21 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
             SecurityContext securityContext = SecurityContextHolder.getContext();
             securityContext.setAuthentication(successfulAuthentication);
             log.debug("[Filter] SecurityContext에 인증된 사용자 '{}' 등록 완료.", successfulAuthentication.getName());
+            AuthenticationEventLogger.logSuccess(
+                AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(request), successfulAuthentication.getName());
 
         } catch (AuthenticationException e) {
             SecurityContextHolder.clearContext();
             log.warn("[Filter] Keycloak 인증에 실패했습니다: {}", e.getMessage());
+            AuthenticationEventLogger.logFailure(
+                AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(request), "unknown", e.getMessage());
             CookieUtil.deleteAllTokenCookies(response);
             sessionManager.invalidateSession(request.getSession());
         } catch (Exception e) {
             SecurityContextHolder.clearContext();
             log.error("[Filter] Keycloak 인증 과정에서 예상치 못한 오류가 발생했습니다.", e);
+            AuthenticationEventLogger.logFailure(
+                AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(request), "unknown", e.getMessage());
             CookieUtil.deleteAllTokenCookies(response);
             sessionManager.invalidateSession(request.getSession());
         }
@@ -188,6 +247,14 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
         log.debug("[Filter] 토큰이 재발급되어 쿠키를 업데이트합니다.");
         int maxAge = newTokens.getExpireTime();
         CookieUtil.addTokenCookies(response, newTokens.getAccessToken(), maxAge, newTokens.getIdToken(), maxAge);
+    }
+
+    private String getClientIp(HttpServletRequest request) {
+        String xff = request.getHeader("X-Forwarded-For");
+        if (xff != null && !xff.isBlank()) {
+            return xff.split(",")[0].trim();
+        }
+        return request.getRemoteAddr();
     }
 
     private KeycloakPrincipal createPrincipalFromIdToken(String idToken) {

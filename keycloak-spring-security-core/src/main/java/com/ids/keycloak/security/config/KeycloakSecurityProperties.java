@@ -30,7 +30,6 @@ import java.util.List;
  * </p>
  */
 @Getter
-@Setter
 @ConfigurationProperties(prefix = "keycloak.security")
 public class KeycloakSecurityProperties {
 
@@ -57,4 +56,40 @@ public class KeycloakSecurityProperties {
      */
     @NestedConfigurationProperty
     private KeycloakErrorProperties error = new KeycloakErrorProperties();
+
+    /**
+     * Session 관련 설정
+     */
+    @NestedConfigurationProperty
+    private KeycloakSessionProperties session = new KeycloakSessionProperties();
+
+    /**
+     * 로깅 관련 설정
+     */
+    @NestedConfigurationProperty
+    private KeycloakLoggingProperties logging = new KeycloakLoggingProperties();
+
+    /**
+     * Basic Authentication 관련 설정
+     */
+    @NestedConfigurationProperty
+    private KeycloakBasicAuthProperties basicAuth = new KeycloakBasicAuthProperties();
+
+    /**
+     * Bearer Token 인증 관련 설정
+     */
+    @NestedConfigurationProperty
+    private KeycloakBearerTokenProperties bearerToken = new KeycloakBearerTokenProperties();
+
+    /**
+     * CSRF 보호 관련 설정
+     */
+    @NestedConfigurationProperty
+    private KeycloakCsrfProperties csrf = new KeycloakCsrfProperties();
+
+    /**
+     * Rate Limiting 관련 설정
+     */
+    @NestedConfigurationProperty
+    private KeycloakRateLimitProperties rateLimit = new KeycloakRateLimitProperties();
 }

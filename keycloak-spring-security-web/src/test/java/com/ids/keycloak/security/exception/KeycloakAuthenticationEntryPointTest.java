@@ -43,6 +43,8 @@ class KeycloakAuthenticationEntryPointTest {
         outputStream = new ByteArrayOutputStream();
         // lenient를 사용하여 리다이렉트 테스트에서도 에러가 발생하지 않도록 함
         lenient().when(response.getOutputStream()).thenReturn(new DelegatingServletOutputStream(outputStream));
+        // Bearer Token 분기를 위해 Authorization 헤더 기본값 설정 (null = Bearer 아님)
+        lenient().when(request.getHeader("Authorization")).thenReturn(null);
     }
 
     @Nested
@@ -202,6 +204,80 @@ class KeycloakAuthenticationEntryPointTest {
 
             // Then
             verify(response).sendRedirect("/login");
+        }
+    }
+
+    @Nested
+    class Basic_Auth_처리 {
+
+        @Test
+        void Basic_Auth_활성화_시_Basic_요청에_WWW_Authenticate_헤더를_포함한다() throws Exception {
+            // Given
+            KeycloakAuthenticationEntryPoint basicEntryPoint = new KeycloakAuthenticationEntryPoint(
+                objectMapper, errorProperties, true, "test-realm"
+            );
+            when(request.getHeader("Authorization")).thenReturn("Basic dXNlcjpwYXNz");
+
+            AuthenticationException authException = new BadCredentialsException("Invalid credentials");
+
+            // When
+            basicEntryPoint.commence(request, response, authException);
+
+            // Then
+            verify(response).setHeader("WWW-Authenticate", "Basic realm=\"test-realm\"");
+            verify(response).setStatus(401);
+        }
+
+        @Test
+        void Basic_Auth_비활성화_시_WWW_Authenticate_헤더를_포함하지_않는다() throws Exception {
+            // Given (기본 entryPoint는 basicAuthEnabled=false)
+            AuthenticationException authException = new BadCredentialsException("Invalid credentials");
+
+            // When
+            entryPoint.commence(request, response, authException);
+
+            // Then
+            verify(response, org.mockito.Mockito.never()).setHeader(
+                org.mockito.ArgumentMatchers.eq("WWW-Authenticate"),
+                org.mockito.ArgumentMatchers.anyString()
+            );
+        }
+
+        @Test
+        void Basic_Auth_활성화_시_Basic_헤더_없는_요청에는_WWW_Authenticate를_추가하지_않는다() throws Exception {
+            // Given
+            KeycloakAuthenticationEntryPoint basicEntryPoint = new KeycloakAuthenticationEntryPoint(
+                objectMapper, errorProperties, true, "test-realm"
+            );
+            when(request.getHeader("Authorization")).thenReturn(null);
+
+            AuthenticationException authException = new BadCredentialsException("Invalid credentials");
+
+            // When
+            basicEntryPoint.commence(request, response, authException);
+
+            // Then
+            verify(response, org.mockito.Mockito.never()).setHeader(
+                org.mockito.ArgumentMatchers.eq("WWW-Authenticate"),
+                org.mockito.ArgumentMatchers.anyString()
+            );
+        }
+
+        @Test
+        void realmName이_null이면_기본값_keycloak을_사용한다() throws Exception {
+            // Given
+            KeycloakAuthenticationEntryPoint basicEntryPoint = new KeycloakAuthenticationEntryPoint(
+                objectMapper, errorProperties, true, null
+            );
+            when(request.getHeader("Authorization")).thenReturn("Basic dXNlcjpwYXNz");
+
+            AuthenticationException authException = new BadCredentialsException("Invalid credentials");
+
+            // When
+            basicEntryPoint.commence(request, response, authException);
+
+            // Then
+            verify(response).setHeader("WWW-Authenticate", "Basic realm=\"keycloak\"");
         }
     }
 
