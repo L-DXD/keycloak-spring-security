@@ -57,4 +57,10 @@ public class KeycloakSecurityProperties {
      */
     @NestedConfigurationProperty
     private KeycloakErrorProperties error = new KeycloakErrorProperties();
+
+    /**
+     * Session 관련 설정
+     */
+    @NestedConfigurationProperty
+    private KeycloakSessionProperties session = new KeycloakSessionProperties();
 }
