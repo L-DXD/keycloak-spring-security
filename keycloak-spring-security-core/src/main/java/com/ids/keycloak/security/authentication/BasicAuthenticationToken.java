@@ -16,7 +16,7 @@ import org.springframework.security.authentication.AbstractAuthenticationToken;
  * OIDC 쿠키 흐름과 Basic 흐름의 인증 전 데이터가 다릅니다 (쿠키 토큰 vs username/password).
  * </p>
  */
-public class BasicAuthenticationToken extends AbstractAuthenticationToken {
+public class BasicAuthenticationToken extends AbstractAuthenticationToken implements AccessTokenHolder {
 
     private final String username;
     private String password;

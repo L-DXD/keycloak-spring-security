@@ -8,7 +8,7 @@ import org.springframework.security.authentication.AbstractAuthenticationToken;
  * 인증 전/후 모두 {@link KeycloakPrincipal}을 Principal로 사용합니다.
  * 인증 검증은 idToken을 기준으로 합니다.
  */
-public class KeycloakAuthentication extends AbstractAuthenticationToken {
+public class KeycloakAuthentication extends AbstractAuthenticationToken implements AccessTokenHolder {
 
     private final KeycloakPrincipal principal;
     private final String idToken;
