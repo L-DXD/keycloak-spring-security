@@ -9,7 +9,7 @@ println "=================================================="
 
 allprojects {
     group = 'com.ids.keycloak'
-    version = '0.0.1'
+    version = '1.4.0'
 
     repositories {
         mavenCentral()
@@ -19,8 +19,10 @@ allprojects {
 subprojects {
     // 'java-base' 플러그인이 적용된 프로젝트에만 자바 관련 설정을 적용
     plugins.withId('java-base') {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        java {
+            sourceCompatibility = JavaVersion.VERSION_17
+            targetCompatibility = JavaVersion.VERSION_17
+        }
 
         tasks.withType(Test) {
             useJUnitPlatform()
@@ -56,6 +58,18 @@ subprojects {
 
                 // keycloak client library (etc. online, token exchange, ...)
                 implementation 'io.github.l-dxd:keycloak-client:1.0.0'
+            }
+        }
+
+        // java-library 플러그인이 있는 서브프로젝트에 maven-publish 설정
+        if (project.plugins.hasPlugin('java-library')) {
+            project.apply plugin: 'maven-publish'
+            project.publishing {
+                publications {
+                    mavenJava(MavenPublication) {
+                        from project.components.java
+                    }
+                }
             }
         }
     }
