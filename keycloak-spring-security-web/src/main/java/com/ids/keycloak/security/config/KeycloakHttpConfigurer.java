@@ -260,12 +260,15 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
             log.debug("KeycloakAuthenticationFilter 스킵 경로 설정: {}", skipPaths);
         }
 
+        List<String> loginPaths = securityProperties.getAuthentication().getLoginPaths();
+
         KeycloakAuthenticationFilter authenticationFilter = new KeycloakAuthenticationFilter(
             authenticationManager,
             authenticationProvider,
             sessionManager,
             keycloakClient,
-            skipPaths
+            skipPaths,
+            loginPaths
         );
         http.addFilterBefore(authenticationFilter, UsernamePasswordAuthenticationFilter.class);
 

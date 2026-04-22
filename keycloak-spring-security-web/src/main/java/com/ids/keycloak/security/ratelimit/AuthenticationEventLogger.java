@@ -72,6 +72,35 @@ public final class AuthenticationEventLogger {
             method, ip, safeUsername(username));
     }
 
+    /**
+     * Stateless 인증 경로(Bearer/Basic/Credential-Login)에서 필터를 건너뛰는 이벤트를 로깅합니다. (INFO 레벨)
+     * <p>
+     * rate-limit 카운터 증가 없이 관찰 목적으로만 기록됩니다.
+     * </p>
+     *
+     * @param method 인증 방식 (BEARER, BASIC, CREDENTIAL_LOGIN 등)
+     * @param ip     클라이언트 IP
+     * @param reason 스킵 사유
+     */
+    public static void logSkipped(String method, String ip, String reason) {
+        log.info("[AUTH] result=SKIPPED method={} ip={} username=unknown reason={}",
+            method, ip, reason);
+    }
+
+    /**
+     * OIDC 쿠키 흐름에서 HTTP Session이 없는 상태를 로깅합니다. (DEBUG 레벨)
+     * <p>
+     * 정상적인 비로그인 상태이므로 감사 통계 집계 및 rate-limit 카운터에서 제외됩니다.
+     * </p>
+     *
+     * @param method 인증 방식 (OIDC_COOKIE)
+     * @param ip     클라이언트 IP
+     */
+    public static void logNoSession(String method, String ip) {
+        log.debug("[AUTH] result=NO_SESSION method={} ip={} username=unknown reason=session_not_found",
+            method, ip);
+    }
+
     private static String safeUsername(String username) {
         return username != null ? username : "unknown";
     }

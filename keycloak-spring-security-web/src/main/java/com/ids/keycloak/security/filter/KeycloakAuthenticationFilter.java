@@ -1,5 +1,7 @@
 package com.ids.keycloak.security.filter;
 
+import com.ids.keycloak.security.authentication.AuthenticationMethod;
+import com.ids.keycloak.security.authentication.AuthenticationMethodDetector;
 import com.ids.keycloak.security.authentication.KeycloakAuthentication;
 import com.ids.keycloak.security.authentication.KeycloakAuthenticationProvider;
 import com.ids.keycloak.security.exception.AuthenticationFailedException;
@@ -35,8 +37,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * HTTP 요청의 쿠키에서 Keycloak 토큰을 읽어 인증을 시도하는 필터입니다.
  * HTTP Session에서 Refresh Token을 조회하여 토큰 재발급에 사용합니다.
  * <p>
- * 온라인 검증 실패 시 Refresh Token을 사용하여 토큰을 재발급받고,
- * 재발급된 토큰으로 직접 인증 객체를 생성합니다.
+ * OIDC 쿠키 방식 전용 필터입니다. Bearer/Basic/Credential-Login 등 stateless 인증 방식은
+ * {@link AuthenticationMethodDetector}가 감지하여 pass-through 처리하므로 세션을 요구하지 않습니다.
  * </p>
  */
 @Slf4j
@@ -47,6 +49,7 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
     private final KeycloakSessionManager sessionManager;
     private final KeycloakClient keycloakClient;
     private final List<String> skipPaths;
+    private final AuthenticationMethodDetector methodDetector;
 
     public KeycloakAuthenticationFilter(
         AuthenticationManager authenticationManager,
@@ -69,35 +72,42 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
         this.sessionManager = sessionManager;
         this.keycloakClient = keycloakClient;
         this.skipPaths = skipPaths != null ? skipPaths : List.of();
+        this.methodDetector = new AuthenticationMethodDetector(List.of("/api/keycloak/login"));
     }
 
     /**
-     * Bearer Token 토큰 발급 API 경로는 미인증 상태에서 접근하는 것이 정상이므로
-     * 이 필터의 실행을 건너뜁니다.
-     * <p>
-     * 또한 {@code Authorization: Bearer} 헤더가 포함된 요청은
-     * {@code BearerTokenAuthenticationFilter}가 처리하므로 이 필터를 건너뜁니다.
-     * </p>
+     * 명시적 login-paths를 주입받는 생성자입니다.
+     * {@code KeycloakHttpConfigurer}에서 properties 기반 login-paths를 전달할 때 사용합니다.
+     */
+    public KeycloakAuthenticationFilter(
+        AuthenticationManager authenticationManager,
+        KeycloakAuthenticationProvider authenticationProvider,
+        KeycloakSessionManager sessionManager,
+        KeycloakClient keycloakClient,
+        List<String> skipPaths,
+        List<String> loginPaths
+    ) {
+        this.authenticationManager = authenticationManager;
+        this.authenticationProvider = authenticationProvider;
+        this.sessionManager = sessionManager;
+        this.keycloakClient = keycloakClient;
+        this.skipPaths = skipPaths != null ? skipPaths : List.of();
+        this.methodDetector = new AuthenticationMethodDetector(loginPaths);
+    }
+
+    /**
+     * 명시적으로 등록된 skipPaths에 해당하는 경로만 필터를 건너뜁니다.
+     * 인증 방식별 분기는 {@link #doFilterInternal}의 {@link AuthenticationMethodDetector}가 담당합니다.
      */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-
-        // Bearer Token 토큰 발급 API 경로 스킵
         for (String skipPath : skipPaths) {
             if (path.equals(skipPath)) {
                 log.debug("[Filter] 토큰 API 경로 '{}' — 필터 스킵", path);
                 return true;
             }
         }
-
-        // Authorization: Bearer 헤더가 있는 요청은 BearerTokenAuthenticationFilter가 처리
-        String authorization = request.getHeader("Authorization");
-        if (authorization != null && authorization.startsWith("Bearer ")) {
-            log.debug("[Filter] Bearer 토큰 요청 — 필터 스킵 (BearerTokenAuthenticationFilter에서 처리)");
-            return true;
-        }
-
         return false;
     }
 
@@ -106,8 +116,35 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
         HttpServletRequest request,
         HttpServletResponse response,
         FilterChain filterChain
-    ) throws ServletException, IOException
-    {
+    ) throws ServletException, IOException {
+
+        // 인증 방식 판별 — 진입부에서 단일 판별, 이후 분기
+        AuthenticationMethod method = methodDetector.detect(request);
+
+        switch (method) {
+            case BEARER, BASIC, CREDENTIAL_LOGIN -> {
+                AuthenticationEventLogger.logSkipped(method.name(), getClientIp(request), "stateless 인증 경로");
+                filterChain.doFilter(request, response);
+                return;
+            }
+            case NONE -> {
+                filterChain.doFilter(request, response);
+                return;
+            }
+            case OIDC_COOKIE -> handleOidcCookieAuth(request, response, filterChain);
+        }
+    }
+
+    /**
+     * OIDC 쿠키 기반 인증을 처리합니다.
+     * 세션 없음은 예외가 아닌 정상 비로그인 상태로 처리합니다.
+     */
+    private void handleOidcCookieAuth(
+        HttpServletRequest request,
+        HttpServletResponse response,
+        FilterChain filterChain
+    ) throws ServletException, IOException {
+
         // 이미 인증된 경우 스킵 (Basic Auth 등 선행 필터에서 인증 완료)
         Authentication existingAuth = SecurityContextHolder.getContext().getAuthentication();
         if (existingAuth != null && existingAuth.isAuthenticated()
@@ -121,11 +158,14 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
         String accessTokenValue = CookieUtil.getCookieValue(request, CookieUtil.ACCESS_TOKEN_NAME).orElse(null);
 
         try {
-            // HTTP Session에서 Refresh Token 가져오기
             HttpSession session = request.getSession(false);
             if (session == null) {
-                log.debug("[Filter] HTTP Session이 없음 (로그아웃 상태) - 쿠키 삭제 후 다음 필터로 진행");
-                throw new AuthenticationFailedException("HTTP Session이 없음");
+                // 세션 없음은 정상 비로그인 상태 — 예외 발생 없이 pass-through
+                AuthenticationEventLogger.logNoSession(
+                    AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(request));
+                CookieUtil.deleteAllTokenCookies(response);
+                filterChain.doFilter(request, response);
+                return;
             }
 
             String refreshToken = sessionManager.getRefreshToken(session).orElse(null);
@@ -139,23 +179,21 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
             log.debug("[Filter] HTTP Session에서 Refresh Token 로드 성공.");
 
             KeycloakPrincipal principal = createPrincipalFromIdToken(idTokenValue);
-            KeycloakAuthentication authRequest = new KeycloakAuthentication(principal, idTokenValue, accessTokenValue, false);
+            KeycloakAuthentication authRequest = new KeycloakAuthentication(
+                principal, idTokenValue, accessTokenValue, false);
             log.debug("[Filter] 인증 전 Authentication 객체 생성: {}", principal.getName());
 
             Authentication successfulAuthentication;
             try {
-                // 인증 수행 (온라인 검증)
                 log.debug("[Filter] AuthenticationManager에 인증 위임...");
                 successfulAuthentication = authenticationManager.authenticate(authRequest);
                 log.debug("[Filter] 인증 성공: {}", successfulAuthentication.getName());
 
             } catch (IntrospectionFailedException | NullPointerException | UserInfoFetchException e) {
-                // 온라인 검증 실패 또는 토큰 파싱 실패 시 Refresh Token으로 재발급 시도
                 log.warn("[Filter] 온라인 검증 실패, Refresh Token으로 재발급 시도. 원인: {}", e.getMessage());
                 successfulAuthentication = refreshAndAuthenticate(session, response, refreshToken);
             }
 
-            // SecurityContext에 인증 정보 설정 (요청 처리 중에만 유효)
             SecurityContext securityContext = SecurityContextHolder.getContext();
             securityContext.setAuthentication(successfulAuthentication);
             log.debug("[Filter] SecurityContext에 인증된 사용자 '{}' 등록 완료.", successfulAuthentication.getName());
@@ -170,8 +208,9 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
             CookieUtil.deleteAllTokenCookies(response);
             sessionManager.invalidateSession(request.getSession());
         } catch (Exception e) {
+            // 예기치 못한 예외 — warn 레벨로 기록하되 stacktrace 유지
             SecurityContextHolder.clearContext();
-            log.error("[Filter] Keycloak 인증 과정에서 예상치 못한 오류가 발생했습니다.", e);
+            log.warn("[Filter] Keycloak 인증 과정에서 예상치 못한 오류가 발생했습니다.", e);
             AuthenticationEventLogger.logFailure(
                 AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(request), "unknown", e.getMessage());
             CookieUtil.deleteAllTokenCookies(response);
@@ -196,15 +235,12 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
         KeycloakTokenInfo newTokens = refreshTokens(refreshToken);
         log.debug("[Filter] 토큰 재발급 성공. 세션 및 쿠키 업데이트.");
 
-        // 새로운 Refresh Token을 세션에 저장
         if (newTokens.getRefreshToken() != null) {
             sessionManager.saveRefreshToken(session, newTokens.getRefreshToken());
         }
 
-        // 쿠키 업데이트
         updateCookies(response, newTokens);
 
-        // Provider를 통해 인증 객체 생성 (검증 없이 토큰 정보로 Principal 생성)
         log.debug("[Filter] 재발급된 토큰으로 인증 객체 생성.");
         return authenticationProvider.createAuthenticatedToken(newTokens.getIdToken(), newTokens.getAccessToken());
     }
@@ -214,7 +250,7 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
      *
      * @param refreshToken Refresh Token
      * @return 새로 발급된 토큰 정보
-     * @throws RefreshTokenException Refresh Token이 만료되었거나 유효하지 않은 경우
+     * @throws RefreshTokenException         Refresh Token이 만료되었거나 유효하지 않은 경우
      * @throws AuthenticationFailedException 그 외 인증 실패
      */
     private KeycloakTokenInfo refreshTokens(String refreshToken) {
@@ -258,12 +294,10 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
     }
 
     private KeycloakPrincipal createPrincipalFromIdToken(String idToken) {
-        // 서명 검증 없이 subject만 추출 (온라인 검증에서 유효성 확인)
         String subject = JwtUtil.parseSubjectWithoutValidation(idToken);
         if (subject == null || subject.isBlank()) {
             subject = "unknown";
         }
-        // 인증 전이므로 빈 authorities와 attributes로 생성
         return new KeycloakPrincipal(subject, Collections.emptyList(), null, null);
     }
 }
