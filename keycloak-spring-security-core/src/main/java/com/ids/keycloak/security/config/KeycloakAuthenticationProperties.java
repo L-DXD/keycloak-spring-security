@@ -36,4 +36,21 @@ public class KeycloakAuthenticationProperties {
      * 기본값: "/"
      */
     private String defaultSuccessUrl = "/";
+
+    /**
+     * Credential(body) 기반 로그인 요청으로 판별할 경로 목록.
+     * POST 메서드 + 이 목록에 포함된 경로이면 CREDENTIAL_LOGIN으로 분류하여 OIDC 필터를 우회합니다.
+     * <p>
+     * application.yaml:
+     * <pre>
+     * keycloak:
+     *   security:
+     *     authentication:
+     *       login-paths:
+     *         - /api/keycloak/login
+     *         - /api/auth/login
+     * </pre>
+     * </p>
+     */
+    private List<String> loginPaths = new ArrayList<>(List.of("/api/keycloak/login"));
 }
