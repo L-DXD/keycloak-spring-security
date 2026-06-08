@@ -33,6 +33,11 @@ dependencies {
     // 라이브러리 사용자가 Redis를 원할 때만 자신의 프로젝트에 추가하면 됨
     compileOnly 'org.springframework.boot:spring-boot-starter-data-redis'
     compileOnly 'org.springframework.session:spring-session-data-redis'
+
+    // 테스트 전용: securityMatcher 동작 검증을 위한 Servlet API + MockHttpServletRequest
+    // (compileOnly 의존성을 테스트 클래스패스에 노출, production 산출물에는 전이되지 않음)
+    testImplementation 'org.springframework.boot:spring-boot-starter-web'
+    testImplementation 'org.springframework:spring-test'
 }
 
 signing {

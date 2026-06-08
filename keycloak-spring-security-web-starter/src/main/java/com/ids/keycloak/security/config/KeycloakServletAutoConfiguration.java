@@ -46,6 +46,9 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
 import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.util.matcher.RequestMatcher;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.Session;
@@ -284,15 +287,45 @@ public class KeycloakServletAutoConfiguration {
             return new KeycloakAuthorizationManager(keycloakClient);
         }
 
-        @Bean
-        @ConditionalOnMissingBean(SecurityFilterChain.class)
+        /**
+         * Keycloak 기본 SecurityFilterChain을 등록합니다.
+         * <p>
+         * <b>Fail-Open 방지 설계 (CVSS 8.1, CWE-1188/863):</b>
+         * 과거 {@code @ConditionalOnMissingBean(SecurityFilterChain.class)}는 사용자가
+         * actuator 등 다른 용도의 SecurityFilterChain을 단 하나라도 추가하면 Keycloak 체인 전체가
+         * 비활성화되어 인증이 통째로 사라지는 Fail-Open 결함이 있었습니다. 이를 다음과 같이 보강합니다.
+         * <ul>
+         *   <li><b>Bean 이름 기반 조건</b>: {@code @ConditionalOnMissingBean(name = "keycloakSecurityFilterChain")}로
+         *       사용자가 추가한 다른 체인과 공존합니다.</li>
+         *   <li><b>securityMatcher 경로 분리</b>: 이 체인이 담당할 경로를 명시적으로 선언합니다(기본 {@code /**}).
+         *       사용자가 더 구체적인 matcher(예: {@code /actuator/**})를 가진 체인을 등록하면 그 경로는 사용자 체인이 담당합니다.</li>
+         *   <li><b>@Order(LOWEST_PRECEDENCE)</b>: catch-all 체인이므로 가장 낮은 우선순위로 두어,
+         *       사용자의 구체적 체인이 먼저 평가되도록 합니다.</li>
+         *   <li><b>이중 안전망</b>: {@code keycloak.security.auto-filter-chain=false}로 명시적으로 끈 경우에만 미등록됩니다(기본 등록).</li>
+         * </ul>
+         * </p>
+         */
+        @Bean("keycloakSecurityFilterChain")
+        @ConditionalOnMissingBean(name = "keycloakSecurityFilterChain")
+        @ConditionalOnProperty(
+            prefix = "keycloak.security",
+            name = "auto-filter-chain",
+            havingValue = "true",
+            matchIfMissing = true
+        )
+        @Order(Ordered.LOWEST_PRECEDENCE)
         public SecurityFilterChain keycloakSecurityFilterChain(
             HttpSecurity http,
             KeycloakSecurityProperties securityProperties,
             ObjectProvider<FindByIndexNameSessionRepository<? extends Session>> sessionRepositoryProvider,
             KeycloakAuthorizationManager keycloakAuthorizationManager
         ) throws Exception {
-            log.info("핵심 Bean을 등록합니다: [SecurityFilterChain]");
+            RequestMatcher securityMatcher = KeycloakSecurityMatcherFactory.from(securityProperties.getMatcher());
+            log.info("핵심 Bean을 등록합니다: [SecurityFilterChain] (담당 경로 include={}, exclude={})",
+                securityProperties.getMatcher().getInclude(), securityProperties.getMatcher().getExclude());
+
+            // 0. 이 체인이 담당할 경로를 명시적으로 선언 (사용자 커스텀 체인과 공존, Fail-Open 방지)
+            http.securityMatcher(securityMatcher);
 
             // 1. Keycloak 핵심 설정을 Configurer에서 적용
             // (인증 필터, 프로바이더, 로그인, 로그아웃, 세션, CSRF 등)
