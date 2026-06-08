@@ -9,11 +9,14 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.util.AntPathMatcher;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -36,11 +39,13 @@ import java.util.UUID;
  * @author LeeBongSeung
  * @see MdcAuthenticationFilter
  */
+@Slf4j
 public class MdcRequestFilter extends OncePerRequestFilter {
 
     private static final String X_REQUEST_ID_HEADER = "X-Request-Id";
     private static final String X_FORWARDED_FOR_HEADER = "X-Forwarded-For";
     private static final String USER_AGENT_HEADER = "User-Agent";
+    private static final AntPathMatcher PATH_MATCHER = new AntPathMatcher();
 
     private final LoggingContextAccessor contextAccessor;
     private final KeycloakSecurityProperties securityProperties;
@@ -54,14 +59,45 @@ public class MdcRequestFilter extends OncePerRequestFilter {
         this.sanitizer = sanitizer;
     }
 
+    /**
+     * 로깅 제외 경로({@code keycloak.security.logging.exclude-patterns}, 기본 {@code /actuator/**})는
+     * MDC 필터를 적용하지 않습니다. 헬스/메트릭 스크랩의 요청 로그 노이즈를 제거합니다.
+     */
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        List<String> excludePatterns = securityProperties.getLogging().getExcludePatterns();
+        if (excludePatterns == null || excludePatterns.isEmpty()) {
+            return false;
+        }
+        String uri = request.getRequestURI();
+        if (uri == null) {
+            return false;
+        }
+        for (String pattern : excludePatterns) {
+            if (PATH_MATCHER.match(pattern, uri)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
+        long startTime = System.currentTimeMillis();
+        KeycloakLoggingProperties loggingProps = securityProperties.getLogging();
         try {
             populateRequestContext(request, response);
             chain.doFilter(request, response);
         } finally {
+            // 응답 메트릭 (status, durationMs) + 종료 로그 — 기본 off (Tomcat AccessLog와 중복)
+            if (loggingProps.isIncludeResponseMetrics()) {
+                contextAccessor.put(LoggingContextKeys.STATUS, String.valueOf(response.getStatus()));
+                contextAccessor.put(LoggingContextKeys.DURATION_MS,
+                        String.valueOf(System.currentTimeMillis() - startTime));
+                log.info("request completed");
+            }
             contextAccessor.clear();
         }
     }

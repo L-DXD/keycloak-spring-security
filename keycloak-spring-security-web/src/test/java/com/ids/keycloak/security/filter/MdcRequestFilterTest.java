@@ -22,6 +22,7 @@ import org.mockito.quality.Strictness;
 
 import java.io.IOException;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -252,6 +253,65 @@ class MdcRequestFilterTest {
             maskingFilter.doFilter(request, response, filterChain);
 
             verify(contextAccessor).put(LoggingContextKeys.QUERY_STRING, "email=a***@example.com");
+        }
+    }
+
+    @Nested
+    @DisplayName("응답 메트릭 (R4)")
+    class ResponseMetrics {
+
+        @Test
+        @DisplayName("includeResponseMetrics=true이면 status/durationMs를 저장한다")
+        void 메트릭_저장() throws ServletException, IOException {
+            loggingProperties.setIncludeResponseMetrics(true);
+            when(request.getMethod()).thenReturn("GET");
+            when(response.getStatus()).thenReturn(200);
+
+            mdcRequestFilter.doFilter(request, response, filterChain);
+
+            verify(contextAccessor).put(LoggingContextKeys.STATUS, "200");
+            verify(contextAccessor).put(eq(LoggingContextKeys.DURATION_MS), anyString());
+        }
+
+        @Test
+        @DisplayName("기본값(false)이면 메트릭을 저장하지 않는다")
+        void 기본_미저장() throws ServletException, IOException {
+            when(request.getMethod()).thenReturn("GET");
+
+            mdcRequestFilter.doFilter(request, response, filterChain);
+
+            verify(contextAccessor, never()).put(eq(LoggingContextKeys.STATUS), anyString());
+            verify(contextAccessor, never()).put(eq(LoggingContextKeys.DURATION_MS), anyString());
+        }
+    }
+
+    @Nested
+    @DisplayName("제외 경로 shouldNotFilter (R6)")
+    class ExcludePatterns {
+
+        @Test
+        @DisplayName("기본 제외 경로(/actuator/**)는 필터를 적용하지 않는다")
+        void actuator_제외() {
+            when(request.getRequestURI()).thenReturn("/actuator/health");
+
+            assertThat(mdcRequestFilter.shouldNotFilter(request)).isTrue();
+        }
+
+        @Test
+        @DisplayName("일반 경로는 필터를 적용한다")
+        void 일반경로_적용() {
+            when(request.getRequestURI()).thenReturn("/api/users");
+
+            assertThat(mdcRequestFilter.shouldNotFilter(request)).isFalse();
+        }
+
+        @Test
+        @DisplayName("excludePatterns를 커스텀하면 해당 경로가 제외된다")
+        void 커스텀_제외() {
+            loggingProperties.setExcludePatterns(java.util.List.of("/internal/**"));
+            when(request.getRequestURI()).thenReturn("/internal/ping");
+
+            assertThat(mdcRequestFilter.shouldNotFilter(request)).isTrue();
         }
     }
 }
