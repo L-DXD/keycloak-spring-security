@@ -28,6 +28,18 @@ public class KeycloakLoggingProperties {
     /** 클라이언트 IP 포함 여부 (기본값: true) */
     private boolean includeClientIp = true;
 
+    /** User-Agent 포함 여부 (기본값: true) — 마스킹 + 256자 제한 적용 */
+    private boolean includeUserAgent = true;
+
+    /** 쿼리 스트링 최대 길이 (초과 시 truncate, 기본값: 512) */
+    private int maxQueryLength = 512;
+
+    /** User-Agent 최대 길이 (초과 시 truncate, 기본값: 256) */
+    private int maxUserAgentLength = 256;
+
+    /** 응답 헤더 X-Request-Id 로 traceId 회신 여부 (기본값: true) */
+    private boolean returnTraceIdHeader = true;
+
     /** 사용자 ID 포함 여부 (기본값: true) */
     private boolean includeUserId = true;
 

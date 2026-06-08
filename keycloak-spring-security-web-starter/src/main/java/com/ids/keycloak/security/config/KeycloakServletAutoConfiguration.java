@@ -11,6 +11,8 @@ import com.ids.keycloak.security.exception.KeycloakAccessDeniedHandler;
 import com.ids.keycloak.security.ratelimit.InMemoryRateLimiter;
 import com.ids.keycloak.security.ratelimit.RateLimiter;
 import com.ids.keycloak.security.manager.KeycloakAuthorizationManager;
+import com.ids.keycloak.security.logging.DefaultPiiMaskingSanitizer;
+import com.ids.keycloak.security.logging.LoggingValueSanitizer;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
 import com.ids.keycloak.security.util.CookieUtil;
 import com.ids.keycloak.security.exception.KeycloakAuthenticationEntryPoint;
@@ -123,6 +125,17 @@ public class KeycloakServletAutoConfiguration {
         public ObjectMapper keycloakObjectMapper() {
             log.debug("지원 Bean을 등록합니다: [ObjectMapper]");
             return new ObjectMapper();
+        }
+
+        /**
+         * 로그 마스킹 SPI 기본 빈. 사용자가 {@link LoggingValueSanitizer} 빈을 등록하면 교체됩니다.
+         * 마스킹을 끄려면 {@code NoOpLoggingValueSanitizer}를 빈으로 등록하세요.
+         */
+        @Bean
+        @ConditionalOnMissingBean(LoggingValueSanitizer.class)
+        public LoggingValueSanitizer keycloakLoggingValueSanitizer() {
+            log.debug("지원 Bean을 등록합니다: [LoggingValueSanitizer] (DefaultPiiMaskingSanitizer, PII 마스킹 기본 on)");
+            return new DefaultPiiMaskingSanitizer();
         }
 
         @Configuration(proxyBeanMethods = false)
