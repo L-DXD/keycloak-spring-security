@@ -1,5 +1,10 @@
 # Architecture & Development Guidelines
 
+> 📖 **라이브러리를 도입하는 개발자라면 → [사용 가이드 (docs/GUIDE.md)](docs/GUIDE.md)** 를 보세요.
+> (빠른 시작 · 전체 설정 레퍼런스 · 기능별 가이드 · 마이그레이션 · 트러블슈팅)
+>
+> 아래 문서는 **라이브러리 기여자용** 아키텍처/개발 규칙입니다.
+
 이 문서는 **Keycloak Spring Security Open Source Library**의 아키텍처 원칙, 프로젝트 구조, 배포 전략, 그리고 설정 가이드를 정의합니다.
 본 프로젝트는 **Spring Security 공식 GitHub 리포지토리의 구조**를 따르며, **Servlet(Blocking)** 과 **Reactive(Non-blocking)** 스택을 모두 지원하는 것을 목표로 합니다.
 
