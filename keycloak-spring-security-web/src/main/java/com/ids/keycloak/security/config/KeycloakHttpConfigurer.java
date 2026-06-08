@@ -14,6 +14,8 @@ import com.ids.keycloak.security.filter.MdcRequestFilter;
 import com.ids.keycloak.security.filter.RateLimitFilter;
 import com.ids.keycloak.security.ratelimit.RateLimiter;
 import com.ids.keycloak.security.logging.LoggingContextAccessor;
+import com.ids.keycloak.security.logging.LoggingValueSanitizer;
+import com.ids.keycloak.security.logging.DefaultPiiMaskingSanitizer;
 import com.ids.keycloak.security.logging.WebMdcContextAccessor;
 import com.ids.keycloak.security.exception.KeycloakAccessDeniedHandler;
 import com.sd.KeycloakClient.factory.KeycloakClient;
@@ -241,8 +243,11 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
       );
 
         // 7. MDC 로깅 필터 등록
-        // 7-1. MdcRequestFilter: 인증 전 (최상단) - traceId, httpMethod, requestUri, clientIp
-        MdcRequestFilter mdcRequestFilter = new MdcRequestFilter(loggingContextAccessor, securityProperties);
+        // 7-1. MdcRequestFilter: 인증 전 (최상단) - traceId, httpMethod, requestUri, clientIp, query, userAgent
+        // 민감정보 마스킹은 LoggingValueSanitizer 빈에 위임(없으면 기본 PII 마스킹)
+        LoggingValueSanitizer loggingValueSanitizer = getBeanOrDefault(
+            context, LoggingValueSanitizer.class, new DefaultPiiMaskingSanitizer());
+        MdcRequestFilter mdcRequestFilter = new MdcRequestFilter(loggingContextAccessor, securityProperties, loggingValueSanitizer);
         http.addFilterBefore(mdcRequestFilter, SecurityContextHolderFilter.class);
 
         // 7-2. MdcAuthenticationFilter: 인증 후 (AuthorizationFilter 앞) - userId, username, sessionId
