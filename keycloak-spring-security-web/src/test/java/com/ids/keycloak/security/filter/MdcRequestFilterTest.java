@@ -2,13 +2,16 @@ package com.ids.keycloak.security.filter;
 
 import com.ids.keycloak.security.config.KeycloakLoggingProperties;
 import com.ids.keycloak.security.config.KeycloakSecurityProperties;
+import com.ids.keycloak.security.logging.DefaultPiiMaskingSanitizer;
 import com.ids.keycloak.security.logging.LoggingContextAccessor;
 import com.ids.keycloak.security.logging.LoggingContextKeys;
+import com.ids.keycloak.security.logging.NoOpLoggingValueSanitizer;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -20,6 +23,7 @@ import org.mockito.quality.Strictness;
 import java.io.IOException;
 
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -47,7 +51,8 @@ class MdcRequestFilterTest {
     void setUp() {
         securityProperties = new KeycloakSecurityProperties();
         loggingProperties = securityProperties.getLogging();
-        mdcRequestFilter = new MdcRequestFilter(contextAccessor, securityProperties);
+        // 기본 필터는 마스킹 비활성(NoOp)으로 두어 변환 로직(디코딩/truncate)만 격리 검증
+        mdcRequestFilter = new MdcRequestFilter(contextAccessor, securityProperties, new NoOpLoggingValueSanitizer());
     }
 
     @Nested
@@ -95,8 +100,6 @@ class MdcRequestFilterTest {
         void 쿼리스트링_설정이_비활성화된_경우_저장되지_않는다() throws ServletException, IOException {
             // Given
             loggingProperties.setIncludeQueryString(false);
-            // when(request.getQueryString()).thenReturn("param=value"); // 호출되지 않으므로 제거
-
             when(request.getMethod()).thenReturn("GET"); // 기본 로깅 메서드 호출 방어
 
             // When
@@ -149,6 +152,106 @@ class MdcRequestFilterTest {
 
             // Then
             verify(contextAccessor).put(LoggingContextKeys.CLIENT_IP, "10.0.0.1");
+        }
+    }
+
+    @Nested
+    @DisplayName("X-Request-Id 응답 회신")
+    class TraceIdHeader {
+
+        @Test
+        @DisplayName("기본값(true)이면 응답 헤더에 traceId를 회신한다")
+        void 응답_헤더에_회신() throws ServletException, IOException {
+            when(request.getHeader("X-Request-Id")).thenReturn("trace-abc");
+            when(request.getMethod()).thenReturn("GET");
+
+            mdcRequestFilter.doFilter(request, response, filterChain);
+
+            verify(response).setHeader("X-Request-Id", "trace-abc");
+        }
+
+        @Test
+        @DisplayName("returnTraceIdHeader=false이면 회신하지 않는다")
+        void 회신_비활성화() throws ServletException, IOException {
+            loggingProperties.setReturnTraceIdHeader(false);
+            when(request.getHeader("X-Request-Id")).thenReturn("trace-abc");
+            when(request.getMethod()).thenReturn("GET");
+
+            mdcRequestFilter.doFilter(request, response, filterChain);
+
+            verify(response, never()).setHeader(eq("X-Request-Id"), anyString());
+        }
+    }
+
+    @Nested
+    @DisplayName("userAgent (R2)")
+    class UserAgent {
+
+        @Test
+        @DisplayName("기본 활성화 시 User-Agent를 MDC에 저장한다")
+        void userAgent_저장() throws ServletException, IOException {
+            when(request.getHeader("User-Agent")).thenReturn("Mozilla/5.0");
+            when(request.getMethod()).thenReturn("GET");
+
+            mdcRequestFilter.doFilter(request, response, filterChain);
+
+            verify(contextAccessor).put(LoggingContextKeys.USER_AGENT, "Mozilla/5.0");
+        }
+
+        @Test
+        @DisplayName("최대 길이(256)를 초과하면 truncate된다")
+        void userAgent_truncate() throws ServletException, IOException {
+            String longUa = "A".repeat(300);
+            when(request.getHeader("User-Agent")).thenReturn(longUa);
+            when(request.getMethod()).thenReturn("GET");
+
+            mdcRequestFilter.doFilter(request, response, filterChain);
+
+            verify(contextAccessor).put(eq(LoggingContextKeys.USER_AGENT),
+                argThat(v -> v.length() == 256 + "...[truncated]".length() && v.endsWith("...[truncated]")));
+        }
+
+        @Test
+        @DisplayName("includeUserAgent=false이면 저장하지 않는다")
+        void userAgent_비활성화() throws ServletException, IOException {
+            loggingProperties.setIncludeUserAgent(false);
+            when(request.getMethod()).thenReturn("GET");
+
+            mdcRequestFilter.doFilter(request, response, filterChain);
+
+            verify(contextAccessor, never()).put(eq(LoggingContextKeys.USER_AGENT), anyString());
+        }
+    }
+
+    @Nested
+    @DisplayName("queryString 정제 (R3)")
+    class QueryStringSanitize {
+
+        @Test
+        @DisplayName("URL 인코딩된 쿼리는 디코딩되어 저장된다")
+        void query_디코딩() throws ServletException, IOException {
+            loggingProperties.setIncludeQueryString(true);
+            when(request.getQueryString()).thenReturn("name%3DJohn%20Doe");
+            when(request.getMethod()).thenReturn("GET");
+
+            mdcRequestFilter.doFilter(request, response, filterChain);
+
+            verify(contextAccessor).put(LoggingContextKeys.QUERY_STRING, "name=John Doe");
+        }
+
+        @Test
+        @DisplayName("PII 마스킹 sanitizer가 적용되면 쿼리의 이메일이 마스킹된다")
+        void query_마스킹() throws ServletException, IOException {
+            // 마스킹 sanitizer를 적용한 별도 필터
+            MdcRequestFilter maskingFilter =
+                new MdcRequestFilter(contextAccessor, securityProperties, new DefaultPiiMaskingSanitizer());
+            loggingProperties.setIncludeQueryString(true);
+            when(request.getQueryString()).thenReturn("email=alice@example.com");
+            when(request.getMethod()).thenReturn("GET");
+
+            maskingFilter.doFilter(request, response, filterChain);
+
+            verify(contextAccessor).put(LoggingContextKeys.QUERY_STRING, "email=a***@example.com");
         }
     }
 }
