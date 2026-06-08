@@ -92,4 +92,24 @@ public class KeycloakSecurityProperties {
      */
     @NestedConfigurationProperty
     private KeycloakRateLimitProperties rateLimit = new KeycloakRateLimitProperties();
+
+    /**
+     * Keycloak {@code SecurityFilterChain}이 담당할 요청 경로 매처 설정.
+     * <p>
+     * 사용자가 자체 {@code SecurityFilterChain}(예: {@code /actuator} 전용)을 추가하더라도
+     * Keycloak 체인이 함께 등록되어 담당 경로를 책임지도록 분리합니다. 기본값은 전체 경로({@code /**}).
+     * </p>
+     */
+    @NestedConfigurationProperty
+    private KeycloakMatcherProperties matcher = new KeycloakMatcherProperties();
+
+    /**
+     * Keycloak 기본 {@code SecurityFilterChain} 자동 등록 여부 (기본값: {@code true}).
+     * <p>
+     * {@code false}로 설정하면 Keycloak 기본 체인이 등록되지 않으며, 사용자가 전체
+     * {@code SecurityFilterChain} 구성을 직접 책임집니다. (필요 시에만 명시적으로 opt-out)
+     * </p>
+     */
+    @Setter
+    private boolean autoFilterChain = true;
 }
