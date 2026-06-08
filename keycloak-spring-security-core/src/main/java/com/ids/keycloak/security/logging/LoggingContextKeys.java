@@ -24,6 +24,9 @@ public final class LoggingContextKeys {
     /** 클라이언트 IP 주소 */
     public static final String CLIENT_IP = "clientIp";
 
+    /** User-Agent 헤더 (마스킹 + 길이 제한 적용) */
+    public static final String USER_AGENT = "userAgent";
+
     // ===== 인증 정보 (인증 후 설정) =====
 
     /** 인증된 사용자 ID (Keycloak sub claim) */
