@@ -27,6 +27,14 @@ public final class LoggingContextKeys {
     /** User-Agent 헤더 (마스킹 + 길이 제한 적용) */
     public static final String USER_AGENT = "userAgent";
 
+    // ===== 응답 메트릭 (요청 종료 시 설정) =====
+
+    /** HTTP 응답 상태 코드 */
+    public static final String STATUS = "status";
+
+    /** 요청 처리 소요 시간 (밀리초) */
+    public static final String DURATION_MS = "durationMs";
+
     // ===== 인증 정보 (인증 후 설정) =====
 
     /** 인증된 사용자 ID (Keycloak sub claim) */
