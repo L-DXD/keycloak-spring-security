@@ -20,6 +20,7 @@ import org.springframework.security.authentication.ReactiveAuthenticationManager
 import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.oauth2.client.ReactiveOAuth2AuthorizedClientService;
 import org.springframework.security.oauth2.client.registration.ReactiveClientRegistrationRepository;
+import org.springframework.security.oauth2.client.web.server.ServerOAuth2AuthorizationRequestResolver;
 import org.springframework.security.web.server.SecurityWebFilterChain;
 
 /**
@@ -50,7 +51,8 @@ class KeycloakWebFluxFilterChainConditionsTest {
             ObjectProvider.class,  // ReactiveAuthLoggingFilter
             ObjectProvider.class,  // ReactiveClientRegistrationRepository
             ObjectProvider.class,  // ReactiveOAuth2AuthorizedClientService
-            ObjectProvider.class   // ReactiveBackChannelLogoutEndpointFilter
+            ObjectProvider.class,  // ReactiveBackChannelLogoutEndpointFilter
+            ObjectProvider.class   // ServerOAuth2AuthorizationRequestResolver
         );
   }
 

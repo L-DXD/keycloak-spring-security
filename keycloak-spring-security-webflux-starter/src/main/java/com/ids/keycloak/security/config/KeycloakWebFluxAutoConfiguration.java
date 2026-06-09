@@ -21,6 +21,7 @@ import io.micrometer.context.ContextRegistry;
 import jakarta.annotation.PostConstruct;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -43,7 +44,10 @@ import org.springframework.security.oauth2.client.InMemoryReactiveOAuth2Authoriz
 import org.springframework.security.oauth2.client.ReactiveOAuth2AuthorizedClientService;
 import org.springframework.security.oauth2.client.registration.ReactiveClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.server.AuthenticatedPrincipalServerOAuth2AuthorizedClientRepository;
+import org.springframework.security.oauth2.client.web.server.DefaultServerOAuth2AuthorizationRequestResolver;
+import org.springframework.security.oauth2.client.web.server.ServerOAuth2AuthorizationRequestResolver;
 import org.springframework.security.oauth2.client.web.server.ServerOAuth2AuthorizedClientRepository;
+import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.security.web.server.util.matcher.PathPatternParserServerWebExchangeMatcher;
 import org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher;
@@ -200,6 +204,57 @@ public class KeycloakWebFluxAutoConfiguration {
         ReactiveOAuth2AuthorizedClientService authorizedClientService) {
       log.debug("지원 Bean을 등록합니다: [ServerOAuth2AuthorizedClientRepository]");
       return new AuthenticatedPrincipalServerOAuth2AuthorizedClientRepository(authorizedClientService);
+    }
+
+    /**
+     * OIDC authorize 요청 파라미터(acr_values, max_age, prompt)를 커스터마이즈하는
+     * {@link ServerOAuth2AuthorizationRequestResolver} 빈을 등록합니다.
+     *
+     * <p>사용자가 직접 {@link ServerOAuth2AuthorizationRequestResolver} 빈을 등록하면 이 빈은 생략됩니다.
+     * {@code keycloak.security.authentication.authorization-request.*} 설정이 모두 null이면
+     * customizer가 아무것도 추가하지 않으므로 기존 동작과 완전히 동일합니다(회귀 0).</p>
+     */
+    @Bean
+    @ConditionalOnMissingBean(ServerOAuth2AuthorizationRequestResolver.class)
+    public ServerOAuth2AuthorizationRequestResolver keycloakServerAuthorizationRequestResolver(
+        ReactiveClientRegistrationRepository clientRegistrationRepository,
+        KeycloakSecurityProperties securityProperties) {
+      log.debug("지원 Bean을 등록합니다: [ServerOAuth2AuthorizationRequestResolver] "
+          + "(Keycloak OIDC authorize 파라미터 커스터마이즈)");
+      DefaultServerOAuth2AuthorizationRequestResolver resolver =
+          new DefaultServerOAuth2AuthorizationRequestResolver(clientRegistrationRepository);
+
+      resolver.setAuthorizationRequestCustomizer(
+          buildAuthorizationRequestCustomizer(
+              securityProperties.getAuthentication().getAuthorizationRequest()));
+
+      return resolver;
+    }
+
+    /**
+     * acr_values, max_age, prompt를 additionalParameters에 주입하는 customizer를 생성합니다.
+     *
+     * <p>null인 필드는 추가하지 않습니다. 세 필드가 모두 null이면 아무것도 추가하지 않습니다.</p>
+     *
+     * <p>테스트가 복제 로직 없이 이 메서드를 직접 호출하여 프로덕션 코드를 검증합니다.</p>
+     */
+    protected static Consumer<OAuth2AuthorizationRequest.Builder>
+    buildAuthorizationRequestCustomizer(KeycloakAuthorizationRequestProperties props) {
+      return builder -> {
+        String acrValues = props.getAcrValues();
+        Integer maxAge = props.getMaxAge();
+        String prompt = props.getPrompt();
+
+        if (acrValues != null) {
+          builder.additionalParameters(p -> p.put("acr_values", acrValues));
+        }
+        if (maxAge != null) {
+          builder.additionalParameters(p -> p.put("max_age", String.valueOf(maxAge)));
+        }
+        if (prompt != null) {
+          builder.additionalParameters(p -> p.put("prompt", prompt));
+        }
+      };
     }
   }
 
@@ -413,7 +468,8 @@ public class KeycloakWebFluxAutoConfiguration {
         org.springframework.beans.factory.ObjectProvider<ReactiveAuthLoggingFilter> authLoggingFilterProvider,
         org.springframework.beans.factory.ObjectProvider<ReactiveClientRegistrationRepository> clientRegistrationRepoProvider,
         org.springframework.beans.factory.ObjectProvider<ReactiveOAuth2AuthorizedClientService> authorizedClientServiceProvider,
-        org.springframework.beans.factory.ObjectProvider<ReactiveBackChannelLogoutEndpointFilter> backChannelFilterProvider)
+        org.springframework.beans.factory.ObjectProvider<ReactiveBackChannelLogoutEndpointFilter> backChannelFilterProvider,
+        org.springframework.beans.factory.ObjectProvider<ServerOAuth2AuthorizationRequestResolver> authorizationRequestResolverProvider)
         throws Exception {
 
       ServerWebExchangeMatcher securityMatcher = buildSecurityMatcher(securityProperties.getMatcher());
@@ -433,6 +489,8 @@ public class KeycloakWebFluxAutoConfiguration {
           authorizedClientServiceProvider.getIfAvailable();
       ReactiveBackChannelLogoutEndpointFilter backChannelFilter =
           backChannelFilterProvider.getIfAvailable();
+      ServerOAuth2AuthorizationRequestResolver authorizationRequestResolver =
+          authorizationRequestResolverProvider.getIfAvailable();
 
       return KeycloakWebFluxSecurityConfigurer.configure(
           http,
@@ -448,7 +506,8 @@ public class KeycloakWebFluxAutoConfiguration {
           authLoggingFilter,
           clientRegistrationRepo,
           authorizedClientService,
-          backChannelFilter);
+          backChannelFilter,
+          authorizationRequestResolver);
     }
 
     /**

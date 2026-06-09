@@ -29,6 +29,7 @@ import org.springframework.security.config.annotation.web.configurers.AbstractHt
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInitiatedLogoutSuccessHandler;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestResolver;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
 import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
@@ -137,10 +138,18 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
       );
 
       // === 3. OIDC 로그인 설정 ===
-      http.oauth2Login(login -> login
-          .successHandler(oidcLoginSuccessHandler)
-          .authorizedClientRepository(authorizedClientRepository)
-      );
+      // AuthorizationRequestResolver: 사용자 등록 빈 우선, 없으면 기본 resolver 사용
+      OAuth2AuthorizationRequestResolver authorizationRequestResolver =
+          context.getBeanProvider(OAuth2AuthorizationRequestResolver.class).getIfAvailable();
+
+      http.oauth2Login(login -> {
+          login.successHandler(oidcLoginSuccessHandler)
+               .authorizedClientRepository(authorizedClientRepository);
+          if (authorizationRequestResolver != null) {
+              login.authorizationEndpoint(ep ->
+                  ep.authorizationRequestResolver(authorizationRequestResolver));
+          }
+      });
 
       // === 4. 로그아웃 설정 ===
       // 4-1. Front-Channel 로그아웃 (사용자가 직접 로그아웃)
