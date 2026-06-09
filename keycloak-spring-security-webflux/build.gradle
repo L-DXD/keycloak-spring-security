@@ -20,6 +20,37 @@ dependencies {
 
     // ErrorHandler에서 JSON 응답을 생성하기 위해 사용
     implementation 'com.fasterxml.jackson.core:jackson-databind'
+
+    // Bean Validation (DTO @NotBlank/@Valid 지원)
+    compileOnly 'jakarta.validation:jakarta.validation-api'
+
+    // OAuth2 Client (OIDC 로그인/로그아웃 성공 핸들러, ReactiveClientRegistrationRepository 등)
+    // spring-boot-starter-webflux가 전이하지 않으므로 명시 추가. 사용자가 OIDC 로그인을 쓸 때만 런타임 제공.
+    compileOnly 'org.springframework.security:spring-security-oauth2-client'
+
+    // MDC ↔ Reactor Context 자동 브릿지 (io.micrometer:context-propagation)
+    // reactor-core가 context-propagation API를 transitively 포함하지만,
+    // 실제 SPI 구현은 별도 라이브러리가 필요하므로 implementation으로 추가.
+    // Spring Boot 3.2+ BOM에 micrometer-context-propagation 버전이 관리됨.
+    implementation 'io.micrometer:context-propagation'
+
+    // Spring Session Reactive (ReactiveFindByIndexNameSessionRepository 인터페이스)
+    // 사용자가 Redis Reactive 등 Spring Session 구현체를 사용할 때만 Back-Channel 로그아웃이 활성화됨.
+    // compileOnly: 컴파일 시에만 필요하며 런타임 의존성은 사용자 프로젝트가 제공.
+    // servlet starter가 session 의존성을 compileOnly로 둔 선례와 동일.
+    compileOnly 'org.springframework.session:spring-session-core'
+
+    // Test: Reactive 스트림 검증 (StepVerifier) + WebTestClient
+    testImplementation 'io.projectreactor:reactor-test'
+    testImplementation 'org.springframework.boot:spring-boot-starter-webflux'
+    testImplementation 'org.springframework:spring-test'
+    testImplementation 'org.springframework.security:spring-security-test'
+    // Back-Channel 로그아웃 테스트: spring-session-core (compileOnly → test에서도 필요)
+    testImplementation 'org.springframework.session:spring-session-core'
+    // OIDC 로그인 성공 핸들러 테스트
+    testImplementation 'org.springframework.security:spring-security-oauth2-client'
+    // DTO @NotBlank 테스트용 Hibernate Validator (spring-boot-starter-validation 전이)
+    testImplementation 'org.springframework.boot:spring-boot-starter-validation'
 }
 
 signing {
