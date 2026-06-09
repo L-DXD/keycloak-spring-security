@@ -109,6 +109,8 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           name: "v${{ steps.version.outputs.version }}"
+          # 직전 태그 이후 머지된 PR 기반 "What's Changed" 변경내역 자동 생성 (.github/release.yml 카테고리 적용)
+          generate_release_notes: true
           body: |
             ## Keycloak Spring Security v${{ steps.version.outputs.version }}
 
