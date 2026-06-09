@@ -38,6 +38,7 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-starter-webflux'
     testImplementation 'org.springframework:spring-test'
     testImplementation 'org.springframework.security:spring-security-oauth2-client'
+    testImplementation 'io.projectreactor:reactor-test'
 }
 
 signing {
