@@ -28,6 +28,7 @@ import org.springframework.security.oauth2.client.ReactiveOAuth2AuthorizedClient
 import org.springframework.security.oauth2.client.oidc.web.server.logout.OidcClientInitiatedServerLogoutSuccessHandler;
 import org.springframework.security.oauth2.client.registration.ReactiveClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.server.ServerOAuth2AuthorizedClientRepository;
+import org.springframework.security.oauth2.client.web.server.ServerOAuth2AuthorizationRequestResolver;
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.security.web.server.authentication.AuthenticationWebFilter;
 import org.springframework.security.web.server.context.NoOpServerSecurityContextRepository;
@@ -67,7 +68,8 @@ public final class KeycloakWebFluxSecurityConfigurer {
    * @param authLoggingFilter         인증 로깅 WebFilter (null 가능)
    * @param clientRegistrationRepo    ReactiveClientRegistrationRepository (OIDC 로그인/로그아웃용)
    * @param authorizedClientService   ReactiveOAuth2AuthorizedClientService (토큰 조회용)
-   * @param backChannelFilter         BackChannel 로그아웃 필터 (null 가능 — Spring Session 없으면 null)
+   * @param backChannelFilter              BackChannel 로그아웃 필터 (null 가능 — Spring Session 없으면 null)
+   * @param authorizationRequestResolver   OIDC authorize 요청 파라미터 커스터마이즈 resolver (null 가능 — null이면 기본 동작)
    * @return 구성된 {@link SecurityWebFilterChain}
    */
   public static SecurityWebFilterChain configure(
@@ -84,7 +86,8 @@ public final class KeycloakWebFluxSecurityConfigurer {
       ReactiveAuthLoggingFilter authLoggingFilter,
       ReactiveClientRegistrationRepository clientRegistrationRepo,
       ReactiveOAuth2AuthorizedClientService authorizedClientService,
-      ReactiveBackChannelLogoutEndpointFilter backChannelFilter) throws Exception {
+      ReactiveBackChannelLogoutEndpointFilter backChannelFilter,
+      ServerOAuth2AuthorizationRequestResolver authorizationRequestResolver) throws Exception {
 
     // 1. SecurityContext를 세션에 저장하지 않음 — 매 요청마다 필터가 인증 처리
     http.securityContextRepository(NoOpServerSecurityContextRepository.getInstance());
@@ -173,9 +176,12 @@ public final class KeycloakWebFluxSecurityConfigurer {
           securityProperties.getCookie(),
           defaultSuccessUrl != null ? defaultSuccessUrl : "/");
 
-      http.oauth2Login(login -> login
-          .authenticationSuccessHandler(oidcSuccessHandler)
-      );
+      http.oauth2Login(login -> {
+          login.authenticationSuccessHandler(oidcSuccessHandler);
+          if (authorizationRequestResolver != null) {
+              login.authorizationRequestResolver(authorizationRequestResolver);
+          }
+      });
       log.info("[Configurer] OIDC oauth2Login 등록 완료 (defaultSuccessUrl={}).", defaultSuccessUrl);
     } else {
       log.debug("[Configurer] ReactiveClientRegistrationRepository 또는 "

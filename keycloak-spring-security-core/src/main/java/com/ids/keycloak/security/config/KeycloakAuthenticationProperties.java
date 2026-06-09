@@ -2,6 +2,7 @@ package com.ids.keycloak.security.config;
 
 import lombok.Getter;
 import lombok.Setter;
+import org.springframework.boot.context.properties.NestedConfigurationProperty;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -17,7 +18,7 @@ import java.util.List;
  *       permit-all-paths:
  *         - /public/**
  *         - /health
- *       default_success_url: /home
+ *       default-success-url: /home
  * </pre>
  * </p>
  */
@@ -53,4 +54,27 @@ public class KeycloakAuthenticationProperties {
      * </p>
      */
     private List<String> loginPaths = new ArrayList<>(List.of("/api/keycloak/login"));
+
+    /**
+     * OIDC authorize 요청에 추가할 파라미터 설정.
+     * <p>
+     * acr_values, max_age, prompt 파라미터를 제어합니다.
+     * 모든 필드의 기본값은 null이므로 미설정 시 기존 authorize 요청과 동일하게 동작합니다.
+     * </p>
+     * <p>
+     * application.yaml:
+     * <pre>
+     * keycloak:
+     *   security:
+     *     authentication:
+     *       authorization-request:
+     *         acr-values: "gold"
+     *         max-age: 3600
+     *         prompt: "login"
+     * </pre>
+     * </p>
+     */
+    @NestedConfigurationProperty
+    private KeycloakAuthorizationRequestProperties authorizationRequest =
+        new KeycloakAuthorizationRequestProperties();
 }
