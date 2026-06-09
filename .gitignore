@@ -52,3 +52,6 @@ postman/
 
 # GPG signing key (절대 커밋 금지)
 secret.asc
+
+# Claude Code Bash 도구가 생성하는 cwd 추적 임시파일 (커밋 금지)
+tmpclaude-*
