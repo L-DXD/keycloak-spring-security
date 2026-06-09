@@ -1,0 +1,29 @@
+# GitHub 자동 릴리스 노트("What's Changed") 카테고리 설정
+# publish.yml의 generate_release_notes: true 와 함께 동작한다.
+# PR 라벨이 있으면 해당 카테고리로, 없으면 "🔧 기타 변경"으로 분류된다.
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+      - skip-changelog
+  categories:
+    - title: 🚀 New Features
+      labels:
+        - enhancement
+        - feature
+        - feat
+    - title: 🐛 Bug Fixes
+      labels:
+        - bug
+        - fix
+        - bugfix
+    - title: 🔒 Security
+      labels:
+        - security
+    - title: 📝 Documentation
+      labels:
+        - documentation
+        - docs
+    - title: 🔧 기타 변경
+      labels:
+        - "*"
