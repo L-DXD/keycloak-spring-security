@@ -37,6 +37,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import java.util.function.Consumer;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.ProviderManager;
@@ -45,7 +46,11 @@ import org.springframework.security.config.annotation.method.configuration.Enabl
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInitiatedLogoutSuccessHandler;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.client.web.DefaultOAuth2AuthorizationRequestResolver;
+import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestRedirectFilter;
+import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestResolver;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
+import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
 import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.util.matcher.RequestMatcher;
@@ -298,6 +303,59 @@ public class KeycloakServletAutoConfiguration {
         public KeycloakAuthorizationManager keycloakAuthorizationManager(KeycloakClient keycloakClient) {
             log.debug("지원 Bean을 등록합니다: [KeycloakAuthorizationManager]");
             return new KeycloakAuthorizationManager(keycloakClient);
+        }
+
+        /**
+         * OIDC authorize 요청 파라미터(acr_values, max_age, prompt)를 커스터마이즈하는
+         * {@link OAuth2AuthorizationRequestResolver} 빈을 등록합니다.
+         *
+         * <p>사용자가 직접 {@link OAuth2AuthorizationRequestResolver} 빈을 등록하면 이 빈은 생략됩니다.
+         * {@code keycloak.security.authentication.authorization-request.*} 설정이 모두 null이면
+         * customizer가 아무것도 추가하지 않으므로 기존 동작과 완전히 동일합니다(회귀 0).</p>
+         */
+        @Bean
+        @ConditionalOnMissingBean(OAuth2AuthorizationRequestResolver.class)
+        public OAuth2AuthorizationRequestResolver keycloakAuthorizationRequestResolver(
+            ClientRegistrationRepository clientRegistrationRepository,
+            KeycloakSecurityProperties securityProperties
+        ) {
+            log.debug("지원 Bean을 등록합니다: [OAuth2AuthorizationRequestResolver] (Keycloak OIDC authorize 파라미터 커스터마이즈)");
+            DefaultOAuth2AuthorizationRequestResolver resolver =
+                new DefaultOAuth2AuthorizationRequestResolver(
+                    clientRegistrationRepository,
+                    OAuth2AuthorizationRequestRedirectFilter.DEFAULT_AUTHORIZATION_REQUEST_BASE_URI);
+
+            resolver.setAuthorizationRequestCustomizer(
+                buildAuthorizationRequestCustomizer(
+                    securityProperties.getAuthentication().getAuthorizationRequest()));
+
+            return resolver;
+        }
+
+        /**
+         * acr_values, max_age, prompt를 additionalParameters에 주입하는 customizer를 생성합니다.
+         *
+         * <p>null인 필드는 추가하지 않습니다. 세 필드가 모두 null이면 아무것도 추가하지 않습니다.</p>
+         *
+         * <p>테스트가 복제 로직 없이 이 메서드를 직접 호출하여 프로덕션 코드를 검증합니다.</p>
+         */
+        protected static Consumer<OAuth2AuthorizationRequest.Builder>
+        buildAuthorizationRequestCustomizer(KeycloakAuthorizationRequestProperties props) {
+            return builder -> {
+                String acrValues = props.getAcrValues();
+                Integer maxAge = props.getMaxAge();
+                String prompt = props.getPrompt();
+
+                if (acrValues != null) {
+                    builder.additionalParameters(p -> p.put("acr_values", acrValues));
+                }
+                if (maxAge != null) {
+                    builder.additionalParameters(p -> p.put("max_age", String.valueOf(maxAge)));
+                }
+                if (prompt != null) {
+                    builder.additionalParameters(p -> p.put("prompt", prompt));
+                }
+            };
         }
 
         /**

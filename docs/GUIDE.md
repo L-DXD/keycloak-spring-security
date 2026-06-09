@@ -3,7 +3,7 @@
 Keycloak을 Spring Security에 통합하는 라이브러리입니다. 의존성 하나와 최소 설정으로 OIDC 로그인·세션·로그아웃·인가가 자동 구성됩니다.
 
 - **지원**: JDK 17+, Spring Boot 3.5.x, Spring Security 6.5.x
-- **현재 버전**: `1.8.0`
+- **현재 버전**: `1.9.0`
 - **스택**: Servlet(Spring MVC) / **Reactive(WebFlux) — v1.8.0부터 servlet과 기능 동등** ([8. Reactive](#8-reactivewebflux))
 - 이 문서는 **도입 개발자용 사용 가이드**입니다. 아키텍처/기여 규칙은 [README](../README.md) 참고.
 
@@ -112,6 +112,9 @@ MdcRequestFilter (traceId 등 MDC)
 | `authentication.permit-all-paths` | `[]` | 인증 없이 허용할 경로 (Ant) |
 | `authentication.default-success-url` | `/` | 로그인 성공 후 리다이렉트 |
 | `authentication.login-paths` | `[/api/keycloak/login]` | body 기반 로그인으로 분류할 경로 |
+| `authentication.authorization-request.acr-values` | (없음) | OIDC authorize 요청의 `acr_values` (LoA step-up). 예: `loa2` |
+| `authentication.authorization-request.max-age` | (없음) | `max_age`(초). 마지막 인증 후 경과 시 재인증. 예: `1800` |
+| `authentication.authorization-request.prompt` | (없음) | `prompt`. `login`(강제 재인증)/`consent`/`none`/`select_account` |
 
 ### 3.2 인가 (`authorization`)
 | 키 | 기본값 | 설명 |
@@ -263,6 +266,34 @@ SecurityFilterChain actuatorChain(HttpSecurity http) throws Exception {
 ```
 Keycloak 기본 체인을 끄고 직접 구성하려면 `auto-filter-chain: false`. 자세히는 [12](12-SecurityFilterChain-FailOpen-수정.md).
 
+### 4.9 재인증 / Step-up (acr_values · max_age · prompt) (v1.9.0+)
+Keycloak LoA step-up·재인증을 쓰려면 OIDC authorize 요청에 `acr_values`/`max_age`/`prompt`를 실어야 합니다. 라이브러리가 `oauth2Login`에 resolver를 연결하므로, **두 가지 방법**으로 주입할 수 있습니다.
+
+**(1) 전역 — 프로퍼티 (모든 로그인에 동일 적용)**
+```yaml
+keycloak:
+  security:
+    authentication:
+      authorization-request:
+        max-age: 1800       # 마지막 인증 후 30분 경과 시 재인증
+        # acr-values: loa2  # LoA step-up
+        # prompt: login     # 강제 재인증
+```
+
+**(2) 경로별 Step-up — 커스텀 resolver 빈 (특정 경로에서만 강한 인증)**
+`OAuth2AuthorizationRequestResolver`(servlet)/`ServerOAuth2AuthorizationRequestResolver`(reactive) 빈을 등록하면 라이브러리 기본 빈을 대체합니다(`@ConditionalOnMissingBean`). 요청 경로를 보고 동적으로 `acr_values`를 결정:
+```java
+@Bean
+OAuth2AuthorizationRequestResolver authorizationRequestResolver(ClientRegistrationRepository repo) {
+    var resolver = new DefaultOAuth2AuthorizationRequestResolver(repo, "/oauth2/authorization"); // baseUri 유지
+    resolver.setAuthorizationRequestCustomizer(builder ->
+        builder.additionalParameters(p -> p.put("acr_values", "loa2")));  // 조건 분기 가능
+    return resolver;
+}
+```
+> ⚠️ 커스텀 빈을 등록할 때 baseUri는 `/oauth2/authorization`을 유지해야 로그인 진입 경로가 깨지지 않습니다.
+> ⚠️ `prompt=none` + `max_age`를 함께 쓰고 재인증이 필요하면 Keycloak이 `login_required` 에러를 반환합니다(정상 동작).
+
 ---
 
 ## 5. 확장점
@@ -290,6 +321,7 @@ LoggingValueSanitizer loggingValueSanitizer() {
 
 | 버전 | 변경 | 주의 |
 |------|------|------|
+| **1.9.0** | OIDC authorize 파라미터(`acr_values`/`max_age`/`prompt`) 커스터마이즈 — LoA step-up·재인증 | 미설정 시 무동작(회귀 0). 경로별 step-up은 resolver 빈 재정의([4.9](#49-재인증--step-up-acr_values--max_age--prompt-v190)) |
 | **1.8.0** | **Reactive(WebFlux) 스택 추가** — servlet과 기능 동등 (OIDC 로그인·세션·인가·Bearer·Basic·RateLimit·CSRF·로그아웃·MDC 로깅) | `keycloak-spring-security-webflux-starter` 신규. servlet 사용자는 영향 없음 |
 | **1.7.0** | 응답 메트릭(status/durationMs, 기본 off) + exclude-patterns(/actuator) | — |
 | **1.6.0** | MDC PII 마스킹 **기본 on** + userAgent/query 정제 + X-Request-Id 회신 | 로그 PII가 마스킹됨. 해제는 `NoOpLoggingValueSanitizer` |
