@@ -22,6 +22,22 @@ dependencies {
 
     // 사용자의 프로젝트 환경에 따라 필요한 의존성만 전이되도록 compileOnly로 설정
     compileOnly 'org.springframework.boot:spring-boot-starter-webflux'
+
+    // Spring Session Reactive Back-Channel 로그아웃 조건부 등록용
+    // webflux 모듈과 동일하게 compileOnly: 사용자가 Spring Session을 사용할 때만 활성화
+    compileOnly 'org.springframework.session:spring-session-core'
+
+    // MDC Context Propagation 조건부 등록용 (ContextRegistry 임포트 필요)
+    // webflux 모듈에서 implementation으로 전이되므로 compileOnly로 충분
+    compileOnly 'io.micrometer:context-propagation'
+
+    // OAuth2 Client (OIDC 로그인/로그아웃 빈 등록, ReactiveClientRegistrationRepository 조건부 처리)
+    compileOnly 'org.springframework.security:spring-security-oauth2-client'
+
+    // Test
+    testImplementation 'org.springframework.boot:spring-boot-starter-webflux'
+    testImplementation 'org.springframework:spring-test'
+    testImplementation 'org.springframework.security:spring-security-oauth2-client'
 }
 
 signing {

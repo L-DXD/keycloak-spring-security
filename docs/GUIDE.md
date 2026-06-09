@@ -3,7 +3,8 @@
 Keycloak을 Spring Security에 통합하는 라이브러리입니다. 의존성 하나와 최소 설정으로 OIDC 로그인·세션·로그아웃·인가가 자동 구성됩니다.
 
 - **지원**: JDK 17+, Spring Boot 3.5.x, Spring Security 6.5.x
-- **현재 버전**: `1.7.0`
+- **현재 버전**: `1.8.0`
+- **스택**: Servlet(Spring MVC) / **Reactive(WebFlux) — v1.8.0부터 servlet과 기능 동등** ([8. Reactive](#8-reactivewebflux))
 - 이 문서는 **도입 개발자용 사용 가이드**입니다. 아키텍처/기여 규칙은 [README](../README.md) 참고.
 
 ---
@@ -16,15 +17,20 @@ Keycloak을 Spring Security에 통합하는 라이브러리입니다. 의존성 
 5. [확장점](#5-확장점)
 6. [버전 노트 / 마이그레이션](#6-버전-노트--마이그레이션)
 7. [트러블슈팅](#7-트러블슈팅)
+8. [Reactive(WebFlux)](#8-reactivewebflux)
 
 ---
 
 ## 1. 빠른 시작
 
-### 1.1 의존성 (Servlet / Spring MVC)
+### 1.1 의존성
 
 ```gradle
-implementation("io.github.l-dxd:keycloak-spring-security-web-starter:1.7.0")
+// Servlet (Spring MVC)
+implementation("io.github.l-dxd:keycloak-spring-security-web-starter:1.8.0")
+
+// 또는 Reactive (WebFlux)
+implementation("io.github.l-dxd:keycloak-spring-security-webflux-starter:1.8.0")
 ```
 > Redis 세션을 쓸 경우에만 추가:
 > ```gradle
@@ -284,6 +290,7 @@ LoggingValueSanitizer loggingValueSanitizer() {
 
 | 버전 | 변경 | 주의 |
 |------|------|------|
+| **1.8.0** | **Reactive(WebFlux) 스택 추가** — servlet과 기능 동등 (OIDC 로그인·세션·인가·Bearer·Basic·RateLimit·CSRF·로그아웃·MDC 로깅) | `keycloak-spring-security-webflux-starter` 신규. servlet 사용자는 영향 없음 |
 | **1.7.0** | 응답 메트릭(status/durationMs, 기본 off) + exclude-patterns(/actuator) | — |
 | **1.6.0** | MDC PII 마스킹 **기본 on** + userAgent/query 정제 + X-Request-Id 회신 | 로그 PII가 마스킹됨. 해제는 `NoOpLoggingValueSanitizer` |
 | **1.5.0** | SecurityFilterChain Fail-Open 수정 (Bean 이름 조건 + securityMatcher) | actuator 등 자체 체인 쓰던 앱은 Keycloak 체인이 함께 켜짐 → `matcher.exclude` 또는 `auto-filter-chain: false` |
@@ -303,3 +310,28 @@ LoggingValueSanitizer loggingValueSanitizer() {
 | Redis 세션인데 `NoClassDefFoundError` | `spring-boot-starter-data-redis` + `spring-session-data-redis` 의존성 누락 |
 | 다중 인스턴스에서 로그아웃이 일부만 전파 | `session.store-type: redis`로 전환 |
 | 토큰 발급 API 404 | `bearer-token.enabled: true` 확인, prefix(`/auth`) 경로 확인 |
+
+---
+
+## 8. Reactive(WebFlux)
+
+v1.8.0부터 **WebFlux 스택을 servlet과 동등하게 지원**합니다. 의존성만 `webflux-starter`로 바꾸면 됩니다.
+
+```gradle
+implementation("io.github.l-dxd:keycloak-spring-security-webflux-starter:1.8.0")
+```
+
+- **설정은 servlet과 100% 공유**합니다 — `keycloak.*`, `keycloak.security.*` 프로퍼티(§1.2, §3)가 그대로 적용됩니다. (core 모듈의 Properties를 양쪽이 공유)
+- **기능 동등**: OIDC 로그인(`oauth2Login` + 쿠키/세션) · Bearer · Basic · 인가(Authorization Services) · Rate Limiting · CSRF · Front/Back-Channel 로그아웃 · MDC 로깅 · SecurityFilterChain 공존(Fail-Open 방지).
+
+### servlet과의 차이 (아키텍처 특성상)
+
+| 항목 | 차이 |
+|------|------|
+| 보안 체인 | `SecurityWebFilterChain`(reactive). 사용자 커스텀 체인 공존 시 `auto-filter-chain`/`matcher` 동일하게 동작 |
+| 세션 | reactive `WebSession`. 다중 인스턴스는 Spring Session Reactive(Redis) 권장 |
+| OAuth2 AuthorizedClient | 기본 `InMemoryReactiveOAuth2AuthorizedClientService` — **프로덕션은 Redis 기반 구현으로 교체 권장**(재시작 시 인메모리 소실) |
+| MDC 로깅 | Reactor Context ↔ MDC 자동 전파는 **기본 비활성**. 활성화하려면 `keycloak.security.logging.mdc-propagation-enabled=true` (전역 Reactor `Hooks` 사용) |
+
+### 확장점
+servlet과 동일하게 `@ConditionalOnMissingBean`으로 교체 가능: `ReactiveAuthenticationManager`, `LoggingValueSanitizer`, `RateLimiter`, `SecurityWebFilterChain`(이름 `keycloakSecurityWebFilterChain`) 등.
