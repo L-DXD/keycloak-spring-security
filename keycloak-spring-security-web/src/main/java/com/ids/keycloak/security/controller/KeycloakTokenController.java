@@ -6,14 +6,17 @@ import com.ids.keycloak.security.dto.TokenErrorResponse;
 import com.ids.keycloak.security.dto.TokenRequest;
 import com.ids.keycloak.security.dto.TokenResponse;
 import com.ids.keycloak.security.ratelimit.AuthenticationEventLogger;
+import com.ids.keycloak.security.util.ClientIpResolver;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -43,6 +46,12 @@ public class KeycloakTokenController {
     private final String clientSecret;
     private final String prefix;
     private final RestTemplate restTemplate;
+    private final int trustedProxyCount;
+
+    /** Keycloak 연결 타임아웃(ms): 스레드 고갈 방지 */
+    private static final int CONNECT_TIMEOUT_MS = 3_000;
+    /** Keycloak 읽기 타임아웃(ms): 스레드 고갈 방지 */
+    private static final int READ_TIMEOUT_MS = 5_000;
 
     public KeycloakTokenController(
         String tokenEndpoint,
@@ -51,12 +60,35 @@ public class KeycloakTokenController {
         String clientSecret,
         String prefix
     ) {
+        this(tokenEndpoint, logoutEndpoint, clientId, clientSecret, prefix, 0);
+    }
+
+    public KeycloakTokenController(
+        String tokenEndpoint,
+        String logoutEndpoint,
+        String clientId,
+        String clientSecret,
+        String prefix,
+        int trustedProxyCount
+    ) {
         this.tokenEndpoint = tokenEndpoint;
         this.logoutEndpoint = logoutEndpoint;
         this.clientId = clientId;
         this.clientSecret = clientSecret;
         this.prefix = prefix;
-        this.restTemplate = new RestTemplate();
+        this.trustedProxyCount = trustedProxyCount;
+        this.restTemplate = createRestTemplateWithTimeout();
+    }
+
+    /**
+     * 연결/읽기 타임아웃이 설정된 RestTemplate을 생성합니다.
+     * 타임아웃 미설정 시 Keycloak 장애가 애플리케이션 스레드 고갈로 전파될 수 있습니다.
+     */
+    private static RestTemplate createRestTemplateWithTimeout() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        factory.setReadTimeout(READ_TIMEOUT_MS);
+        return new RestTemplate(factory);
     }
 
     /**
@@ -138,11 +170,11 @@ public class KeycloakTokenController {
     }
 
     private String getClientIp(HttpServletRequest request) {
-        String xff = request.getHeader("X-Forwarded-For");
-        if (xff != null && !xff.isBlank()) {
-            return xff.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
+        return ClientIpResolver.resolve(
+            request.getHeader("X-Forwarded-For"),
+            request.getRemoteAddr(),
+            trustedProxyCount
+        );
     }
 
     /**
@@ -172,7 +204,9 @@ public class KeycloakTokenController {
                 .build();
 
             log.debug("[TokenAPI] 토큰 요청 성공.");
-            return ResponseEntity.ok(tokenResponse);
+            return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .body(tokenResponse);
 
         } catch (HttpClientErrorException e) {
             log.warn("[TokenAPI] 토큰 요청 실패: {}", e.getStatusCode());

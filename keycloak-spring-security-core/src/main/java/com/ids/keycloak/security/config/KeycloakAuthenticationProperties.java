@@ -77,4 +77,26 @@ public class KeycloakAuthenticationProperties {
     @NestedConfigurationProperty
     private KeycloakAuthorizationRequestProperties authorizationRequest =
         new KeycloakAuthorizationRequestProperties();
+
+    /**
+     * UserInfo 엔드포인트 호출 실패 시 인증 실패로 처리할지 여부 (기본값: {@code false}).
+     *
+     * <p>
+     * <b>기본 동작(false):</b> UserInfo 엔드포인트 호출 실패 시 빈 권한으로 인증을 성공합니다.
+     * 기존 동작과 동일하며 회귀가 없습니다.
+     * </p>
+     * <p>
+     * <b>true로 설정 시:</b> UserInfo 호출 실패(네트워크 오류 포함)를 인증 실패로 승격합니다.
+     * Keycloak UserInfo 엔드포인트가 안정적으로 운영되는 환경에서 보안을 강화하려면
+     * {@code true}로 설정하세요.
+     * </p>
+     *
+     * <pre>
+     * keycloak:
+     *   security:
+     *     authentication:
+     *       require-user-info: true  # UserInfo 실패를 인증 실패로 처리
+     * </pre>
+     */
+    private boolean requireUserInfo = false;
 }

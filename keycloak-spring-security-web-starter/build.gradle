@@ -38,6 +38,10 @@ dependencies {
     // (compileOnly 의존성을 테스트 클래스패스에 노출, production 산출물에는 전이되지 않음)
     testImplementation 'org.springframework.boot:spring-boot-starter-web'
     testImplementation 'org.springframework:spring-test'
+
+    // N-3 round-trip 테스트: Redis 직렬화 검증용 (테스트 전용, production 산출물에 전이되지 않음)
+    testImplementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    testImplementation 'org.springframework.session:spring-session-data-redis'
 }
 
 signing {

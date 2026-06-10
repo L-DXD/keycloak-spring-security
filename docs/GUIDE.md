@@ -3,7 +3,7 @@
 Keycloak을 Spring Security에 통합하는 라이브러리입니다. 의존성 하나와 최소 설정으로 OIDC 로그인·세션·로그아웃·인가가 자동 구성됩니다.
 
 - **지원**: JDK 17+, Spring Boot 3.5.x, Spring Security 6.5.x
-- **현재 버전**: `1.9.0`
+- **현재 버전**: `1.10.0`
 - **스택**: Servlet(Spring MVC) / **Reactive(WebFlux) — v1.8.0부터 servlet과 기능 동등** ([8. Reactive](#8-reactivewebflux))
 - 이 문서는 **도입 개발자용 사용 가이드**입니다. 아키텍처/기여 규칙은 [README](../README.md) 참고.
 
@@ -131,7 +131,7 @@ MdcRequestFilter (traceId 등 MDC)
 | 키 | 기본값 | 설명 |
 |----|--------|------|
 | `cookie.http-only` | `true` | |
-| `cookie.secure` | `false` | HTTPS 환경은 `true` 권장 |
+| `cookie.secure` | `true` | (v1.10.0부터 기본 true) HTTP 개발환경은 `false`로 해제 |
 | `cookie.domain` | (없음) | |
 | `cookie.path` | `/` | |
 | `cookie.same-site` | (없음) | `Lax`/`Strict`/`None` |
@@ -321,6 +321,7 @@ LoggingValueSanitizer loggingValueSanitizer() {
 
 | 버전 | 변경 | 주의 |
 |------|------|------|
+| **1.10.0** ⚠️ | **보안 강화** (보안검토 13건) — reactive 백채널 JWKS 서명+aud 검증, 쿠키 secure 기본 true, XFF 신뢰 프록시, servlet SameSite/토큰 no-store, PII 마스킹 확장(JWT/OAuth2), 인가 캐시·require-user-info 토글, Redis JSON 직렬화 | **Breaking 3건** — 아래 [마이그레이션](#마이그레이션-v190--v1100-breaking) |
 | **1.9.0** | OIDC authorize 파라미터(`acr_values`/`max_age`/`prompt`) 커스터마이즈 — LoA step-up·재인증 | 미설정 시 무동작(회귀 0). 경로별 step-up은 resolver 빈 재정의([4.9](#49-재인증--step-up-acr_values--max_age--prompt-v190)) |
 | **1.8.0** | **Reactive(WebFlux) 스택 추가** — servlet과 기능 동등 (OIDC 로그인·세션·인가·Bearer·Basic·RateLimit·CSRF·로그아웃·MDC 로깅) | `keycloak-spring-security-webflux-starter` 신규. servlet 사용자는 영향 없음 |
 | **1.7.0** | 응답 메트릭(status/durationMs, 기본 off) + exclude-patterns(/actuator) | — |
@@ -329,6 +330,17 @@ LoggingValueSanitizer loggingValueSanitizer() {
 | **1.4.x** | Bearer/Basic 인가 지원, stateless 세션 분리 | — |
 
 상세: `docs/12`, `docs/13`, `docs/14`
+
+### 마이그레이션 (v1.9.0 → v1.10.0) (breaking)
+보안 강화로 **기본 동작 3가지가 변경**됩니다. 기존 배포는 업그레이드 시 아래를 확인하세요.
+
+| # | 변경 | 영향 | 해제/대응 |
+|---|------|------|-----------|
+| 1 | `cookie.secure` 기본 `false`→`true` | HTTP(비TLS) 환경에서 토큰 쿠키가 브라우저에 설정 안 됨 | 로컬/HTTP 개발환경: `keycloak.security.cookie.secure=false` |
+| 2 | `X-Forwarded-For` 신뢰 변경 — `trusted-proxy-count` 기본 `0`(=`remoteAddr` 사용, XFF 무시) | XFF로 클라이언트 IP를 로깅/rate-limit하던 환경에서 IP가 프록시 IP로 바뀜 | 프록시 N개 환경: `keycloak.security.trusted-proxy-count=N` / 기존 동작 강제: `=-1`(비권장) |
+| 3 | `/logout` CSRF 면제가 `bearer-token.enabled=true`일 때만 | 쿠키 OIDC만 쓰며 `/logout` CSRF 면제에 의존하던 경우 403 | CSRF 토큰을 정상 전송하거나 Bearer 모드 사용 |
+
+그 외(회귀 없음): reactive 백채널 JWKS 검증 강화, 토큰 응답 no-store, PII 마스킹 확장은 **추가 보안일 뿐 설정 변경 불필요**. 인가 캐시(`authorization.cache.enabled`)·UserInfo 필수화(`authentication.require-user-info`)는 **기본 off라 미설정 시 영향 없음**.
 
 ---
 

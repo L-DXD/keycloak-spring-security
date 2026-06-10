@@ -36,9 +36,25 @@ public class KeycloakReactiveAuthenticationManager implements ReactiveAuthentica
   private final KeycloakClient keycloakClient;
   private final String clientId;
 
+  /**
+   * UserInfo 실패 시 인증 실패 처리 여부.
+   * 기본값 false = 기존 동작(빈 권한으로 인증 성공) 유지, 회귀 0.
+   * keycloak.security.authentication.require-user-info=true 시 활성화됨.
+   */
+  private boolean requireUserInfo = false;
+
   public KeycloakReactiveAuthenticationManager(KeycloakClient keycloakClient, String clientId) {
     this.keycloakClient = keycloakClient;
     this.clientId = clientId;
+  }
+
+  /**
+   * UserInfo 실패 처리 방식을 설정합니다.
+   *
+   * @param requireUserInfo true이면 UserInfo 실패 시 인증 실패로 처리
+   */
+  public void setRequireUserInfo(boolean requireUserInfo) {
+    this.requireUserInfo = requireUserInfo;
   }
 
   /**
@@ -156,7 +172,15 @@ public class KeycloakReactiveAuthenticationManager implements ReactiveAuthentica
   /**
    * Keycloak UserInfo 엔드포인트를 비동기로 호출합니다.
    *
-   * <p>UserInfo 조회 실패 시 null을 담은 Mono를 반환합니다(인증 자체를 중단하지 않음).</p>
+   * <p>모든 UserInfo 실패 경로(200+빈body, 401, 기타 상태코드, 네트워크 오류)에 대해
+   * {@code requireUserInfo} 플래그를 동일하게 적용합니다(servlet N-1 수정과 동일 동작).
+   * <ul>
+   *   <li>{@code requireUserInfo=false}(기본값): 모든 실패 시 {@code Mono.empty()} 반환
+   *       → switchIfEmpty에서 null UserInfo로 인증 성공(빈 권한)</li>
+   *   <li>{@code requireUserInfo=true}: 모든 실패 시 {@link UserInfoFetchException} 에러
+   *       → 인증 실패</li>
+   * </ul>
+   * </p>
    */
   private Mono<OidcUserInfo> fetchUserInfo(String accessToken) {
     return keycloakClient.userAsync().getUserInfo(accessToken)
@@ -169,25 +193,45 @@ public class KeycloakReactiveAuthenticationManager implements ReactiveAuthentica
               log.debug("[ReactiveAuthManager] UserInfo 조회 성공.");
               return Mono.just(convertToOidcUserInfo(keycloakUserInfo));
             }
-            log.warn("[ReactiveAuthManager] UserInfo 응답 본문이 비어있습니다. 빈 UserInfo로 진행합니다.");
-            return Mono.<OidcUserInfo>empty();
+            log.warn("[ReactiveAuthManager] UserInfo 응답 본문이 비어있습니다.");
+            return handleUserInfoFailureReactive("UserInfo 응답 본문이 비어있습니다.");
           } else if (status == 401) {
             log.warn("[ReactiveAuthManager] UserInfo 조회 실패 (401 Unauthorized).");
-            return Mono.<OidcUserInfo>error(
-                new UserInfoFetchException("UserInfo 조회 실패 (401 Unauthorized)."));
+            return handleUserInfoFailureReactive("UserInfo 조회 실패 (401 Unauthorized).");
           } else {
             log.warn("[ReactiveAuthManager] UserInfo 조회 중 예상치 못한 응답. 상태 코드: {}", status);
-            return Mono.<OidcUserInfo>error(
-                new UserInfoFetchException("UserInfo 조회 중 예상치 못한 응답. 상태 코드: " + status));
+            return handleUserInfoFailureReactive(
+                "UserInfo 조회 중 예상치 못한 응답. 상태 코드: " + status);
           }
         })
         .onErrorResume(
             e -> !(e instanceof AuthenticationException)
                 && !(e instanceof com.ids.keycloak.security.exception.KeycloakSecurityException),
             e -> {
-              log.warn("[ReactiveAuthManager] UserInfo 조회 중 오류 발생, null 반환: {}", e.getMessage());
-              return Mono.empty();
+              log.warn("[ReactiveAuthManager] UserInfo 조회 중 네트워크 오류 발생: {}", e.getMessage());
+              return handleUserInfoFailureReactive("UserInfo 조회 중 오류 발생: " + e.getMessage());
             });
+  }
+
+  /**
+   * UserInfo 조회 실패를 {@code requireUserInfo} 플래그에 따라 처리합니다(Reactive 버전).
+   *
+   * <p>servlet의 {@code handleUserInfoFailure}와 동일한 정책을 적용합니다.</p>
+   *
+   * @param reason 실패 이유 메시지
+   * @return {@code Mono.empty()} ({@code requireUserInfo=false}인 경우, 빈 권한으로 인증 성공)
+   *         또는 {@code Mono.error(UserInfoFetchException)} ({@code requireUserInfo=true}인 경우)
+   */
+  private Mono<OidcUserInfo> handleUserInfoFailureReactive(String reason) {
+    if (requireUserInfo) {
+      log.warn("[ReactiveAuthManager] require-user-info=true: UserInfo 실패를 인증 실패로 승격합니다. 사유: {}",
+          reason);
+      return Mono.error(new UserInfoFetchException(reason));
+    }
+    log.debug(
+        "[ReactiveAuthManager] require-user-info=false: UserInfo 실패 무시, 빈 권한으로 인증 성공. 사유: {}",
+        reason);
+    return Mono.empty();
   }
 
   /**

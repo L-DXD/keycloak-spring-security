@@ -1,6 +1,10 @@
 package com.ids.keycloak.security.model;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.Serializable;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
@@ -17,8 +21,13 @@ import org.springframework.security.oauth2.core.oidc.user.OidcUser;
  * <p>
  * 인증 완료 후 SecurityContext에 저장될 최종 Principal 객체입니다.
  * </p>
+ *
+ * <p><b>N-3 직렬화 지원:</b> {@code @JsonCreator}/@{@code @JsonProperty}를 사용하여
+ * {@link com.fasterxml.jackson.databind.ObjectMapper}(GenericJackson2JsonRedisSerializer 포함)가
+ * Redis 세션에서 역직렬화할 수 있도록 합니다.</p>
  */
 @Getter
+@JsonIgnoreProperties(value = {"attributes", "claims"}, ignoreUnknown = true)
 public class KeycloakPrincipal implements OidcUser, OAuth2AuthenticatedPrincipal, Serializable {
 
     private static final long serialVersionUID = 1L;
@@ -31,19 +40,24 @@ public class KeycloakPrincipal implements OidcUser, OAuth2AuthenticatedPrincipal
     /**
      * OidcUser 정보를 기반으로 KeycloakPrincipal을 생성합니다.
      *
+     * <p>{@code @JsonCreator}로 Jackson 역직렬화 진입점을 명시합니다(N-3).</p>
+     *
      * @param name        사용자의 고유 식별자 (JWT 'sub' 클레임)
      * @param authorities 사용자의 권한 목록
      * @param idToken     OIDC ID Token
      * @param userInfo    OIDC UserInfo (null 가능)
      */
+    @JsonCreator
     public KeycloakPrincipal(
-        String name,
-        Collection<? extends GrantedAuthority> authorities,
-        OidcIdToken idToken,
-        OidcUserInfo userInfo
+        @JsonProperty("name") String name,
+        @JsonProperty("authorities") Collection<? extends GrantedAuthority> authorities,
+        @JsonProperty("idToken") OidcIdToken idToken,
+        @JsonProperty("userInfo") OidcUserInfo userInfo
     ) {
         this.name = name;
-        this.authorities = authorities;
+        // N-3: List.of() 등 불변 컬렉션이 전달되면 Redis 역직렬화 시 AllowlistTypeIdResolver 문제 발생.
+        // ArrayList로 복사하여 직렬화 형태를 ["java.util.ArrayList", [...]]로 고정.
+        this.authorities = (authorities != null) ? new ArrayList<>(authorities) : new ArrayList<>();
         this.idToken = idToken;
         this.userInfo = userInfo;
     }

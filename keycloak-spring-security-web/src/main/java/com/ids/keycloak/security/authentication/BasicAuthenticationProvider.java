@@ -8,6 +8,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
@@ -36,6 +37,11 @@ public class BasicAuthenticationProvider implements AuthenticationProvider {
     private final KeycloakAuthenticationProvider oidcProvider;
     private final RestTemplate restTemplate;
 
+    /** Keycloak 연결 타임아웃(ms): 스레드 고갈 방지 */
+    private static final int CONNECT_TIMEOUT_MS = 3_000;
+    /** Keycloak 읽기 타임아웃(ms): 스레드 고갈 방지 */
+    private static final int READ_TIMEOUT_MS = 5_000;
+
     /**
      * BasicAuthenticationProvider를 생성합니다.
      *
@@ -54,7 +60,18 @@ public class BasicAuthenticationProvider implements AuthenticationProvider {
         this.clientId = clientId;
         this.clientSecret = clientSecret;
         this.oidcProvider = oidcProvider;
-        this.restTemplate = new RestTemplate();
+        this.restTemplate = createRestTemplateWithTimeout();
+    }
+
+    /**
+     * 연결/읽기 타임아웃이 설정된 RestTemplate을 생성합니다.
+     * 타임아웃 미설정 시 Keycloak 장애가 애플리케이션 스레드 고갈로 전파될 수 있습니다.
+     */
+    private static RestTemplate createRestTemplateWithTimeout() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(CONNECT_TIMEOUT_MS);
+        factory.setReadTimeout(READ_TIMEOUT_MS);
+        return new RestTemplate(factory);
     }
 
     @Override
