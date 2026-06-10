@@ -1,5 +1,8 @@
 package com.ids.keycloak.security.authentication;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import org.springframework.security.authentication.AbstractAuthenticationToken;
 
@@ -7,7 +10,11 @@ import org.springframework.security.authentication.AbstractAuthenticationToken;
  * Keycloak 인증 과정을 나타내는 {@link org.springframework.security.core.Authentication} 구현체입니다.
  * 인증 전/후 모두 {@link KeycloakPrincipal}을 Principal로 사용합니다.
  * 인증 검증은 idToken을 기준으로 합니다.
+ *
+ * <p><b>N-3 직렬화 지원:</b> {@code @JsonCreator}/@{@code @JsonProperty}를 사용하여
+ * Redis 세션에서 역직렬화할 수 있도록 합니다.</p>
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class KeycloakAuthentication extends AbstractAuthenticationToken implements AccessTokenHolder {
 
     private final KeycloakPrincipal principal;
@@ -17,12 +24,19 @@ public class KeycloakAuthentication extends AbstractAuthenticationToken implemen
     /**
      * Authentication 객체를 생성합니다.
      *
+     * <p>{@code @JsonCreator}로 Jackson 역직렬화 진입점을 명시합니다(N-3).</p>
+     *
      * @param principal     사용자 Principal (KeycloakPrincipal).
      * @param idToken       검증에 사용될 ID Token.
      * @param accessToken   Access Token (OAuth2AuthorizedClient 생성을 위해 보관).
      * @param authenticated 인증 완료 여부.
      */
-    public KeycloakAuthentication(KeycloakPrincipal principal, String idToken, String accessToken, boolean authenticated) {
+    @JsonCreator
+    public KeycloakAuthentication(
+        @JsonProperty("principal") KeycloakPrincipal principal,
+        @JsonProperty("idToken") String idToken,
+        @JsonProperty("accessToken") String accessToken,
+        @JsonProperty("authenticated") boolean authenticated) {
         super(principal.getAuthorities());
         this.principal = principal;
         this.idToken = idToken;

@@ -142,16 +142,33 @@ class MdcRequestFilterTest {
         }
 
         @Test
-        void X_Forwarded_For_헤더가_있으면_첫_번째_IP를_클라이언트_IP로_사용한다() throws ServletException, IOException {
-            // Given
+        void trusted_proxy_count가_0이면_XFF_헤더를_무시하고_remoteAddr를_사용한다() throws ServletException, IOException {
+            // Given: trustedProxyCount=0(기본값) → XFF 무시, remoteAddr 사용
             String xff = "10.0.0.1, 10.0.0.2";
             when(request.getHeader("X-Forwarded-For")).thenReturn(xff);
-            when(request.getMethod()).thenReturn("GET"); // 기본 로깅 메서드 호출 방어
+            when(request.getRemoteAddr()).thenReturn("192.168.1.1");
+            when(request.getMethod()).thenReturn("GET");
 
             // When
             mdcRequestFilter.doFilter(request, response, filterChain);
 
-            // Then
+            // Then: XFF 무시, remoteAddr 사용
+            verify(contextAccessor).put(LoggingContextKeys.CLIENT_IP, "192.168.1.1");
+        }
+
+        @Test
+        void trusted_proxy_count가_1이면_XFF_우측에서_1홉_건너뛴_IP를_사용한다() throws ServletException, IOException {
+            // Given: trustedProxyCount=1 → XFF "client, proxy1" 에서 "client" 사용
+            securityProperties.setTrustedProxyCount(1);
+            String xff = "10.0.0.1, 192.168.1.1";
+            when(request.getHeader("X-Forwarded-For")).thenReturn(xff);
+            when(request.getRemoteAddr()).thenReturn("172.16.0.1");
+            when(request.getMethod()).thenReturn("GET");
+
+            // When
+            mdcRequestFilter.doFilter(request, response, filterChain);
+
+            // Then: XFF 우측에서 1홉(192.168.1.1)을 프록시로 보고, 그 앞의 "10.0.0.1"을 클라이언트 IP로 사용
             verify(contextAccessor).put(LoggingContextKeys.CLIENT_IP, "10.0.0.1");
         }
     }

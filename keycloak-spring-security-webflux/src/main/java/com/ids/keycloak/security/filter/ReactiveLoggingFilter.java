@@ -5,6 +5,7 @@ import com.ids.keycloak.security.config.KeycloakSecurityProperties;
 import com.ids.keycloak.security.logging.LoggingContextKeys;
 import com.ids.keycloak.security.logging.LoggingValueSanitizer;
 import com.ids.keycloak.security.logging.ReactiveLoggingContextAccessor;
+import com.ids.keycloak.security.util.ClientIpResolver;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -176,14 +177,14 @@ public class ReactiveLoggingFilter implements WebFilter, Ordered {
   }
 
   private String getClientIp(ServerHttpRequest request) {
-    String xff = request.getHeaders().getFirst(X_FORWARDED_FOR_HEADER);
-    if (xff != null && !xff.isBlank()) {
-      return xff.split(",")[0].trim();
-    }
-    String remoteAddress = request.getRemoteAddress() != null
+    String remoteAddr = request.getRemoteAddress() != null
         ? request.getRemoteAddress().getAddress().getHostAddress()
         : "unknown";
-    return remoteAddress;
+    return ClientIpResolver.resolve(
+        request.getHeaders().getFirst(X_FORWARDED_FOR_HEADER),
+        remoteAddr,
+        securityProperties.getTrustedProxyCount()
+    );
   }
 
   private String decode(String raw) {

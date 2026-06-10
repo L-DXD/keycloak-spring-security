@@ -5,6 +5,7 @@ import com.ids.keycloak.security.config.KeycloakSecurityProperties;
 import com.ids.keycloak.security.logging.LoggingContextAccessor;
 import com.ids.keycloak.security.logging.LoggingContextKeys;
 import com.ids.keycloak.security.logging.LoggingValueSanitizer;
+import com.ids.keycloak.security.util.ClientIpResolver;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -152,12 +153,11 @@ public class MdcRequestFilter extends OncePerRequestFilter {
     }
 
     private String getClientIp(HttpServletRequest request) {
-        String xff = request.getHeader(X_FORWARDED_FOR_HEADER);
-        if (xff != null && !xff.isBlank()) {
-            // X-Forwarded-For의 첫 번째 IP가 실제 클라이언트 IP
-            return xff.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
+        return ClientIpResolver.resolve(
+            request.getHeader(X_FORWARDED_FOR_HEADER),
+            request.getRemoteAddr(),
+            securityProperties.getTrustedProxyCount()
+        );
     }
 
     private String decode(String raw) {

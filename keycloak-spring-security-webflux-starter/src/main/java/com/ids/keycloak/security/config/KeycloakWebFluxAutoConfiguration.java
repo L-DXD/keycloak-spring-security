@@ -40,6 +40,14 @@ import org.springframework.security.authentication.ReactiveAuthenticationManager
 import org.springframework.security.config.annotation.method.configuration.EnableReactiveMethodSecurity;
 import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
+import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtClaimValidator;
+import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jwt.NimbusReactiveJwtDecoder;
+import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
+import org.springframework.security.oauth2.jwt.ReactiveJwtDecoders;
 import org.springframework.security.oauth2.client.InMemoryReactiveOAuth2AuthorizedClientService;
 import org.springframework.security.oauth2.client.ReactiveOAuth2AuthorizedClientService;
 import org.springframework.security.oauth2.client.registration.ReactiveClientRegistrationRepository;
@@ -159,10 +167,14 @@ public class KeycloakWebFluxAutoConfiguration {
     @ConditionalOnMissingBean(ReactiveAuthenticationManager.class)
     public ReactiveAuthenticationManager keycloakReactiveAuthenticationManager(
         KeycloakClient keycloakClient,
-        KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig) {
+        KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig,
+        KeycloakSecurityProperties securityProperties) {
       log.info("핵심 Bean을 등록합니다: [ReactiveAuthenticationManager] (KeycloakReactiveAuthenticationManager)");
-      return new KeycloakReactiveAuthenticationManager(
-          keycloakClient, keycloakConfig.getClientId());
+      KeycloakReactiveAuthenticationManager manager =
+          new KeycloakReactiveAuthenticationManager(keycloakClient, keycloakConfig.getClientId());
+      // M-2: require-user-info 토글 (기본 false = 기존 동작 유지, 회귀 0)
+      manager.setRequireUserInfo(securityProperties.getAuthentication().isRequireUserInfo());
+      return manager;
     }
 
     @Bean
@@ -346,13 +358,72 @@ public class KeycloakWebFluxAutoConfiguration {
   @Slf4j
   protected static class KeycloakBackChannelLogoutConfiguration {
 
+    /**
+     * Back-Channel logout_token 서명·aud·iss 검증용 {@link ReactiveJwtDecoder}를 등록합니다.
+     *
+     * <p><b>C-1 aud 검증 추가:</b> {@code ReactiveJwtDecoders.fromIssuerLocation}은 iss·exp·nbf만 검증합니다.
+     * audience 미검증 시 같은 Realm의 다른 클라이언트용 logout_token을 수용할 수 있으므로
+     * {@link JwtClaimValidator}로 {@code aud} 클레임에 우리 client-id 포함 여부를 추가 검증합니다.
+     * {@link DelegatingOAuth2TokenValidator}로 기존 issuer 검증과 결합합니다.</p>
+     *
+     * <p>사용자가 직접 {@link ReactiveJwtDecoder} 빈을 등록하면 이 빈은 생략됩니다.</p>
+     *
+     * @param issuerUri  OIDC issuer URI (JWKS 엔드포인트 자동 검색)
+     * @param clientId   audience 검증에 사용할 우리 client-id
+     */
+    @Bean("keycloakBackChannelJwtDecoder")
+    @ConditionalOnMissingBean(ReactiveJwtDecoder.class)
+    public ReactiveJwtDecoder keycloakBackChannelJwtDecoder(
+        @org.springframework.beans.factory.annotation.Value(
+            "${spring.security.oauth2.resourceserver.jwt.issuer-uri:"
+                + "${spring.security.oauth2.client.provider.keycloak.issuer-uri:}}")
+        String issuerUri,
+        @org.springframework.beans.factory.annotation.Value(
+            "${spring.security.oauth2.client.registration.keycloak.client-id:}")
+        String clientId) {
+      if (issuerUri == null || issuerUri.isBlank()) {
+        throw new IllegalStateException(
+            "[C-1] Back-Channel 로그아웃 JWT 서명 검증을 위한 issuer-uri가 설정되지 않았습니다. "
+                + "spring.security.oauth2.resourceserver.jwt.issuer-uri 또는 "
+                + "spring.security.oauth2.client.provider.keycloak.issuer-uri를 설정하세요.");
+      }
+
+      // NimbusReactiveJwtDecoder로 래핑하여 커스텀 validator 조합 가능하게 함
+      NimbusReactiveJwtDecoder decoder =
+          (NimbusReactiveJwtDecoder) ReactiveJwtDecoders.fromIssuerLocation(issuerUri);
+
+      // issuer 기본 validator + audience validator 결합 (C-1 aud 검증)
+      OAuth2TokenValidator<Jwt> issuerValidator = JwtValidators.createDefaultWithIssuer(issuerUri);
+
+      if (clientId != null && !clientId.isBlank()) {
+        // logout_token의 aud 클레임에 우리 client-id가 포함되어야 함
+        OAuth2TokenValidator<Jwt> audienceValidator =
+            new JwtClaimValidator<java.util.List<String>>(
+                "aud", aud -> aud != null && aud.contains(clientId));
+        decoder.setJwtValidator(
+            new DelegatingOAuth2TokenValidator<>(issuerValidator, audienceValidator));
+        log.info(
+            "핵심 Bean을 등록합니다: [ReactiveJwtDecoder] (Back-Channel 서명+iss+aud 검증, issuer={}, clientId={})",
+            issuerUri, clientId);
+      } else {
+        // client-id 미설정 시 issuer 검증만 (aud 검증 스킵, 경고 출력)
+        decoder.setJwtValidator(issuerValidator);
+        log.warn(
+            "핵심 Bean을 등록합니다: [ReactiveJwtDecoder] (Back-Channel 서명+iss 검증만, aud 미검증 — "
+                + "spring.security.oauth2.client.registration.keycloak.client-id 설정 권장)");
+      }
+
+      return decoder;
+    }
+
     @Bean
     @ConditionalOnMissingBean(ReactiveOidcBackChannelLogoutHandler.class)
     @SuppressWarnings("unchecked")
     public ReactiveOidcBackChannelLogoutHandler reactiveOidcBackChannelLogoutHandler(
-        ReactiveFindByIndexNameSessionRepository<?> sessionRepository) {
-      log.info("핵심 Bean을 등록합니다: [ReactiveOidcBackChannelLogoutHandler]");
-      return new ReactiveOidcBackChannelLogoutHandler(sessionRepository);
+        ReactiveFindByIndexNameSessionRepository<?> sessionRepository,
+        ReactiveJwtDecoder jwtDecoder) {
+      log.info("핵심 Bean을 등록합니다: [ReactiveOidcBackChannelLogoutHandler] (서명 검증 활성)");
+      return new ReactiveOidcBackChannelLogoutHandler(sessionRepository, jwtDecoder);
     }
 
     @Bean
@@ -405,9 +476,11 @@ public class KeycloakWebFluxAutoConfiguration {
         KeycloakClient keycloakClient,
         KeycloakSecurityProperties securityProperties) {
       String prefix = securityProperties.getBearerToken().getTokenEndpoint().getPrefix();
-      log.info("핵심 Bean을 등록합니다: [KeycloakReactiveTokenController] (prefix={})", prefix);
+      int trustedProxyCount = securityProperties.getTrustedProxyCount();
+      log.info("핵심 Bean을 등록합니다: [KeycloakReactiveTokenController] (prefix={}, trustedProxyCount={})",
+          prefix, trustedProxyCount);
       return new com.ids.keycloak.security.controller.KeycloakReactiveTokenController(
-          keycloakClient, prefix);
+          keycloakClient, prefix, trustedProxyCount);
     }
   }
 

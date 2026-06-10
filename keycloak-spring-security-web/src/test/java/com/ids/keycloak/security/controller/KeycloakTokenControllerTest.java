@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import org.springframework.http.HttpHeaders;
 
 import com.ids.keycloak.security.dto.LogoutRequest;
 import com.ids.keycloak.security.dto.RefreshRequest;
@@ -87,6 +88,8 @@ class KeycloakTokenControllerTest {
             assertThat(tokenResponse.getRefreshToken()).isEqualTo("new-refresh-token");
             assertThat(tokenResponse.getTokenType()).isEqualTo("Bearer");
             assertThat(tokenResponse.getExpiresIn()).isEqualTo(300);
+            // H-3: 토큰 발급 응답에 Cache-Control: no-store 헤더 검증
+            assertThat(result.getHeaders().getCacheControl()).containsIgnoringCase("no-store");
         }
 
         @Test
@@ -152,6 +155,8 @@ class KeycloakTokenControllerTest {
             assertThat(result.getStatusCode()).isEqualTo(HttpStatus.OK);
             TokenResponse tokenResponse = (TokenResponse) result.getBody();
             assertThat(tokenResponse.getAccessToken()).isEqualTo("new-access-token-2");
+            // H-3: 토큰 갱신 응답에도 Cache-Control: no-store 헤더 검증
+            assertThat(result.getHeaders().getCacheControl()).containsIgnoringCase("no-store");
         }
 
         @Test

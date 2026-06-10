@@ -11,6 +11,7 @@ import com.ids.keycloak.security.filter.ReactiveBasicAuthenticationFilter;
 import com.ids.keycloak.security.filter.ReactiveLoggingFilter;
 import com.ids.keycloak.security.filter.ReactiveRateLimitFilter;
 import com.ids.keycloak.security.manager.KeycloakReactiveAuthorizationManager;
+import com.ids.keycloak.security.config.KeycloakBearerTokenProperties;
 import com.ids.keycloak.security.ratelimit.RateLimiter;
 import com.ids.keycloak.security.session.ReactiveSessionManager;
 import com.ids.keycloak.security.util.ReactiveCookieUtil;
@@ -247,13 +248,21 @@ public final class KeycloakWebFluxSecurityConfigurer {
     }
 
     List<String> ignorePaths = new ArrayList<>();
-    ignorePaths.add(KeycloakWebFluxConstants.LOGOUT_URL);
+    // Back-Channel 로그아웃은 Keycloak 서버→서버 요청이므로 항상 면제 (아래 exemptMatchers에서 POST 한정)
 
-    if (securityProperties.getBearerToken().isEnabled()) {
-      String prefix = securityProperties.getBearerToken().getTokenEndpoint().getPrefix();
+    KeycloakBearerTokenProperties bearerTokenProperties = securityProperties.getBearerToken();
+    if (bearerTokenProperties.isEnabled()) {
+      String prefix = bearerTokenProperties.getTokenEndpoint().getPrefix();
+      // /token, /refresh — 비인증 자격증명 제출 엔드포인트이므로 항상 면제
       ignorePaths.add(prefix + "/token");
       ignorePaths.add(prefix + "/refresh");
+      // /logout — Bearer Token 활성 시에만 면제
       ignorePaths.add(prefix + "/logout");
+      // Front-Channel 로그아웃도 Bearer Token 활성 시에만 면제
+      // (쿠키 기반 OIDC 전용 환경에서는 /logout CSRF 보호 유지)
+      ignorePaths.add(KeycloakWebFluxConstants.LOGOUT_URL);
+    } else {
+      log.debug("[Configurer] Bearer Token 비활성 — /logout CSRF 보호 활성화 (면제 목록에서 제외)");
     }
 
     ignorePaths.addAll(csrfProperties.getIgnorePaths());

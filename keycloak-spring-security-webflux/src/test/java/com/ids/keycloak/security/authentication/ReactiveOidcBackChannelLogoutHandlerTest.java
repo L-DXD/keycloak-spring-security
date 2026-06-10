@@ -1,16 +1,14 @@
 package com.ids.keycloak.security.authentication;
 
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.lenient;
 
 import com.ids.keycloak.security.model.KeycloakLogoutToken;
-import com.ids.keycloak.security.util.JwtUtil;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,11 +16,13 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
-import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtException;
+import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
 import org.springframework.security.web.server.WebFilterExchange;
 import org.springframework.session.ReactiveFindByIndexNameSessionRepository;
 import org.springframework.session.ReactiveSessionRepository;
@@ -33,8 +33,9 @@ import reactor.test.StepVerifier;
 /**
  * {@link ReactiveOidcBackChannelLogoutHandler} 단위 테스트.
  *
- * <p>{@link ReactiveFindByIndexNameSessionRepository}를 mock하여
- * logout_token 파싱 → 세션 무효화 호출 여부를 StepVerifier로 검증합니다.</p>
+ * <p><b>C-1 검증:</b> {@link ReactiveJwtDecoder}를 mock하여
+ * 서명 검증 통과 시에만 세션 삭제가 수행되고,
+ * 위조(서명 불일치) 토큰은 세션 삭제 없이 400을 반환함을 검증합니다.</p>
  */
 @ExtendWith(MockitoExtension.class)
 class ReactiveOidcBackChannelLogoutHandlerTest {
@@ -42,11 +43,15 @@ class ReactiveOidcBackChannelLogoutHandlerTest {
   @Mock
   private TestSessionRepository sessionRepository;
 
+  @Mock
+  private ReactiveJwtDecoder jwtDecoder;
+
   private ReactiveOidcBackChannelLogoutHandler handler;
 
   private static final String SUBJECT = "user-sub-123";
   private static final String KEYCLOAK_SID = "kcSid-abc";
-  private static final String LOGOUT_TOKEN_JWT = "logout.token.jwt";
+  private static final String LOGOUT_TOKEN_JWT = "header.payload.signature";
+  private static final String FORGED_TOKEN_JWT = "header.payload.forged-signature";
   private static final String SPRING_SESSION_ID = "spring-session-id-1";
 
   /**
@@ -59,15 +64,19 @@ class ReactiveOidcBackChannelLogoutHandlerTest {
 
   @BeforeEach
   void setUp() {
-    handler = new ReactiveOidcBackChannelLogoutHandler(sessionRepository);
+    handler = new ReactiveOidcBackChannelLogoutHandler(sessionRepository, jwtDecoder);
   }
 
   private WebFilterExchange mockWebFilterExchange() {
-    MockServerHttpRequest request = MockServerHttpRequest.post("/logout/connect/back-channel/keycloak").build();
+    MockServerHttpRequest request = MockServerHttpRequest
+        .post("/logout/connect/back-channel/keycloak").build();
     MockServerWebExchange exchange = MockServerWebExchange.from(request);
     return new WebFilterExchange(exchange, chain -> Mono.empty());
   }
 
+  /**
+   * 유효한 back-channel logout JWT 클레임 맵을 생성합니다.
+   */
   private Map<String, Object> buildLogoutTokenClaims(String sub, String sid) {
     Map<String, Object> claims = new HashMap<>();
     claims.put("iss", "http://keycloak/realms/test");
@@ -84,15 +93,105 @@ class ReactiveOidcBackChannelLogoutHandlerTest {
     return claims;
   }
 
+  /**
+   * 검증된 {@link Jwt} 객체를 빌드합니다.
+   */
+  private Jwt buildJwt(Map<String, Object> claims) {
+    return Jwt.withTokenValue(LOGOUT_TOKEN_JWT)
+        .header("alg", "RS256")
+        .claims(c -> c.putAll(claims))
+        .issuedAt(Instant.now().minusSeconds(10))
+        .expiresAt(Instant.now().plusSeconds(300))
+        .build();
+  }
+
   private Session mockSessionWithSid(String keycloakSid) {
     Session session = mock(Session.class);
-    lenient().when(session.getAttribute(ReactiveOidcBackChannelLogoutHandler.KEYCLOAK_SESSION_ID_ATTR))
+    lenient()
+        .when(session.getAttribute(ReactiveOidcBackChannelLogoutHandler.KEYCLOAK_SESSION_ID_ATTR))
         .thenReturn(keycloakSid);
     return session;
   }
 
   // ==========================================================================
-  // 정상 케이스
+  // C-1 핵심: 서명 검증 통과/실패 케이스
+  // ==========================================================================
+
+  @Nested
+  class C1_서명검증 {
+
+    @Test
+    void 위조_토큰은_서명검증_실패로_세션_삭제_없이_BadRequest_반환() {
+      // Given: jwtDecoder가 위조 토큰에 대해 JwtException 던짐
+      when(jwtDecoder.decode(FORGED_TOKEN_JWT))
+          .thenReturn(Mono.error(new JwtException("JWT signature does not match")));
+
+      BackChannelLogoutAuthentication auth = new BackChannelLogoutAuthentication(FORGED_TOKEN_JWT);
+
+      // When & Then
+      StepVerifier.create(handler.logout(mockWebFilterExchange(), auth))
+          .verifyComplete();
+
+      // 세션 삭제가 절대 호출되지 않아야 함 (C-1 핵심 보장)
+      verify(sessionRepository, never()).findByPrincipalName(anyString());
+      verify(sessionRepository, never()).deleteById(anyString());
+    }
+
+    @Test
+    void 만료된_토큰은_검증_실패로_세션_삭제_없이_BadRequest_반환() {
+      // Given: 만료된 토큰
+      when(jwtDecoder.decode(LOGOUT_TOKEN_JWT))
+          .thenReturn(Mono.error(new JwtException("Jwt expired at ...")));
+
+      BackChannelLogoutAuthentication auth = new BackChannelLogoutAuthentication(LOGOUT_TOKEN_JWT);
+
+      // When & Then
+      StepVerifier.create(handler.logout(mockWebFilterExchange(), auth))
+          .verifyComplete();
+
+      verify(sessionRepository, never()).findByPrincipalName(anyString());
+    }
+
+    @Test
+    void iss_불일치_토큰은_검증_실패로_세션_삭제_없이_BadRequest_반환() {
+      // Given: issuer 불일치
+      when(jwtDecoder.decode(LOGOUT_TOKEN_JWT))
+          .thenReturn(Mono.error(new JwtException("The iss claim is not valid")));
+
+      BackChannelLogoutAuthentication auth = new BackChannelLogoutAuthentication(LOGOUT_TOKEN_JWT);
+
+      // When & Then
+      StepVerifier.create(handler.logout(mockWebFilterExchange(), auth))
+          .verifyComplete();
+
+      verify(sessionRepository, never()).findByPrincipalName(anyString());
+    }
+
+    @Test
+    void 서명_검증_통과한_토큰은_세션_삭제_수행() {
+      // Given: 정상 토큰 — jwtDecoder 검증 통과
+      Map<String, Object> claims = buildLogoutTokenClaims(SUBJECT, KEYCLOAK_SID);
+      Jwt validJwt = buildJwt(claims);
+      when(jwtDecoder.decode(LOGOUT_TOKEN_JWT)).thenReturn(Mono.just(validJwt));
+
+      Session session = mockSessionWithSid(KEYCLOAK_SID);
+      Map<String, Session> sessions = Map.of(SPRING_SESSION_ID, session);
+      when(sessionRepository.findByPrincipalName(SUBJECT)).thenReturn(Mono.just(sessions));
+      when(sessionRepository.deleteById(SPRING_SESSION_ID)).thenReturn(Mono.empty());
+
+      BackChannelLogoutAuthentication auth = new BackChannelLogoutAuthentication(LOGOUT_TOKEN_JWT);
+
+      // When & Then
+      StepVerifier.create(handler.logout(mockWebFilterExchange(), auth))
+          .verifyComplete();
+
+      verify(sessionRepository).findByPrincipalName(SUBJECT);
+      verify(sessionRepository).deleteById(SPRING_SESSION_ID);
+    }
+  }
+
+  // ==========================================================================
+  // 정상 케이스 (서명 검증 통과 가정)
   // ==========================================================================
 
   @Nested
@@ -103,20 +202,16 @@ class ReactiveOidcBackChannelLogoutHandlerTest {
       Session session = mockSessionWithSid(KEYCLOAK_SID);
       Map<String, Session> sessions = Map.of(SPRING_SESSION_ID, session);
 
-      when(sessionRepository.findByPrincipalName(SUBJECT))
-          .thenReturn(Mono.just(sessions));
-      when(sessionRepository.deleteById(SPRING_SESSION_ID))
-          .thenReturn(Mono.empty());
+      Map<String, Object> claims = buildLogoutTokenClaims(SUBJECT, KEYCLOAK_SID);
+      Jwt validJwt = buildJwt(claims);
+      when(jwtDecoder.decode(LOGOUT_TOKEN_JWT)).thenReturn(Mono.just(validJwt));
+      when(sessionRepository.findByPrincipalName(SUBJECT)).thenReturn(Mono.just(sessions));
+      when(sessionRepository.deleteById(SPRING_SESSION_ID)).thenReturn(Mono.empty());
 
       BackChannelLogoutAuthentication auth = new BackChannelLogoutAuthentication(LOGOUT_TOKEN_JWT);
 
-      try (MockedStatic<JwtUtil> jwtMock = mockStatic(JwtUtil.class)) {
-        jwtMock.when(() -> JwtUtil.parseClaimsWithoutValidation(LOGOUT_TOKEN_JWT))
-            .thenReturn(buildLogoutTokenClaims(SUBJECT, KEYCLOAK_SID));
-
-        StepVerifier.create(handler.logout(mockWebFilterExchange(), auth))
-            .verifyComplete();
-      }
+      StepVerifier.create(handler.logout(mockWebFilterExchange(), auth))
+          .verifyComplete();
 
       verify(sessionRepository).findByPrincipalName(SUBJECT);
       verify(sessionRepository).deleteById(SPRING_SESSION_ID);
@@ -128,20 +223,16 @@ class ReactiveOidcBackChannelLogoutHandlerTest {
       Session session2 = mockSessionWithSid(null);
       Map<String, Session> sessions = Map.of("session-1", session1, "session-2", session2);
 
-      when(sessionRepository.findByPrincipalName(SUBJECT))
-          .thenReturn(Mono.just(sessions));
-      when(sessionRepository.deleteById(anyString()))
-          .thenReturn(Mono.empty());
+      Map<String, Object> claims = buildLogoutTokenClaims(SUBJECT, null);
+      Jwt validJwt = buildJwt(claims);
+      when(jwtDecoder.decode(LOGOUT_TOKEN_JWT)).thenReturn(Mono.just(validJwt));
+      when(sessionRepository.findByPrincipalName(SUBJECT)).thenReturn(Mono.just(sessions));
+      when(sessionRepository.deleteById(anyString())).thenReturn(Mono.empty());
 
       BackChannelLogoutAuthentication auth = new BackChannelLogoutAuthentication(LOGOUT_TOKEN_JWT);
 
-      try (MockedStatic<JwtUtil> jwtMock = mockStatic(JwtUtil.class)) {
-        jwtMock.when(() -> JwtUtil.parseClaimsWithoutValidation(LOGOUT_TOKEN_JWT))
-            .thenReturn(buildLogoutTokenClaims(SUBJECT, null));
-
-        StepVerifier.create(handler.logout(mockWebFilterExchange(), auth))
-            .verifyComplete();
-      }
+      StepVerifier.create(handler.logout(mockWebFilterExchange(), auth))
+          .verifyComplete();
 
       verify(sessionRepository).findByPrincipalName(SUBJECT);
     }
@@ -152,18 +243,15 @@ class ReactiveOidcBackChannelLogoutHandlerTest {
       Session session = mockSessionWithSid("different-sid");
       Map<String, Session> sessions = Map.of(SPRING_SESSION_ID, session);
 
-      when(sessionRepository.findByPrincipalName(SUBJECT))
-          .thenReturn(Mono.just(sessions));
+      Map<String, Object> claims = buildLogoutTokenClaims(SUBJECT, KEYCLOAK_SID);
+      Jwt validJwt = buildJwt(claims);
+      when(jwtDecoder.decode(LOGOUT_TOKEN_JWT)).thenReturn(Mono.just(validJwt));
+      when(sessionRepository.findByPrincipalName(SUBJECT)).thenReturn(Mono.just(sessions));
 
       BackChannelLogoutAuthentication auth = new BackChannelLogoutAuthentication(LOGOUT_TOKEN_JWT);
 
-      try (MockedStatic<JwtUtil> jwtMock = mockStatic(JwtUtil.class)) {
-        jwtMock.when(() -> JwtUtil.parseClaimsWithoutValidation(LOGOUT_TOKEN_JWT))
-            .thenReturn(buildLogoutTokenClaims(SUBJECT, KEYCLOAK_SID));
-
-        StepVerifier.create(handler.logout(mockWebFilterExchange(), auth))
-            .verifyComplete();
-      }
+      StepVerifier.create(handler.logout(mockWebFilterExchange(), auth))
+          .verifyComplete();
 
       verify(sessionRepository, never()).deleteById(anyString());
     }
@@ -191,34 +279,33 @@ class ReactiveOidcBackChannelLogoutHandlerTest {
     }
 
     @Test
-    void JWT_파싱_실패시_BadRequest_응답() {
+    void jwtDecoder_오류시_BadRequest_응답_세션삭제_없음() {
+      when(jwtDecoder.decode(LOGOUT_TOKEN_JWT))
+          .thenReturn(Mono.error(new JwtException("Invalid token")));
+
       BackChannelLogoutAuthentication auth = new BackChannelLogoutAuthentication(LOGOUT_TOKEN_JWT);
 
-      try (MockedStatic<JwtUtil> jwtMock = mockStatic(JwtUtil.class)) {
-        jwtMock.when(() -> JwtUtil.parseClaimsWithoutValidation(LOGOUT_TOKEN_JWT))
-            .thenReturn(java.util.Collections.emptyMap());
-
-        StepVerifier.create(handler.logout(mockWebFilterExchange(), auth))
-            .verifyComplete();
-      }
+      StepVerifier.create(handler.logout(mockWebFilterExchange(), auth))
+          .verifyComplete();
 
       verify(sessionRepository, never()).findByPrincipalName(anyString());
     }
 
     @Test
     void logout_token_이벤트_없으면_BadRequest_응답() {
+      // events 클레임 없는 토큰 (서명은 통과)
+      Map<String, Object> claims = new HashMap<>();
+      claims.put("sub", SUBJECT);
+      claims.put("iss", "http://keycloak/realms/test");
+      // events 클레임 없음 — isLogoutToken() == false
+
+      Jwt noEventJwt = buildJwt(claims);
+      when(jwtDecoder.decode(LOGOUT_TOKEN_JWT)).thenReturn(Mono.just(noEventJwt));
+
       BackChannelLogoutAuthentication auth = new BackChannelLogoutAuthentication(LOGOUT_TOKEN_JWT);
 
-      try (MockedStatic<JwtUtil> jwtMock = mockStatic(JwtUtil.class)) {
-        // events 클레임 없는 토큰
-        Map<String, Object> claims = new HashMap<>();
-        claims.put("sub", SUBJECT);
-        jwtMock.when(() -> JwtUtil.parseClaimsWithoutValidation(LOGOUT_TOKEN_JWT))
-            .thenReturn(claims);
-
-        StepVerifier.create(handler.logout(mockWebFilterExchange(), auth))
-            .verifyComplete();
-      }
+      StepVerifier.create(handler.logout(mockWebFilterExchange(), auth))
+          .verifyComplete();
 
       verify(sessionRepository, never()).findByPrincipalName(anyString());
     }
