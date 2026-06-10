@@ -210,6 +210,8 @@ public class KeycloakServletAutoConfiguration {
             List<AuthenticationProvider> providers = new ArrayList<>();
 
             KeycloakAuthenticationProvider oidcProvider = new KeycloakAuthenticationProvider(keycloakClient, keycloakConfig.getClientId());
+            // M-2: require-user-info 토글 (기본 false = 기존 동작 유지, 회귀 0)
+            oidcProvider.setRequireUserInfo(securityProperties.getAuthentication().isRequireUserInfo());
             providers.add(oidcProvider);
 
             if (securityProperties.getBasicAuth().isEnabled()) {
@@ -300,9 +302,17 @@ public class KeycloakServletAutoConfiguration {
 
         @Bean
         @ConditionalOnMissingBean
-        public KeycloakAuthorizationManager keycloakAuthorizationManager(KeycloakClient keycloakClient) {
+        public KeycloakAuthorizationManager keycloakAuthorizationManager(
+            KeycloakClient keycloakClient,
+            KeycloakSecurityProperties securityProperties
+        ) {
             log.debug("지원 Bean을 등록합니다: [KeycloakAuthorizationManager]");
-            return new KeycloakAuthorizationManager(keycloakClient);
+            KeycloakAuthorizationManager manager = new KeycloakAuthorizationManager(keycloakClient);
+            // M-1: 인가 결정 캐시 토글 (기본 false = 매 요청 Keycloak 호출, 회귀 0)
+            KeycloakAuthorizationProperties.CacheProperties cacheProps =
+                securityProperties.getAuthorization().getCache();
+            manager.setCacheConfig(cacheProps.isEnabled(), cacheProps.getTtlSeconds());
+            return manager;
         }
 
         /**
@@ -516,12 +526,14 @@ public class KeycloakServletAutoConfiguration {
             String logoutEndpoint = basePath + "/logout";
             String prefix = securityProperties.getBearerToken().getTokenEndpoint().getPrefix();
 
-            log.info("Bearer Token Bean을 등록합니다: [KeycloakTokenController] (prefix: {})", prefix);
+            int trustedProxyCount = securityProperties.getTrustedProxyCount();
+            log.info("Bearer Token Bean을 등록합니다: [KeycloakTokenController] (prefix: {}, trustedProxyCount: {})",
+                prefix, trustedProxyCount);
 
             return new KeycloakTokenController(
                 tokenEndpoint, logoutEndpoint,
                 keycloakConfig.getClientId(), keycloakConfig.getClientSecret(),
-                prefix
+                prefix, trustedProxyCount
             );
         }
     }

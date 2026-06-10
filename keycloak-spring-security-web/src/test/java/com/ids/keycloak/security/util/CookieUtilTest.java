@@ -2,6 +2,7 @@ package com.ids.keycloak.security.util;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -22,7 +23,14 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpHeaders;
 
+/**
+ * {@link CookieUtil} 단위 테스트.
+ *
+ * <p>H-2 대응: CookieUtil이 ResponseCookie 기반 Set-Cookie 헤더를 사용하므로
+ * {@code response.addHeader(HttpHeaders.SET_COOKIE, ...)} 방식으로 검증합니다.</p>
+ */
 @ExtendWith(MockitoExtension.class)
 class CookieUtilTest {
 
@@ -33,7 +41,10 @@ class CookieUtilTest {
     private HttpServletResponse response;
 
     @Captor
-    private ArgumentCaptor<Cookie> cookieCaptor;
+    private ArgumentCaptor<String> headerNameCaptor;
+
+    @Captor
+    private ArgumentCaptor<String> headerValueCaptor;
 
     private KeycloakCookieProperties properties;
 
@@ -44,6 +55,7 @@ class CookieUtilTest {
         properties.setSecure(true);
         properties.setPath("/app");
         properties.setDomain("example.com");
+        properties.setSameSite("Lax");
         CookieUtil.setProperties(properties);
     }
 
@@ -51,21 +63,66 @@ class CookieUtilTest {
     class 정상_케이스 {
 
         @Test
-        void 프로퍼티_설정에_맞게_쿠키가_생성된다() {
+        void 프로퍼티_설정에_맞게_Set_Cookie_헤더가_생성된다() {
             // When
             CookieUtil.addCookie(response, "test-cookie", "test-value", 3600);
 
             // Then
-            verify(response).addCookie(cookieCaptor.capture());
-            Cookie cookie = cookieCaptor.getValue();
+            verify(response).addHeader(eq(HttpHeaders.SET_COOKIE), headerValueCaptor.capture());
+            String setCookie = headerValueCaptor.getValue();
 
-            assertThat(cookie.getName()).isEqualTo("test-cookie");
-            assertThat(cookie.getValue()).isEqualTo("test-value");
-            assertThat(cookie.getMaxAge()).isEqualTo(3600);
-            assertThat(cookie.isHttpOnly()).isTrue();
-            assertThat(cookie.getSecure()).isTrue();
-            assertThat(cookie.getPath()).isEqualTo("/app");
-            assertThat(cookie.getDomain()).isEqualTo("example.com");
+            assertThat(setCookie).contains("test-cookie=test-value");
+            assertThat(setCookie).contains("Max-Age=3600");
+            assertThat(setCookie).containsIgnoringCase("HttpOnly");
+            assertThat(setCookie).containsIgnoringCase("Secure");
+            assertThat(setCookie).contains("Path=/app");
+            assertThat(setCookie).contains("Domain=example.com");
+            assertThat(setCookie).containsIgnoringCase("SameSite=Lax");
+        }
+
+        @Test
+        void SameSite_속성이_Set_Cookie_헤더에_포함된다() {
+            // Given
+            properties.setSameSite("Strict");
+            CookieUtil.setProperties(properties);
+
+            // When
+            CookieUtil.addCookie(response, "my-cookie", "my-value", 300);
+
+            // Then
+            verify(response).addHeader(eq(HttpHeaders.SET_COOKIE), headerValueCaptor.capture());
+            String setCookie = headerValueCaptor.getValue();
+            assertThat(setCookie).containsIgnoringCase("SameSite=Strict");
+        }
+
+        @Test
+        void SameSite_None일_때_헤더에_포함된다() {
+            // Given
+            properties.setSameSite("None");
+            CookieUtil.setProperties(properties);
+
+            // When
+            CookieUtil.addCookie(response, "my-cookie", "my-value", 300);
+
+            // Then
+            verify(response).addHeader(eq(HttpHeaders.SET_COOKIE), headerValueCaptor.capture());
+            String setCookie = headerValueCaptor.getValue();
+            assertThat(setCookie).containsIgnoringCase("SameSite=None");
+        }
+
+        @Test
+        void SameSite_미설정시_헤더에_SameSite_없음() {
+            // Given
+            properties.setSameSite(null);
+            CookieUtil.setProperties(properties);
+
+            // When
+            CookieUtil.addCookie(response, "my-cookie", "my-value", 300);
+
+            // Then
+            verify(response).addHeader(eq(HttpHeaders.SET_COOKIE), headerValueCaptor.capture());
+            String setCookie = headerValueCaptor.getValue();
+            assertThat(setCookie).doesNotContainIgnoringCase("SameSite");
         }
 
         @Test
@@ -74,14 +131,12 @@ class CookieUtilTest {
             CookieUtil.addTokenCookies(response, "access-token", 300, "id-token", 3600);
 
             // Then
-            verify(response, times(2)).addCookie(cookieCaptor.capture());
-            var cookies = cookieCaptor.getAllValues();
+            verify(response, times(2)).addHeader(eq(HttpHeaders.SET_COOKIE), headerValueCaptor.capture());
+            var headers = headerValueCaptor.getAllValues();
 
-            assertThat(cookies).hasSize(2);
-            assertThat(cookies.get(0).getName()).isEqualTo(CookieUtil.ACCESS_TOKEN_NAME);
-            assertThat(cookies.get(0).getValue()).isEqualTo("access-token");
-            assertThat(cookies.get(1).getName()).isEqualTo(CookieUtil.ID_TOKEN_NAME);
-            assertThat(cookies.get(1).getValue()).isEqualTo("id-token");
+            assertThat(headers).hasSize(2);
+            assertThat(headers.get(0)).contains(CookieUtil.ACCESS_TOKEN_NAME + "=access-token");
+            assertThat(headers.get(1)).contains(CookieUtil.ID_TOKEN_NAME + "=id-token");
         }
 
         @Test
@@ -101,17 +156,16 @@ class CookieUtilTest {
         }
 
         @Test
-        void 쿠키_삭제_시_MaxAge가_0인_쿠키를_덮어쓴다() {
+        void 쿠키_삭제_시_MaxAge가_0인_Set_Cookie_헤더를_추가한다() {
             // When
             CookieUtil.deleteCookie(response, "to-delete");
 
             // Then
-            verify(response).addCookie(cookieCaptor.capture());
-            Cookie cookie = cookieCaptor.getValue();
+            verify(response).addHeader(eq(HttpHeaders.SET_COOKIE), headerValueCaptor.capture());
+            String setCookie = headerValueCaptor.getValue();
 
-            assertThat(cookie.getName()).isEqualTo("to-delete");
-            assertThat(cookie.getValue()).isNull();
-            assertThat(cookie.getMaxAge()).isZero();
+            assertThat(setCookie).contains("to-delete=");
+            assertThat(setCookie).contains("Max-Age=0");
         }
 
         @Test
@@ -120,7 +174,9 @@ class CookieUtilTest {
             CookieUtil.deleteAllTokenCookies(response);
 
             // Then
-            verify(response, times(2)).addCookie(argThat(cookie -> cookie.getMaxAge() == 0));
+            verify(response, times(2)).addHeader(
+                eq(HttpHeaders.SET_COOKIE),
+                argThat(v -> v.contains("Max-Age=0")));
         }
 
         @Test
@@ -198,7 +254,7 @@ class CookieUtilTest {
         }
 
         @Test
-        void domain이_비어있으면_쿠키에_domain을_설정하지_않는다() {
+        void domain이_비어있으면_Set_Cookie_헤더에_domain을_포함하지_않는다() {
             // Given
             properties.setDomain("");
             CookieUtil.setProperties(properties);
@@ -207,9 +263,24 @@ class CookieUtilTest {
             CookieUtil.addCookie(response, "test", "value", 100);
 
             // Then
-            verify(response).addCookie(cookieCaptor.capture());
-            Cookie cookie = cookieCaptor.getValue();
-            assertThat(cookie.getDomain()).isNull();
+            verify(response).addHeader(eq(HttpHeaders.SET_COOKIE), headerValueCaptor.capture());
+            String setCookie = headerValueCaptor.getValue();
+            assertThat(setCookie).doesNotContain("Domain=");
+        }
+
+        @Test
+        void secure_false이면_Set_Cookie_헤더에_Secure_없음() {
+            // Given
+            properties.setSecure(false);
+            CookieUtil.setProperties(properties);
+
+            // When
+            CookieUtil.addCookie(response, "test", "value", 100);
+
+            // Then
+            verify(response).addHeader(eq(HttpHeaders.SET_COOKIE), headerValueCaptor.capture());
+            String setCookie = headerValueCaptor.getValue();
+            assertThat(setCookie).doesNotContainIgnoringCase(";Secure").doesNotContainIgnoringCase("; Secure");
         }
     }
 

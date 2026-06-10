@@ -184,53 +184,6 @@ class KeycloakAuthenticationProviderTest {
     class 예외_테스트 {
 
         @Test
-        void UserInfo_조회_401_응답시_UserInfoFetchException이_발생한다() {
-            // 1. 준비
-            String idTokenVal = "valid.id.token";
-            String accessTokenVal = "valid.access.token";
-            KeycloakAuthentication authRequest = new KeycloakAuthentication(
-                createPreAuthPrincipal(USER_SUB), idTokenVal, accessTokenVal, false
-            );
-
-            // Mock introspect response - success
-            KeycloakIntrospectResponse introspectBody = mock(KeycloakIntrospectResponse.class);
-            lenient().when(introspectBody.getActive()).thenReturn(true);
-
-            @SuppressWarnings("unchecked")
-            KeycloakResponse<KeycloakIntrospectResponse> introspectResponse = mock(KeycloakResponse.class);
-            lenient().when(introspectResponse.getStatus()).thenReturn(200);
-            lenient().when(introspectResponse.getBody()).thenReturn(Optional.of(introspectBody));
-
-            when(keycloakClient.auth().authenticationByIntrospect(idTokenVal))
-                .thenReturn(introspectResponse);
-
-            // Mock UserInfo response - 401
-            @SuppressWarnings("unchecked")
-            KeycloakResponse<KeycloakUserInfo> userInfoResponse = mock(KeycloakResponse.class);
-            lenient().when(userInfoResponse.getStatus()).thenReturn(401);
-
-            when(keycloakClient.user().getUserInfo(accessTokenVal))
-                .thenReturn(userInfoResponse);
-
-            try (MockedStatic<JwtUtil> jwtUtilMock = mockStatic(JwtUtil.class)) {
-                Map<String, Object> claims = new HashMap<>();
-                claims.put("sub", USER_SUB);
-                claims.put("iat", Instant.now().getEpochSecond());
-                claims.put("exp", Instant.now().plusSeconds(3600).getEpochSecond());
-
-                jwtUtilMock.when(() -> JwtUtil.parseClaimsWithoutValidation(idTokenVal))
-                    .thenReturn(claims);
-                jwtUtilMock.when(() -> JwtUtil.parseSubjectWithoutValidation(idTokenVal))
-                    .thenReturn(USER_SUB);
-
-                // 2. 실행 & 검증
-                assertThatThrownBy(() -> provider.authenticate(authRequest))
-                    .isInstanceOf(UserInfoFetchException.class)
-                    .hasMessageContaining("401");
-            }
-        }
-
-        @Test
         void 온라인_검증_500_응답시_ConfigurationException이_발생한다() {
             // 1. 준비
             String idTokenVal = "valid.id.token";
@@ -251,6 +204,210 @@ class KeycloakAuthenticationProviderTest {
             assertThatThrownBy(() -> provider.authenticate(authRequest))
                 .isInstanceOf(ConfigurationException.class)
                 .hasMessageContaining("Keycloak 서버");
+        }
+    }
+
+    /**
+     * N-1 회귀 방지: require-user-info 플래그가 모든 UserInfo 실패 경로에 일관 적용되는지 검증합니다.
+     * require-user-info=false(기본): 200+빈body / 401 / 기타 / 네트워크 오류 모두 → 빈권한 성공.
+     * require-user-info=true: 동일 실패 경로 모두 → UserInfoFetchException(인증 실패).
+     */
+    @Nested
+    class requireUserInfo_플래그_동작 {
+
+        private KeycloakIntrospectResponse introspectBody;
+        @SuppressWarnings("unchecked")
+        private KeycloakResponse<KeycloakIntrospectResponse> introspectResponse;
+
+        @BeforeEach
+        void setUpIntrospectSuccess() {
+            introspectBody = mock(KeycloakIntrospectResponse.class);
+            lenient().when(introspectBody.getActive()).thenReturn(true);
+            introspectResponse = mock(KeycloakResponse.class);
+            lenient().when(introspectResponse.getStatus()).thenReturn(200);
+            lenient().when(introspectResponse.getBody()).thenReturn(Optional.of(introspectBody));
+            when(keycloakClient.auth().authenticationByIntrospect(anyString()))
+                .thenReturn(introspectResponse);
+        }
+
+        // ------------------------------------------------------------------
+        // require-user-info=false (기본값) — 모든 실패 경로 → 빈권한 성공
+        // ------------------------------------------------------------------
+
+        @Test
+        void requireUserInfo_false_UserInfo_빈body_200_인증_성공_빈권한() {
+            // UserInfo 200 + 빈 body
+            @SuppressWarnings("unchecked")
+            KeycloakResponse<KeycloakUserInfo> userInfoResponse = mock(KeycloakResponse.class);
+            lenient().when(userInfoResponse.getStatus()).thenReturn(200);
+            lenient().when(userInfoResponse.getBody()).thenReturn(Optional.empty());
+            when(keycloakClient.user().getUserInfo(anyString())).thenReturn(userInfoResponse);
+
+            try (MockedStatic<JwtUtil> jwtUtilMock = mockStatic(JwtUtil.class)) {
+                Map<String, Object> claims = buildIdTokenClaims();
+                jwtUtilMock.when(() -> JwtUtil.parseClaimsWithoutValidation(anyString())).thenReturn(claims);
+                jwtUtilMock.when(() -> JwtUtil.parseSubjectWithoutValidation(anyString())).thenReturn(USER_SUB);
+
+                KeycloakAuthentication authRequest = buildAuthRequest();
+                // requireUserInfo=false (기본값) — 예외 없이 인증 성공
+                Authentication result = provider.authenticate(authRequest);
+
+                assertThat(result.isAuthenticated()).isTrue();
+                assertThat(((KeycloakPrincipal) result.getPrincipal()).getName()).isEqualTo(USER_SUB);
+                assertThat(result.getAuthorities()).isEmpty();
+            }
+        }
+
+        @Test
+        void requireUserInfo_false_UserInfo_401_인증_성공_빈권한() {
+            @SuppressWarnings("unchecked")
+            KeycloakResponse<KeycloakUserInfo> userInfoResponse = mock(KeycloakResponse.class);
+            lenient().when(userInfoResponse.getStatus()).thenReturn(401);
+            when(keycloakClient.user().getUserInfo(anyString())).thenReturn(userInfoResponse);
+
+            try (MockedStatic<JwtUtil> jwtUtilMock = mockStatic(JwtUtil.class)) {
+                Map<String, Object> claims = buildIdTokenClaims();
+                jwtUtilMock.when(() -> JwtUtil.parseClaimsWithoutValidation(anyString())).thenReturn(claims);
+                jwtUtilMock.when(() -> JwtUtil.parseSubjectWithoutValidation(anyString())).thenReturn(USER_SUB);
+
+                Authentication result = provider.authenticate(buildAuthRequest());
+
+                assertThat(result.isAuthenticated()).isTrue();
+                assertThat(result.getAuthorities()).isEmpty();
+            }
+        }
+
+        @Test
+        void requireUserInfo_false_UserInfo_503_인증_성공_빈권한() {
+            @SuppressWarnings("unchecked")
+            KeycloakResponse<KeycloakUserInfo> userInfoResponse = mock(KeycloakResponse.class);
+            lenient().when(userInfoResponse.getStatus()).thenReturn(503);
+            when(keycloakClient.user().getUserInfo(anyString())).thenReturn(userInfoResponse);
+
+            try (MockedStatic<JwtUtil> jwtUtilMock = mockStatic(JwtUtil.class)) {
+                Map<String, Object> claims = buildIdTokenClaims();
+                jwtUtilMock.when(() -> JwtUtil.parseClaimsWithoutValidation(anyString())).thenReturn(claims);
+                jwtUtilMock.when(() -> JwtUtil.parseSubjectWithoutValidation(anyString())).thenReturn(USER_SUB);
+
+                Authentication result = provider.authenticate(buildAuthRequest());
+
+                assertThat(result.isAuthenticated()).isTrue();
+                assertThat(result.getAuthorities()).isEmpty();
+            }
+        }
+
+        @Test
+        void requireUserInfo_false_RestClientException_인증_성공_빈권한() {
+            when(keycloakClient.user().getUserInfo(anyString()))
+                .thenThrow(new org.springframework.web.client.RestClientException("connection refused"));
+
+            try (MockedStatic<JwtUtil> jwtUtilMock = mockStatic(JwtUtil.class)) {
+                Map<String, Object> claims = buildIdTokenClaims();
+                jwtUtilMock.when(() -> JwtUtil.parseClaimsWithoutValidation(anyString())).thenReturn(claims);
+                jwtUtilMock.when(() -> JwtUtil.parseSubjectWithoutValidation(anyString())).thenReturn(USER_SUB);
+
+                Authentication result = provider.authenticate(buildAuthRequest());
+
+                assertThat(result.isAuthenticated()).isTrue();
+                assertThat(result.getAuthorities()).isEmpty();
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // require-user-info=true — 모든 실패 경로 → 인증 실패(UserInfoFetchException)
+        // ------------------------------------------------------------------
+
+        @Test
+        void requireUserInfo_true_UserInfo_빈body_200_인증_실패() {
+            provider.setRequireUserInfo(true);
+
+            @SuppressWarnings("unchecked")
+            KeycloakResponse<KeycloakUserInfo> userInfoResponse = mock(KeycloakResponse.class);
+            lenient().when(userInfoResponse.getStatus()).thenReturn(200);
+            lenient().when(userInfoResponse.getBody()).thenReturn(Optional.empty());
+            when(keycloakClient.user().getUserInfo(anyString())).thenReturn(userInfoResponse);
+
+            try (MockedStatic<JwtUtil> jwtUtilMock = mockStatic(JwtUtil.class)) {
+                Map<String, Object> claims = buildIdTokenClaims();
+                jwtUtilMock.when(() -> JwtUtil.parseClaimsWithoutValidation(anyString())).thenReturn(claims);
+                jwtUtilMock.when(() -> JwtUtil.parseSubjectWithoutValidation(anyString())).thenReturn(USER_SUB);
+
+                assertThatThrownBy(() -> provider.authenticate(buildAuthRequest()))
+                    .isInstanceOf(UserInfoFetchException.class);
+            }
+        }
+
+        @Test
+        void requireUserInfo_true_UserInfo_401_인증_실패() {
+            provider.setRequireUserInfo(true);
+
+            @SuppressWarnings("unchecked")
+            KeycloakResponse<KeycloakUserInfo> userInfoResponse = mock(KeycloakResponse.class);
+            lenient().when(userInfoResponse.getStatus()).thenReturn(401);
+            when(keycloakClient.user().getUserInfo(anyString())).thenReturn(userInfoResponse);
+
+            try (MockedStatic<JwtUtil> jwtUtilMock = mockStatic(JwtUtil.class)) {
+                Map<String, Object> claims = buildIdTokenClaims();
+                jwtUtilMock.when(() -> JwtUtil.parseClaimsWithoutValidation(anyString())).thenReturn(claims);
+                jwtUtilMock.when(() -> JwtUtil.parseSubjectWithoutValidation(anyString())).thenReturn(USER_SUB);
+
+                assertThatThrownBy(() -> provider.authenticate(buildAuthRequest()))
+                    .isInstanceOf(UserInfoFetchException.class)
+                    .hasMessageContaining("401");
+            }
+        }
+
+        @Test
+        void requireUserInfo_true_UserInfo_503_인증_실패() {
+            provider.setRequireUserInfo(true);
+
+            @SuppressWarnings("unchecked")
+            KeycloakResponse<KeycloakUserInfo> userInfoResponse = mock(KeycloakResponse.class);
+            lenient().when(userInfoResponse.getStatus()).thenReturn(503);
+            when(keycloakClient.user().getUserInfo(anyString())).thenReturn(userInfoResponse);
+
+            try (MockedStatic<JwtUtil> jwtUtilMock = mockStatic(JwtUtil.class)) {
+                Map<String, Object> claims = buildIdTokenClaims();
+                jwtUtilMock.when(() -> JwtUtil.parseClaimsWithoutValidation(anyString())).thenReturn(claims);
+                jwtUtilMock.when(() -> JwtUtil.parseSubjectWithoutValidation(anyString())).thenReturn(USER_SUB);
+
+                assertThatThrownBy(() -> provider.authenticate(buildAuthRequest()))
+                    .isInstanceOf(UserInfoFetchException.class);
+            }
+        }
+
+        @Test
+        void requireUserInfo_true_RestClientException_인증_실패() {
+            provider.setRequireUserInfo(true);
+
+            when(keycloakClient.user().getUserInfo(anyString()))
+                .thenThrow(new org.springframework.web.client.RestClientException("connection refused"));
+
+            try (MockedStatic<JwtUtil> jwtUtilMock = mockStatic(JwtUtil.class)) {
+                Map<String, Object> claims = buildIdTokenClaims();
+                jwtUtilMock.when(() -> JwtUtil.parseClaimsWithoutValidation(anyString())).thenReturn(claims);
+                jwtUtilMock.when(() -> JwtUtil.parseSubjectWithoutValidation(anyString())).thenReturn(USER_SUB);
+
+                assertThatThrownBy(() -> provider.authenticate(buildAuthRequest()))
+                    .isInstanceOf(UserInfoFetchException.class);
+            }
+        }
+
+        // ------------------------------------------------------------------
+        // 헬퍼
+        // ------------------------------------------------------------------
+
+        private KeycloakAuthentication buildAuthRequest() {
+            return new KeycloakAuthentication(
+                createPreAuthPrincipal(USER_SUB), "any.id.token", "any.access.token", false);
+        }
+
+        private Map<String, Object> buildIdTokenClaims() {
+            Map<String, Object> claims = new HashMap<>();
+            claims.put("sub", USER_SUB);
+            claims.put("iat", Instant.now().getEpochSecond());
+            claims.put("exp", Instant.now().plusSeconds(3600).getEpochSecond());
+            return claims;
         }
     }
 }

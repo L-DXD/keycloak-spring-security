@@ -152,6 +152,53 @@ class CsrfExemptMatcherTest {
   }
 
   // ==========================================================================
+  // H-4: /logout CSRF 면제는 Bearer Token 활성 시에만
+  // ==========================================================================
+
+  @Nested
+  class H4_logout_CSRF_면제_조건 {
+
+    @Test
+    void bearerToken_비활성시_logout_경로는_CSRF_보호_적용됨() {
+      // Bearer Token 비활성 → /logout이 면제 목록에 없음
+      // KeycloakWebFluxSecurityConfigurer.configureCsrf: bearerToken.isEnabled()==false 이면
+      // /logout을 ignorePaths에 추가하지 않는다.
+      List<String> exemptPaths = List.of("/logout/connect/back-channel/keycloak");
+      ServerWebExchangeMatcher csrfMatcher = buildCsrfMatcher(exemptPaths, false);
+
+      // POST /logout → CSRF 보호 적용 (match=true)
+      StepVerifier.create(csrfMatcher.matches(exchange("POST", "/logout")))
+          .expectNextMatches(ServerWebExchangeMatcher.MatchResult::isMatch)
+          .verifyComplete();
+    }
+
+    @Test
+    void bearerToken_활성시_logout_경로는_CSRF_면제됨() {
+      // Bearer Token 활성 → /logout이 면제 목록에 포함
+      List<String> exemptPaths = List.of("/auth/token", "/auth/refresh", "/auth/logout", "/logout",
+          "/logout/connect/back-channel/keycloak");
+      ServerWebExchangeMatcher csrfMatcher = buildCsrfMatcher(exemptPaths, false);
+
+      // POST /logout → CSRF 면제 (match=false)
+      StepVerifier.create(csrfMatcher.matches(exchange("POST", "/logout")))
+          .expectNextMatches(result -> !result.isMatch())
+          .verifyComplete();
+    }
+
+    @Test
+    void bearerToken_비활성시_back_channel_경로는_여전히_CSRF_면제() {
+      // /logout/connect/back-channel/keycloak 은 항상 면제
+      List<String> exemptPaths = List.of("/logout/connect/back-channel/keycloak");
+      ServerWebExchangeMatcher csrfMatcher = buildCsrfMatcher(exemptPaths, false);
+
+      StepVerifier.create(
+              csrfMatcher.matches(exchange("POST", "/logout/connect/back-channel/keycloak")))
+          .expectNextMatches(result -> !result.isMatch())
+          .verifyComplete();
+    }
+  }
+
+  // ==========================================================================
   // Basic Auth 헤더 면제
   // ==========================================================================
 

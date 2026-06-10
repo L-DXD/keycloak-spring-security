@@ -11,6 +11,7 @@ import com.ids.keycloak.security.exception.RefreshTokenException;
 import com.ids.keycloak.security.exception.UserInfoFetchException;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
+import com.ids.keycloak.security.util.ClientIpResolver;
 import com.ids.keycloak.security.util.CookieUtil;
 import com.ids.keycloak.security.util.JwtUtil;
 import com.sd.KeycloakClient.dto.KeycloakResponse;
@@ -50,6 +51,12 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
     private final KeycloakClient keycloakClient;
     private final List<String> skipPaths;
     private final AuthenticationMethodDetector methodDetector;
+
+    /**
+     * 신뢰 프록시 홉 수. 기본값 0 = XFF 무시, remoteAddr 사용.
+     * {@link ClientIpResolver} 참고.
+     */
+    private int trustedProxyCount = 0;
 
     public KeycloakAuthenticationFilter(
         AuthenticationManager authenticationManager,
@@ -93,6 +100,16 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
         this.keycloakClient = keycloakClient;
         this.skipPaths = skipPaths != null ? skipPaths : List.of();
         this.methodDetector = new AuthenticationMethodDetector(loginPaths);
+    }
+
+    /**
+     * 신뢰 프록시 홉 수를 설정합니다.
+     * {@code KeycloakHttpConfigurer}에서 {@code keycloak.security.trusted-proxy-count} 값을 주입합니다.
+     *
+     * @param trustedProxyCount 신뢰 프록시 홉 수 (0: XFF 무시, -1: 레거시 동작, N>0: 홉 기반 파싱)
+     */
+    public void setTrustedProxyCount(int trustedProxyCount) {
+        this.trustedProxyCount = trustedProxyCount;
     }
 
     /**
@@ -286,11 +303,11 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
     }
 
     private String getClientIp(HttpServletRequest request) {
-        String xff = request.getHeader("X-Forwarded-For");
-        if (xff != null && !xff.isBlank()) {
-            return xff.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
+        return ClientIpResolver.resolve(
+            request.getHeader("X-Forwarded-For"),
+            request.getRemoteAddr(),
+            trustedProxyCount
+        );
     }
 
     private KeycloakPrincipal createPrincipalFromIdToken(String idToken) {
