@@ -149,20 +149,44 @@ class KeycloakReactiveAuthenticationManagerTest {
   }
 
   // ==========================================================================
-  // UserInfo fallback 동작 검증
+  // N-2 회귀 방지: require-user-info 플래그 동작 — servlet(N-1)과 동일 정책
   // ==========================================================================
 
   @Nested
-  class UserInfo_fallback {
+  class requireUserInfo_플래그_동작 {
 
-    /**
-     * UserInfoFetchException 은 KeycloakSecurityException → RuntimeException 상속.
-     * {@code fetchUserInfo} 의 onErrorResume 조건은 {@code !(e instanceof KeycloakSecurityException)} 도 체크하므로
-     * → onErrorResume 이 적용되지 않아 UserInfoFetchException 이 전파됨.
-     * → 최상위 onErrorResume 도 KeycloakSecurityException 은 통과시키므로 에러 전파.
-     */
+    // ------------------------------------------------------------------
+    // require-user-info=false (기본값) — 모든 실패 경로 → 빈권한 성공
+    // ------------------------------------------------------------------
+
     @Test
-    void userinfo_401_UserInfoFetchException_전파() {
+    void requireUserInfo_false_userinfo_빈body_200_인증_성공_빈권한() {
+      // 200 + 빈 body → Mono.empty() → switchIfEmpty → null UserInfo → 빈권한 성공
+      KeycloakResponse<KeycloakUserInfo> emptyBodyResp =
+          KeycloakResponse.<KeycloakUserInfo>builder().status(200).build();
+      when(authAsyncClient.authenticationByIntrospect(ID_TOKEN_VAL))
+          .thenReturn(Mono.just(introspectOk(true)));
+      when(userAsyncClient.getUserInfo(ACCESS_TOKEN_VAL))
+          .thenReturn(Mono.just(emptyBodyResp));
+
+      try (MockedStatic<JwtUtil> jwtMock = mockStatic(JwtUtil.class)) {
+        jwtMock.when(() -> JwtUtil.parseClaimsWithoutValidation(ID_TOKEN_VAL))
+            .thenReturn(buildClaims());
+        jwtMock.when(() -> JwtUtil.parseSubjectWithoutValidation(ID_TOKEN_VAL))
+            .thenReturn(USER_SUB);
+
+        StepVerifier.create(manager.authenticate(buildAuthRequest(ID_TOKEN_VAL, ACCESS_TOKEN_VAL)))
+            .expectNextMatches(auth -> {
+              assertThat(auth.isAuthenticated()).isTrue();
+              assertThat(auth.getAuthorities()).isEmpty();
+              return true;
+            })
+            .verifyComplete();
+      }
+    }
+
+    @Test
+    void requireUserInfo_false_userinfo_401_인증_성공_빈권한() {
       when(authAsyncClient.authenticationByIntrospect(ID_TOKEN_VAL))
           .thenReturn(Mono.just(introspectOk(true)));
       when(userAsyncClient.getUserInfo(ACCESS_TOKEN_VAL))
@@ -175,17 +199,44 @@ class KeycloakReactiveAuthenticationManagerTest {
             .thenReturn(USER_SUB);
 
         StepVerifier.create(manager.authenticate(buildAuthRequest(ID_TOKEN_VAL, ACCESS_TOKEN_VAL)))
-            .expectError(com.ids.keycloak.security.exception.UserInfoFetchException.class)
-            .verify();
+            .expectNextMatches(auth -> {
+              assertThat(auth.isAuthenticated()).isTrue();
+              assertThat(auth.getAuthorities()).isEmpty();
+              return true;
+            })
+            .verifyComplete();
+      }
+    }
+
+    @Test
+    void requireUserInfo_false_userinfo_503_인증_성공_빈권한() {
+      when(authAsyncClient.authenticationByIntrospect(ID_TOKEN_VAL))
+          .thenReturn(Mono.just(introspectOk(true)));
+      when(userAsyncClient.getUserInfo(ACCESS_TOKEN_VAL))
+          .thenReturn(Mono.just(userInfoFail(503)));
+
+      try (MockedStatic<JwtUtil> jwtMock = mockStatic(JwtUtil.class)) {
+        jwtMock.when(() -> JwtUtil.parseClaimsWithoutValidation(ID_TOKEN_VAL))
+            .thenReturn(buildClaims());
+        jwtMock.when(() -> JwtUtil.parseSubjectWithoutValidation(ID_TOKEN_VAL))
+            .thenReturn(USER_SUB);
+
+        StepVerifier.create(manager.authenticate(buildAuthRequest(ID_TOKEN_VAL, ACCESS_TOKEN_VAL)))
+            .expectNextMatches(auth -> {
+              assertThat(auth.isAuthenticated()).isTrue();
+              assertThat(auth.getAuthorities()).isEmpty();
+              return true;
+            })
+            .verifyComplete();
       }
     }
 
     /**
-     * 순수 RuntimeException 통신 오류는 onErrorResume 에서 잡혀 Mono.empty() 반환.
-     * switchIfEmpty 에서 createAuthenticatedToken(null) 호출 → 인증 성공.
+     * 순수 RuntimeException 통신 오류는 onErrorResume 에서 잡혀 handleUserInfoFailureReactive 호출.
+     * requireUserInfo=false → Mono.empty() → switchIfEmpty → 빈권한 인증 성공.
      */
     @Test
-    void userinfo_RuntimeException_오류시_null_fallback_인증_성공() {
+    void requireUserInfo_false_RuntimeException_오류시_빈권한_인증_성공() {
       when(authAsyncClient.authenticationByIntrospect(ID_TOKEN_VAL))
           .thenReturn(Mono.just(introspectOk(true)));
       when(userAsyncClient.getUserInfo(ACCESS_TOKEN_VAL))
@@ -200,9 +251,105 @@ class KeycloakReactiveAuthenticationManagerTest {
         StepVerifier.create(manager.authenticate(buildAuthRequest(ID_TOKEN_VAL, ACCESS_TOKEN_VAL)))
             .expectNextMatches(auth -> {
               assertThat(auth.isAuthenticated()).isTrue();
+              assertThat(auth.getAuthorities()).isEmpty();
               return true;
             })
             .verifyComplete();
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // require-user-info=true — 모든 실패 경로 → 인증 실패(UserInfoFetchException)
+    // ------------------------------------------------------------------
+
+    @Test
+    void requireUserInfo_true_userinfo_빈body_200_인증_실패() {
+      manager.setRequireUserInfo(true);
+
+      KeycloakResponse<KeycloakUserInfo> emptyBodyResp =
+          KeycloakResponse.<KeycloakUserInfo>builder().status(200).build();
+      when(authAsyncClient.authenticationByIntrospect(ID_TOKEN_VAL))
+          .thenReturn(Mono.just(introspectOk(true)));
+      when(userAsyncClient.getUserInfo(ACCESS_TOKEN_VAL))
+          .thenReturn(Mono.just(emptyBodyResp));
+
+      try (MockedStatic<JwtUtil> jwtMock = mockStatic(JwtUtil.class)) {
+        jwtMock.when(() -> JwtUtil.parseClaimsWithoutValidation(ID_TOKEN_VAL))
+            .thenReturn(buildClaims());
+        jwtMock.when(() -> JwtUtil.parseSubjectWithoutValidation(ID_TOKEN_VAL))
+            .thenReturn(USER_SUB);
+
+        StepVerifier.create(manager.authenticate(buildAuthRequest(ID_TOKEN_VAL, ACCESS_TOKEN_VAL)))
+            .expectErrorMatches(
+                e -> e instanceof com.ids.keycloak.security.exception.UserInfoFetchException)
+            .verify();
+      }
+    }
+
+    @Test
+    void requireUserInfo_true_userinfo_401_인증_실패() {
+      manager.setRequireUserInfo(true);
+
+      when(authAsyncClient.authenticationByIntrospect(ID_TOKEN_VAL))
+          .thenReturn(Mono.just(introspectOk(true)));
+      when(userAsyncClient.getUserInfo(ACCESS_TOKEN_VAL))
+          .thenReturn(Mono.just(userInfoFail(401)));
+
+      try (MockedStatic<JwtUtil> jwtMock = mockStatic(JwtUtil.class)) {
+        jwtMock.when(() -> JwtUtil.parseClaimsWithoutValidation(ID_TOKEN_VAL))
+            .thenReturn(buildClaims());
+        jwtMock.when(() -> JwtUtil.parseSubjectWithoutValidation(ID_TOKEN_VAL))
+            .thenReturn(USER_SUB);
+
+        StepVerifier.create(manager.authenticate(buildAuthRequest(ID_TOKEN_VAL, ACCESS_TOKEN_VAL)))
+            .expectErrorMatches(
+                e -> e instanceof com.ids.keycloak.security.exception.UserInfoFetchException
+                    && e.getMessage().contains("401"))
+            .verify();
+      }
+    }
+
+    @Test
+    void requireUserInfo_true_userinfo_503_인증_실패() {
+      manager.setRequireUserInfo(true);
+
+      when(authAsyncClient.authenticationByIntrospect(ID_TOKEN_VAL))
+          .thenReturn(Mono.just(introspectOk(true)));
+      when(userAsyncClient.getUserInfo(ACCESS_TOKEN_VAL))
+          .thenReturn(Mono.just(userInfoFail(503)));
+
+      try (MockedStatic<JwtUtil> jwtMock = mockStatic(JwtUtil.class)) {
+        jwtMock.when(() -> JwtUtil.parseClaimsWithoutValidation(ID_TOKEN_VAL))
+            .thenReturn(buildClaims());
+        jwtMock.when(() -> JwtUtil.parseSubjectWithoutValidation(ID_TOKEN_VAL))
+            .thenReturn(USER_SUB);
+
+        StepVerifier.create(manager.authenticate(buildAuthRequest(ID_TOKEN_VAL, ACCESS_TOKEN_VAL)))
+            .expectErrorMatches(
+                e -> e instanceof com.ids.keycloak.security.exception.UserInfoFetchException)
+            .verify();
+      }
+    }
+
+    @Test
+    void requireUserInfo_true_RuntimeException_오류시_인증_실패() {
+      manager.setRequireUserInfo(true);
+
+      when(authAsyncClient.authenticationByIntrospect(ID_TOKEN_VAL))
+          .thenReturn(Mono.just(introspectOk(true)));
+      when(userAsyncClient.getUserInfo(ACCESS_TOKEN_VAL))
+          .thenReturn(Mono.error(new RuntimeException("network error")));
+
+      try (MockedStatic<JwtUtil> jwtMock = mockStatic(JwtUtil.class)) {
+        jwtMock.when(() -> JwtUtil.parseClaimsWithoutValidation(ID_TOKEN_VAL))
+            .thenReturn(buildClaims());
+        jwtMock.when(() -> JwtUtil.parseSubjectWithoutValidation(ID_TOKEN_VAL))
+            .thenReturn(USER_SUB);
+
+        StepVerifier.create(manager.authenticate(buildAuthRequest(ID_TOKEN_VAL, ACCESS_TOKEN_VAL)))
+            .expectErrorMatches(
+                e -> e instanceof com.ids.keycloak.security.exception.UserInfoFetchException)
+            .verify();
       }
     }
   }

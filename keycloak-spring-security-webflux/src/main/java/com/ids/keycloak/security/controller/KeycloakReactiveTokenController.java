@@ -4,6 +4,7 @@ import com.ids.keycloak.security.dto.ReactiveLogoutRequest;
 import com.ids.keycloak.security.dto.ReactiveRefreshRequest;
 import com.ids.keycloak.security.dto.ReactiveTokenRequest;
 import com.ids.keycloak.security.ratelimit.AuthenticationEventLogger;
+import com.ids.keycloak.security.util.ClientIpResolver;
 import com.sd.KeycloakClient.dto.auth.KeycloakTokenInfo;
 import com.sd.KeycloakClient.factory.KeycloakClient;
 import jakarta.validation.Valid;
@@ -36,10 +37,17 @@ public class KeycloakReactiveTokenController {
 
   private final KeycloakClient keycloakClient;
   private final String prefix;
+  private final int trustedProxyCount;
 
   public KeycloakReactiveTokenController(KeycloakClient keycloakClient, String prefix) {
+    this(keycloakClient, prefix, 0);
+  }
+
+  public KeycloakReactiveTokenController(
+      KeycloakClient keycloakClient, String prefix, int trustedProxyCount) {
     this.keycloakClient = keycloakClient;
     this.prefix = prefix;
+    this.trustedProxyCount = trustedProxyCount;
   }
 
   /**
@@ -207,12 +215,13 @@ public class KeycloakReactiveTokenController {
   }
 
   private String getClientIp(ServerHttpRequest request) {
-    String xff = request.getHeaders().getFirst("X-Forwarded-For");
-    if (xff != null && !xff.isBlank()) {
-      return xff.split(",")[0].trim();
-    }
-    return request.getRemoteAddress() != null
+    String remoteAddr = request.getRemoteAddress() != null
         ? request.getRemoteAddress().getAddress().getHostAddress()
         : "unknown";
+    return ClientIpResolver.resolve(
+        request.getHeaders().getFirst("X-Forwarded-For"),
+        remoteAddr,
+        trustedProxyCount
+    );
   }
 }

@@ -37,9 +37,26 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
    private final KeycloakClient keycloakClient;
    private final String clientId;
 
+   /**
+    * UserInfo 실패 시 인증 실패 처리 여부.
+    * 기본값 false = 기존 동작(빈 권한으로 인증 성공) 유지, 회귀 0.
+    * keycloak.security.authentication.require-user-info=true 시 활성화됨.
+    */
+   private boolean requireUserInfo = false;
+
    public KeycloakAuthenticationProvider(KeycloakClient keycloakClient, String clientId) {
       this.keycloakClient = keycloakClient;
       this.clientId = clientId;
+   }
+
+   /**
+    * UserInfo 실패 처리 방식을 설정합니다.
+    * {@code KeycloakHttpConfigurer}에서 {@code keycloak.security.authentication.require-user-info} 값을 주입합니다.
+    *
+    * @param requireUserInfo true이면 UserInfo 실패 시 인증 실패로 처리
+    */
+   public void setRequireUserInfo(boolean requireUserInfo) {
+      this.requireUserInfo = requireUserInfo;
    }
 
    /**
@@ -99,8 +116,17 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
    /**
     * Keycloak UserInfo 엔드포인트를 호출하여 사용자 정보를 조회합니다.
     *
+    * <p>모든 UserInfo 실패 경로(200+빈body, 401, 기타 상태코드, 네트워크 오류)에 대해
+    * {@code requireUserInfo} 플래그를 동일하게 적용합니다.
+    * <ul>
+    *   <li>{@code requireUserInfo=false}(기본값): 모든 실패 시 null 반환(빈 권한으로 인증 성공, 기존 동작 복원)</li>
+    *   <li>{@code requireUserInfo=true}: 모든 실패 시 {@link UserInfoFetchException} throw(인증 실패)</li>
+    * </ul>
+    * </p>
+    *
     * @param accessToken Access Token
-    * @return OidcUserInfo 객체 (실패 시 null)
+    * @return OidcUserInfo 객체 (requireUserInfo=false이고 실패 시 null)
+    * @throws UserInfoFetchException requireUserInfo=true이고 UserInfo 조회 실패 시
     */
    private OidcUserInfo fetchUserInfo(String accessToken) {
       try {
@@ -115,21 +141,40 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
                   return convertToOidcUserInfo(keycloakUserInfo);
                }
                log.warn("[Provider] UserInfo 응답 본문이 비어있습니다.");
-               throw new UserInfoFetchException("UserInfo 응답 본문이 비어있습니다.");
+               return handleUserInfoFailure("UserInfo 응답 본문이 비어있습니다.");
             }
             case 401 -> {
                log.warn("[Provider] UserInfo 조회 실패 (401 Unauthorized).");
-               throw new UserInfoFetchException("UserInfo 조회 실패 (401 Unauthorized).");
+               return handleUserInfoFailure("UserInfo 조회 실패 (401 Unauthorized).");
             }
             default -> {
                log.warn("[Provider] UserInfo 조회 중 예상치 못한 응답. 상태 코드: {}", status);
-               throw new UserInfoFetchException("UserInfo 조회 중 예상치 못한 응답. 상태 코드: " + status);
+               return handleUserInfoFailure("UserInfo 조회 중 예상치 못한 응답. 상태 코드: " + status);
             }
          }
       } catch (RestClientException e) {
          log.warn("[Provider] UserInfo 조회 중 오류 발생: {}", e.getMessage());
-         return null;
+         return handleUserInfoFailure("UserInfo 조회 중 오류 발생: " + e.getMessage());
       }
+   }
+
+   /**
+    * UserInfo 조회 실패를 {@code requireUserInfo} 플래그에 따라 처리합니다.
+    *
+    * <p>모든 UserInfo 실패 경로(200+빈body, 401, 기타 상태코드, 네트워크 오류)가
+    * 이 메서드를 통해 일관되게 처리됩니다.</p>
+    *
+    * @param reason 실패 이유 메시지
+    * @return null ({@code requireUserInfo=false}인 경우, 빈 권한으로 인증 성공)
+    * @throws UserInfoFetchException {@code requireUserInfo=true}인 경우
+    */
+   private OidcUserInfo handleUserInfoFailure(String reason) {
+      if (requireUserInfo) {
+         log.warn("[Provider] require-user-info=true: UserInfo 실패를 인증 실패로 승격합니다. 사유: {}", reason);
+         throw new UserInfoFetchException(reason);
+      }
+      log.debug("[Provider] require-user-info=false: UserInfo 실패 무시, 빈 권한으로 인증 성공. 사유: {}", reason);
+      return null;
    }
 
    /**
