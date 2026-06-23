@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -151,6 +152,123 @@ class KeycloakServerAuthenticationEntryPointTest {
       MockServerWebExchange exchange = MockServerWebExchange.from(
           MockServerHttpRequest.get("/protected")
               .header("X-Requested-With", "XMLHttpRequest")
+              .build());
+
+      StepVerifier.create(entryPoint.commence(exchange, new BadCredentialsException("bad")))
+          .verifyComplete();
+
+      assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    @DisplayName("브라우저 Accept(text/html,...,*/*) → 비-AJAX → 302 리다이렉트")
+    void 브라우저_Accept_비AJAX_리다이렉트() {
+      KeycloakErrorProperties errorProps = new KeycloakErrorProperties();
+      errorProps.setRedirectEnabled(true);
+      errorProps.setAjaxReturnsJson(true);
+      errorProps.setAuthenticationFailedRedirectUrl("/login");
+
+      var entryPoint = new KeycloakServerAuthenticationEntryPoint(
+          objectMapper, errorProps, false, null);
+
+      // 브라우저 표준 Accept 헤더: text/html 포함 + */* 포함
+      MockServerWebExchange exchange = MockServerWebExchange.from(
+          MockServerHttpRequest.get("/protected")
+              .accept(MediaType.TEXT_HTML,
+                  MediaType.parseMediaType("application/xhtml+xml"),
+                  MediaType.parseMediaType("application/xml;q=0.9"),
+                  MediaType.ALL)
+              .build());
+
+      StepVerifier.create(entryPoint.commence(exchange, new BadCredentialsException("bad")))
+          .verifyComplete();
+
+      // 브라우저 요청은 AJAX가 아니므로 302 리다이렉트
+      assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.FOUND);
+      assertThat(exchange.getResponse().getHeaders().getLocation().getPath()).isEqualTo("/login");
+    }
+
+    @Test
+    @DisplayName("Accept: application/json 단독 → AJAX → 401 JSON")
+    void Accept_application_json_단독_AJAX() {
+      KeycloakErrorProperties errorProps = new KeycloakErrorProperties();
+      errorProps.setRedirectEnabled(true);
+      errorProps.setAjaxReturnsJson(true);
+      errorProps.setAuthenticationFailedRedirectUrl("/login");
+
+      var entryPoint = new KeycloakServerAuthenticationEntryPoint(
+          objectMapper, errorProps, false, null);
+
+      MockServerWebExchange exchange = MockServerWebExchange.from(
+          MockServerHttpRequest.get("/protected")
+              .accept(MediaType.APPLICATION_JSON)
+              .build());
+
+      StepVerifier.create(entryPoint.commence(exchange, new BadCredentialsException("bad")))
+          .verifyComplete();
+
+      assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    @DisplayName("Accept: */* 단독 → 비-AJAX → 302 리다이렉트")
+    void Accept_wildcard_단독_비AJAX_리다이렉트() {
+      KeycloakErrorProperties errorProps = new KeycloakErrorProperties();
+      errorProps.setRedirectEnabled(true);
+      errorProps.setAjaxReturnsJson(true);
+      errorProps.setAuthenticationFailedRedirectUrl("/login");
+
+      var entryPoint = new KeycloakServerAuthenticationEntryPoint(
+          objectMapper, errorProps, false, null);
+
+      MockServerWebExchange exchange = MockServerWebExchange.from(
+          MockServerHttpRequest.get("/protected")
+              .accept(MediaType.ALL)
+              .build());
+
+      StepVerifier.create(entryPoint.commence(exchange, new BadCredentialsException("bad")))
+          .verifyComplete();
+
+      // */* 단독은 AJAX가 아니므로 302 리다이렉트
+      assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.FOUND);
+    }
+
+    @Test
+    @DisplayName("Accept 헤더 없음 → 비-AJAX → 302 리다이렉트")
+    void Accept_헤더_없음_비AJAX_리다이렉트() {
+      KeycloakErrorProperties errorProps = new KeycloakErrorProperties();
+      errorProps.setRedirectEnabled(true);
+      errorProps.setAjaxReturnsJson(true);
+      errorProps.setAuthenticationFailedRedirectUrl("/login");
+
+      var entryPoint = new KeycloakServerAuthenticationEntryPoint(
+          objectMapper, errorProps, false, null);
+
+      MockServerWebExchange exchange = MockServerWebExchange.from(
+          MockServerHttpRequest.get("/protected").build());
+
+      StepVerifier.create(entryPoint.commence(exchange, new BadCredentialsException("bad")))
+          .verifyComplete();
+
+      assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.FOUND);
+    }
+
+    @Test
+    @DisplayName("X-Requested-With: XMLHttpRequest (임의 Accept) → AJAX → 401 JSON")
+    void XRequestedWith_AJAX_JSON() {
+      KeycloakErrorProperties errorProps = new KeycloakErrorProperties();
+      errorProps.setRedirectEnabled(true);
+      errorProps.setAjaxReturnsJson(true);
+      errorProps.setAuthenticationFailedRedirectUrl("/login");
+
+      var entryPoint = new KeycloakServerAuthenticationEntryPoint(
+          objectMapper, errorProps, false, null);
+
+      // X-Requested-With만으로 AJAX 판정 — Accept는 */* 또는 없어도 무관
+      MockServerWebExchange exchange = MockServerWebExchange.from(
+          MockServerHttpRequest.get("/protected")
+              .header("X-Requested-With", "XMLHttpRequest")
+              .accept(MediaType.ALL)
               .build());
 
       StepVerifier.create(entryPoint.commence(exchange, new BadCredentialsException("bad")))
