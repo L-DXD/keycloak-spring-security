@@ -6,6 +6,7 @@ import com.ids.keycloak.security.config.KeycloakErrorProperties;
 import com.ids.keycloak.security.exception.ErrorCode;
 import com.ids.keycloak.security.exception.KeycloakSecurityException;
 import java.net.URI;
+import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.http.HttpHeaders;
@@ -137,19 +138,30 @@ public class KeycloakServerAuthenticationEntryPoint implements ServerAuthenticat
 
   /**
    * AJAX 요청 여부를 판단합니다.
-   * {@code X-Requested-With: XMLHttpRequest} 또는 {@code Accept: application/json} 기준.
+   *
+   * <p>판정 기준:
+   * <ol>
+   *   <li>{@code X-Requested-With: XMLHttpRequest} 헤더가 있으면 AJAX</li>
+   *   <li>Accept 헤더에 {@code text/html}이 포함되어 있으면 브라우저 네비게이션 → non-AJAX</li>
+   *   <li>Accept 헤더에 명시적 JSON(subtype이 "json" 또는 "+json"으로 끝나는 타입) 타입이 있고
+   *       text/html이 없으면 AJAX</li>
+   *   <li>{@code Accept: *&#47;*} 단독이나 Accept 헤더 없음 → non-AJAX</li>
+   * </ol>
+   * 브라우저는 보통 {@code text/html,...,*&#47;*;q=0.8} 형태로 Accept를 보내므로
+   * {@code *&#47;*} 와일드카드 매칭({@link MediaType#includes})을 사용하면
+   * application/json과 compatible로 판정되어 오분류가 발생한다. 이를 방지하기 위해
+   * subtype을 직접 비교한다.
    */
   private boolean isAjaxRequest(ServerWebExchange exchange) {
     HttpHeaders headers = exchange.getRequest().getHeaders();
-    String xRequestedWith = headers.getFirst(AJAX_HEADER);
-    if (AJAX_HEADER_VALUE.equalsIgnoreCase(xRequestedWith)) {
+    if (AJAX_HEADER_VALUE.equalsIgnoreCase(headers.getFirst(AJAX_HEADER))) {
       return true;
     }
-    MediaType accept = headers.getAccept().stream()
-        .filter(mt -> mt.includes(MediaType.APPLICATION_JSON))
-        .findFirst()
-        .orElse(null);
-    return accept != null;
+    List<MediaType> accepts = headers.getAccept();
+    boolean acceptsHtml = accepts.stream().anyMatch(MediaType.TEXT_HTML::isCompatibleWith);
+    boolean explicitJson = accepts.stream()
+        .anyMatch(mt -> "json".equals(mt.getSubtype()) || mt.getSubtype().endsWith("+json"));
+    return explicitJson && !acceptsHtml;
   }
 
   /**
