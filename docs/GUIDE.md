@@ -306,6 +306,7 @@ OAuth2AuthorizationRequestResolver authorizationRequestResolver(ClientRegistrati
 | PII 마스킹 교체/해제 | `LoggingValueSanitizer` 빈 등록 (`NoOpLoggingValueSanitizer`로 해제) |
 | Rate Limiter 구현 교체 | `RateLimiter` 빈 등록 (예: 분산 Redis 기반) |
 | 로깅 컨텍스트 접근자 | `LoggingContextAccessor` 빈 등록 |
+| 전체 수동 배선(auto-filter-chain 미사용) | 커스텀 인가 매니저·엔드포인트·로깅 유지가 필요하면 autoconfig 제외 후 컴포넌트 직접 조립 → **[WebFlux 수동 배선 가이드](15-WebFlux-수동배선-가이드.md)** |
 
 ```java
 // 예: PII 마스킹 끄기
@@ -354,6 +355,9 @@ LoggingValueSanitizer loggingValueSanitizer() {
 | Redis 세션인데 `NoClassDefFoundError` | `spring-boot-starter-data-redis` + `spring-session-data-redis` 의존성 누락 |
 | 다중 인스턴스에서 로그아웃이 일부만 전파 | `session.store-type: redis`로 전환 |
 | 토큰 발급 API 404 | `bearer-token.enabled: true` 확인, prefix(`/auth`) 경로 확인 |
+| 쿠키 설정 후 응답 500 (`No enum constant ...SameSite.lax`) | `cookie.same-site` 값을 대문자로 — `Lax`/`Strict`/`None` |
+| 인증은 성공하는데 역할 기반 인가가 전부 거부 | 권한이 **UserInfo**에서 추출됨 — Keycloak 역할(`realm_access`/`resource_access`)은 access token에만 있을 수 있음. role 매퍼 "Add to userinfo" 활성화 또는 access token 직접 파싱 → [수동 배선 가이드 함정 2](15-WebFlux-수동배선-가이드.md) |
+| (수동 배선) 로그인 성공 후 `AuthorizedClient를 찾을 수 없음` | `AuthenticatedPrincipalServerOAuth2AuthorizedClientRepository` 빈 등록 → [수동 배선 가이드 함정 4](15-WebFlux-수동배선-가이드.md) |
 
 ---
 
