@@ -3,7 +3,7 @@
 Keycloak을 Spring Security에 통합하는 라이브러리입니다. 의존성 하나와 최소 설정으로 OIDC 로그인·세션·로그아웃·인가가 자동 구성됩니다.
 
 - **지원**: JDK 17+, Spring Boot 3.5.x, Spring Security 6.5.x
-- **현재 버전**: `1.10.0`
+- **현재 버전**: `1.10.1`
 - **스택**: Servlet(Spring MVC) / **Reactive(WebFlux) — v1.8.0부터 servlet과 기능 동등** ([8. Reactive](#8-reactivewebflux))
 - 이 문서는 **도입 개발자용 사용 가이드**입니다. 아키텍처/기여 규칙은 [README](../README.md) 참고.
 
@@ -27,10 +27,10 @@ Keycloak을 Spring Security에 통합하는 라이브러리입니다. 의존성 
 
 ```gradle
 // Servlet (Spring MVC)
-implementation("io.github.l-dxd:keycloak-spring-security-web-starter:1.8.0")
+implementation("io.github.l-dxd:keycloak-spring-security-web-starter:1.10.1")
 
 // 또는 Reactive (WebFlux)
-implementation("io.github.l-dxd:keycloak-spring-security-webflux-starter:1.8.0")
+implementation("io.github.l-dxd:keycloak-spring-security-webflux-starter:1.10.1")
 ```
 > Redis 세션을 쓸 경우에만 추가:
 > ```gradle
@@ -322,6 +322,7 @@ LoggingValueSanitizer loggingValueSanitizer() {
 
 | 버전 | 변경 | 주의 |
 |------|------|------|
+| **1.10.1** | (버그픽스 #52) webflux/servlet AJAX 판정 통일 — 브라우저 `Accept: */*`를 JSON으로 오판하던 문제 수정(`ajax-returns-json=true` 시 브라우저 리다이렉트 정상화) | breaking 없음 |
 | **1.10.0** ⚠️ | **보안 강화** (보안검토 13건) — reactive 백채널 JWKS 서명+aud 검증, 쿠키 secure 기본 true, XFF 신뢰 프록시, servlet SameSite/토큰 no-store, PII 마스킹 확장(JWT/OAuth2), 인가 캐시·require-user-info 토글, Redis JSON 직렬화 | **Breaking 3건** — 아래 [마이그레이션](#마이그레이션-v190--v1100-breaking) |
 | **1.9.0** | OIDC authorize 파라미터(`acr_values`/`max_age`/`prompt`) 커스터마이즈 — LoA step-up·재인증 | 미설정 시 무동작(회귀 0). 경로별 step-up은 resolver 빈 재정의([4.9](#49-재인증--step-up-acr_values--max_age--prompt-v190)) |
 | **1.8.0** | **Reactive(WebFlux) 스택 추가** — servlet과 기능 동등 (OIDC 로그인·세션·인가·Bearer·Basic·RateLimit·CSRF·로그아웃·MDC 로깅) | `keycloak-spring-security-webflux-starter` 신규. servlet 사용자는 영향 없음 |

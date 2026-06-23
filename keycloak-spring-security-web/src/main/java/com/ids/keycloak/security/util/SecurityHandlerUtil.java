@@ -5,10 +5,10 @@ import com.ids.keycloak.security.error.ErrorResponse;
 import com.ids.keycloak.security.exception.ErrorCode;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.http.MediaType;
-
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.List;
+import org.springframework.http.MediaType;
 
 public class SecurityHandlerUtil {
 
@@ -21,14 +21,32 @@ public class SecurityHandlerUtil {
 
     /**
      * AJAX 요청인지 확인합니다.
-     * X-Requested-With 헤더가 XMLHttpRequest이거나 Accept 헤더가 application/json인 경우 AJAX 요청으로 판단합니다.
+     *
+     * <p>판정 기준:
+     * <ol>
+     *   <li>{@code X-Requested-With: XMLHttpRequest} 헤더가 있으면 AJAX</li>
+     *   <li>Accept 헤더에 {@code text/html}이 포함되어 있으면 브라우저 네비게이션 → non-AJAX</li>
+     *   <li>Accept 헤더에 명시적 JSON(subtype이 "json" 또는 "+json"으로 끝나는 타입) 타입이 있고
+     *       text/html이 없으면 AJAX</li>
+     *   <li>{@code Accept: *&#47;*} 단독이나 Accept 헤더 없음 → non-AJAX</li>
+     * </ol>
+     * 기존 {@code acceptHeader.contains("application/json")} 방식은 webflux 모듈과
+     * 동일한 규칙으로 통일한다.
      */
     public static boolean isAjaxRequest(HttpServletRequest request) {
         String xRequestedWith = request.getHeader(X_REQUESTED_WITH);
+        if (XML_HTTP_REQUEST.equals(xRequestedWith)) {
+            return true;
+        }
         String acceptHeader = request.getHeader("Accept");
-
-        return XML_HTTP_REQUEST.equals(xRequestedWith) ||
-            (acceptHeader != null && acceptHeader.contains(MediaType.APPLICATION_JSON_VALUE));
+        if (acceptHeader == null || acceptHeader.isBlank()) {
+            return false;
+        }
+        List<MediaType> accepts = MediaType.parseMediaTypes(acceptHeader);
+        boolean acceptsHtml = accepts.stream().anyMatch(MediaType.TEXT_HTML::isCompatibleWith);
+        boolean explicitJson = accepts.stream()
+            .anyMatch(mt -> "json".equals(mt.getSubtype()) || mt.getSubtype().endsWith("+json"));
+        return explicitJson && !acceptsHtml;
     }
 
     /**
