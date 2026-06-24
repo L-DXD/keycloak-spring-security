@@ -1,7 +1,6 @@
 package com.ids.keycloak.security.authentication;
 
 import com.ids.keycloak.security.config.KeycloakCookieProperties;
-import com.ids.keycloak.security.exception.AuthenticationFailedException;
 import com.ids.keycloak.security.exception.RefreshTokenException;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.session.ReactiveSessionManager;
@@ -76,7 +75,17 @@ public class KeycloakServerAuthenticationConverter implements ServerAuthenticati
 
       // WebSession을 비동기로 가져온 뒤, Refresh Token 확인
       return exchange.getSession()
-          .flatMap(session -> handleWithSession(exchange, session, idToken, accessToken));
+          .flatMap(session -> handleWithSession(exchange, session, idToken, accessToken))
+          .onErrorResume(
+              e -> !(e instanceof org.springframework.security.core.AuthenticationException),
+              e -> {
+                // convert()에서 AuthenticationException이 아닌 예외가 전파되면
+                // AuthenticationWebFilter.onErrorResume(AuthenticationException.class)가 잡지 못해
+                // HTTP 500이 발생한다. 여기서 최종 방어막으로 미인증(empty)으로 처리한다.
+                log.error("[Converter] 예상치 못한 오류로 인증 불가 ({}). 미인증으로 처리.", e.getMessage());
+                ReactiveCookieUtil.deleteAllTokenCookies(exchange.getResponse(), cookieProperties);
+                return Mono.empty();
+              });
     });
   }
 
@@ -175,23 +184,37 @@ public class KeycloakServerAuthenticationConverter implements ServerAuthenticati
                   return Mono.just(auth);
                 });
 
-          } else if (status == 401) {
-            log.warn("[Converter] Refresh Token 만료 또는 유효하지 않음 (401).");
+          } else if (status == 400 || status == 401) {
+            // 토큰 무효 (Refresh Token 만료/폐기): 미인증으로 처리 → Mono.empty()
+            // AuthenticationWebFilter.switchIfEmpty → 체인 계속 → authorizeExchange 거부
+            // → ExceptionTranslationWebFilter → 사용처가 등록한 EntryPoint(리다이렉트/401)
+            log.warn("[Converter] Refresh Token 만료 또는 유효하지 않음 ({}). 미인증(empty)으로 처리.", status);
             ReactiveCookieUtil.deleteAllTokenCookies(exchange.getResponse(), cookieProperties);
             return sessionManager.invalidateSession(session)
-                .then(Mono.error(new RefreshTokenException("Refresh Token이 만료되었습니다.")));
+                .then(Mono.empty());
           } else {
-            log.error("[Converter] 토큰 재발급 중 예상치 못한 응답. 상태 코드: {}", status);
-            return Mono.<Authentication>error(
-                new AuthenticationFailedException("토큰 재발급 실패. 상태 코드: " + status));
+            // 서버 오류(5xx) 또는 예상치 못한 응답: 토큰 유효성 판단 불가.
+            // 현재는 미인증(empty)으로 통일 처리 — EntryPoint 경유하여 로그인 유도.
+            // 추후 운영 요구사항에 따라 Mono.error(new SomeAuthenticationException(...)) 으로
+            // 전환하면 AuthenticationWebFilter.onErrorResume(AuthenticationException.class)에서
+            // failureHandler가 처리하도록 변경 가능.
+            log.error("[Converter] 토큰 재발급 중 예상치 못한 응답 (status={}). 미인증으로 처리.", status);
+            ReactiveCookieUtil.deleteAllTokenCookies(exchange.getResponse(), cookieProperties);
+            return sessionManager.invalidateSession(session)
+                .then(Mono.empty());
           }
         })
         .onErrorResume(
-            e -> !(e instanceof org.springframework.security.core.AuthenticationException)
-                && !(e instanceof com.ids.keycloak.security.exception.KeycloakSecurityException),
+            e -> !(e instanceof org.springframework.security.core.AuthenticationException),
             e -> {
-              log.error("[Converter] 토큰 재발급 중 통신 오류: {}", e.getMessage());
-              return Mono.error(new AuthenticationFailedException("Keycloak 통신 실패: " + e.getMessage()));
+              // 통신 오류(네트워크, 타임아웃 등) 또는 KeycloakSecurityException 계열 중
+              // AuthenticationException이 아닌 모든 예외 → 미인증(empty)으로 처리.
+              // 이 경로에서 RuntimeException을 그대로 전파하면 AuthenticationWebFilter가
+              // onErrorResume(AuthenticationException.class) 로 잡지 못해 HTTP 500이 발생함.
+              log.error("[Converter] 토큰 재발급 중 오류 발생 ({}). 미인증으로 처리.", e.getMessage());
+              ReactiveCookieUtil.deleteAllTokenCookies(exchange.getResponse(), cookieProperties);
+              return sessionManager.invalidateSession(session)
+                  .then(Mono.empty());
             });
   }
 
