@@ -1,10 +1,12 @@
 # Architecture & Development Guidelines
 
-> 📖 **사용 가이드**: [docs/GUIDE.md](docs/GUIDE.md) — 빠른 시작 · 설정 레퍼런스 · 기능별 가이드 · 마이그레이션 · 트러블슈팅
-> 📋 **변경 이력**: [CHANGELOG.md](CHANGELOG.md) — 버전별 Added/Fixed/Deprecated/Security
-> 🔒 **보안 / 권장 버전**: [SECURITY.md](SECURITY.md) — 지원 버전 표 · 취약점 신고
->
-> 아래 문서는 **라이브러리 기여자용** 아키텍처/개발 규칙입니다.
+**📚 도입 개발자 문서**
+
+- 📖 **[사용 가이드](docs/GUIDE.md)** — 빠른 시작 · 설정 레퍼런스 · 기능별 가이드 · 마이그레이션 · 트러블슈팅
+- 📋 **[변경 이력 (CHANGELOG)](CHANGELOG.md)** — 버전별 Added / Fixed / Deprecated / Security
+- 🔒 **[보안 / 권장 버전 (SECURITY)](SECURITY.md)** — 지원 버전 표 · 취약점 신고
+
+> ℹ️ 아래 문서는 **라이브러리 기여자용** 아키텍처/개발 규칙입니다.
 
 이 문서는 **Keycloak Spring Security Open Source Library**의 아키텍처 원칙, 프로젝트 구조, 배포 전략, 그리고 설정 가이드를 정의합니다.
 본 프로젝트는 **Spring Security 공식 GitHub 리포지토리의 구조**를 따르며, **Servlet(Blocking)** 과 **Reactive(Non-blocking)** 스택을 모두 지원하는 것을 목표로 합니다.
