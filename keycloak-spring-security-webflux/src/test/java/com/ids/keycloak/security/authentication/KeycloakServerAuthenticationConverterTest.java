@@ -194,8 +194,18 @@ class KeycloakServerAuthenticationConverterTest {
           org.mockito.ArgumentMatchers.isNull());
     }
 
+    /**
+     * 버그 수정 (#54): introspect 실패 후 refresh 재발급 401 → convert()가 빈 Mono 반환.
+     *
+     * <p>수정 전: RefreshTokenException(RuntimeException 계열)을 throw → AuthenticationWebFilter가
+     * onErrorResume(AuthenticationException.class)로 잡지 못해 HTTP 500 발생.</p>
+     *
+     * <p>수정 후: 토큰 무효(400/401) → 세션 무효화 → Mono.empty() 반환
+     * → AuthenticationWebFilter.switchIfEmpty(chain.filter(exchange)) → 미인증 진행
+     * → ExceptionTranslationWebFilter → 사용처 EntryPoint(리다이렉트/401).</p>
+     */
     @Test
-    void authManager_인증_실패시_IntrospectionFailedException_refresh_token_재발급_시도_401이면_RefreshTokenException() {
+    void introspect_실패_후_refresh_재발급_401_이면_빈_Mono_반환_non_AuthenticationException_미전파() {
       MockServerHttpRequest request = MockServerHttpRequest.get("/api/test")
           .cookie(new HttpCookie(KeycloakServerAuthenticationConverter.ID_TOKEN_COOKIE_NAME, ID_TOKEN))
           .cookie(new HttpCookie(KeycloakServerAuthenticationConverter.ACCESS_TOKEN_COOKIE_NAME, ACCESS_TOKEN))
@@ -210,7 +220,7 @@ class KeycloakServerAuthenticationConverterTest {
           .thenReturn(Mono.error(
               new com.ids.keycloak.security.exception.IntrospectionFailedException("토큰 만료")));
 
-      // keycloakClient.authAsync().reissueToken() — 401 응답
+      // reissueToken — 401 응답 (refresh token도 무효)
       KeycloakResponse<com.sd.KeycloakClient.dto.auth.KeycloakTokenInfo> reissueResp =
           KeycloakResponse.<com.sd.KeycloakClient.dto.auth.KeycloakTokenInfo>builder()
               .status(401)
@@ -222,10 +232,136 @@ class KeycloakServerAuthenticationConverterTest {
       when(sessionManager.invalidateSession(org.mockito.ArgumentMatchers.any()))
           .thenReturn(Mono.empty());
 
-      // refresh 401 → 세션 무효화 → RefreshTokenException 에러
+      // 수정 후: 빈 Mono → HTTP 500이 아닌 EntryPoint 경유(302/401)
       StepVerifier.create(converter.convert(exchange))
-          .expectError(com.ids.keycloak.security.exception.RefreshTokenException.class)
-          .verify();
+          .verifyComplete();
+    }
+
+    /**
+     * 버그 수정 (#54): introspect 실패 후 refresh 재발급 400 → convert()가 빈 Mono 반환.
+     *
+     * <p>Keycloak 백채널 로그아웃 후 refresh token 재발급 시 400 응답 케이스 (#54 원인 시나리오).</p>
+     */
+    @Test
+    void introspect_실패_후_refresh_재발급_400_이면_빈_Mono_반환() {
+      MockServerHttpRequest request = MockServerHttpRequest.get("/api/test")
+          .cookie(new HttpCookie(KeycloakServerAuthenticationConverter.ID_TOKEN_COOKIE_NAME, ID_TOKEN))
+          .cookie(new HttpCookie(KeycloakServerAuthenticationConverter.ACCESS_TOKEN_COOKIE_NAME, ACCESS_TOKEN))
+          .build();
+      MockServerWebExchange exchange = MockServerWebExchange.from(request);
+
+      when(sessionManager.getRefreshToken(org.mockito.ArgumentMatchers.any()))
+          .thenReturn(Optional.of(REFRESH_TOKEN));
+
+      when(authManager.authenticate(org.mockito.ArgumentMatchers.any()))
+          .thenReturn(Mono.error(
+              new com.ids.keycloak.security.exception.IntrospectionFailedException("active=false")));
+
+      // reissueToken — 400 응답 (백채널 로그아웃 후 refresh token 폐기됨)
+      KeycloakResponse<com.sd.KeycloakClient.dto.auth.KeycloakTokenInfo> reissueResp =
+          KeycloakResponse.<com.sd.KeycloakClient.dto.auth.KeycloakTokenInfo>builder()
+              .status(400)
+              .build();
+
+      when(authAsyncClient.reissueToken(REFRESH_TOKEN))
+          .thenReturn(Mono.just(reissueResp));
+
+      when(sessionManager.invalidateSession(org.mockito.ArgumentMatchers.any()))
+          .thenReturn(Mono.empty());
+
+      StepVerifier.create(converter.convert(exchange))
+          .verifyComplete();
+    }
+
+    /**
+     * 버그 수정 (#54): refresh 재발급 중 네트워크 오류 → convert()가 빈 Mono 반환.
+     *
+     * <p>RuntimeException이 convert() 밖으로 전파되면 HTTP 500이 발생하므로
+     * 최종 방어막(onErrorResume)에서 Mono.empty()로 변환한다.</p>
+     */
+    @Test
+    void refresh_재발급_중_네트워크_오류_이면_빈_Mono_반환_RuntimeException_미전파() {
+      MockServerHttpRequest request = MockServerHttpRequest.get("/api/test")
+          .cookie(new HttpCookie(KeycloakServerAuthenticationConverter.ID_TOKEN_COOKIE_NAME, ID_TOKEN))
+          .cookie(new HttpCookie(KeycloakServerAuthenticationConverter.ACCESS_TOKEN_COOKIE_NAME, ACCESS_TOKEN))
+          .build();
+      MockServerWebExchange exchange = MockServerWebExchange.from(request);
+
+      when(sessionManager.getRefreshToken(org.mockito.ArgumentMatchers.any()))
+          .thenReturn(Optional.of(REFRESH_TOKEN));
+
+      when(authManager.authenticate(org.mockito.ArgumentMatchers.any()))
+          .thenReturn(Mono.error(
+              new com.ids.keycloak.security.exception.IntrospectionFailedException("통신 오류")));
+
+      // 네트워크 오류: reissueToken 자체가 예외 발생
+      when(authAsyncClient.reissueToken(REFRESH_TOKEN))
+          .thenReturn(Mono.error(new RuntimeException("Connection refused")));
+
+      when(sessionManager.invalidateSession(org.mockito.ArgumentMatchers.any()))
+          .thenReturn(Mono.empty());
+
+      // RuntimeException이 convert()를 뚫고 나오면 HTTP 500 → 수정 후 빈 Mono
+      StepVerifier.create(converter.convert(exchange))
+          .verifyComplete();
+    }
+
+    /**
+     * 버그 수정 (#54): introspect 실패 후 refresh 재발급 5xx 서버 오류 → convert()가 빈 Mono 반환.
+     */
+    @Test
+    void introspect_실패_후_refresh_재발급_5xx_이면_빈_Mono_반환() {
+      MockServerHttpRequest request = MockServerHttpRequest.get("/api/test")
+          .cookie(new HttpCookie(KeycloakServerAuthenticationConverter.ID_TOKEN_COOKIE_NAME, ID_TOKEN))
+          .cookie(new HttpCookie(KeycloakServerAuthenticationConverter.ACCESS_TOKEN_COOKIE_NAME, ACCESS_TOKEN))
+          .build();
+      MockServerWebExchange exchange = MockServerWebExchange.from(request);
+
+      when(sessionManager.getRefreshToken(org.mockito.ArgumentMatchers.any()))
+          .thenReturn(Optional.of(REFRESH_TOKEN));
+
+      when(authManager.authenticate(org.mockito.ArgumentMatchers.any()))
+          .thenReturn(Mono.error(
+              new com.ids.keycloak.security.exception.IntrospectionFailedException("서버 오류")));
+
+      // reissueToken — 500 응답 (Keycloak 서버 일시 오류)
+      KeycloakResponse<com.sd.KeycloakClient.dto.auth.KeycloakTokenInfo> reissueResp =
+          KeycloakResponse.<com.sd.KeycloakClient.dto.auth.KeycloakTokenInfo>builder()
+              .status(500)
+              .build();
+
+      when(authAsyncClient.reissueToken(REFRESH_TOKEN))
+          .thenReturn(Mono.just(reissueResp));
+
+      when(sessionManager.invalidateSession(org.mockito.ArgumentMatchers.any()))
+          .thenReturn(Mono.empty());
+
+      StepVerifier.create(converter.convert(exchange))
+          .verifyComplete();
+    }
+
+    /**
+     * 정상 경로 회귀: introspect 성공 시 Authentication 반환 (기존 동작 유지).
+     */
+    @Test
+    void introspect_성공시_Authentication_정상_반환_회귀_없음() {
+      MockServerHttpRequest request = MockServerHttpRequest.get("/api/test")
+          .cookie(new HttpCookie(KeycloakServerAuthenticationConverter.ID_TOKEN_COOKIE_NAME, ID_TOKEN))
+          .cookie(new HttpCookie(KeycloakServerAuthenticationConverter.ACCESS_TOKEN_COOKIE_NAME, ACCESS_TOKEN))
+          .build();
+      MockServerWebExchange exchange = MockServerWebExchange.from(request);
+
+      when(sessionManager.getRefreshToken(org.mockito.ArgumentMatchers.any()))
+          .thenReturn(Optional.of(REFRESH_TOKEN));
+
+      Authentication authenticated = mock(Authentication.class);
+      when(authenticated.isAuthenticated()).thenReturn(true);
+      when(authManager.authenticate(org.mockito.ArgumentMatchers.any()))
+          .thenReturn(Mono.just(authenticated));
+
+      StepVerifier.create(converter.convert(exchange))
+          .expectNextMatches(Authentication::isAuthenticated)
+          .verifyComplete();
     }
   }
 }
