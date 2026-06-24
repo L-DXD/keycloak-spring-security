@@ -1,7 +1,8 @@
 # Architecture & Development Guidelines
 
-> 📖 **라이브러리를 도입하는 개발자라면 → [사용 가이드 (docs/GUIDE.md)](docs/GUIDE.md)** 를 보세요.
-> (빠른 시작 · 전체 설정 레퍼런스 · 기능별 가이드 · 마이그레이션 · 트러블슈팅)
+> 📖 **사용 가이드**: [docs/GUIDE.md](docs/GUIDE.md) — 빠른 시작 · 설정 레퍼런스 · 기능별 가이드 · 마이그레이션 · 트러블슈팅
+> 📋 **변경 이력**: [CHANGELOG.md](CHANGELOG.md) — 버전별 Added/Fixed/Deprecated/Security
+> 🔒 **보안 / 권장 버전**: [SECURITY.md](SECURITY.md) — 지원 버전 표 · 취약점 신고
 >
 > 아래 문서는 **라이브러리 기여자용** 아키텍처/개발 규칙입니다.
 
