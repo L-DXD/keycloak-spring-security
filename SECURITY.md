@@ -25,8 +25,8 @@
 
 보안 취약점을 발견하시면 **공개 이슈로 등록하지 마시고** 아래로 비공개 신고해 주세요.
 
-- **GitHub Security Advisory**: 본 저장소의 **Security → Advisories → Report a vulnerability** (권장, 비공개)
-- 또는 메인테이너에게 직접 연락
+- **이메일**: **yui5227@gmail.com** (비공개 신고)
+- 또는 **GitHub Security Advisory**: 본 저장소의 **Security → Advisories → Report a vulnerability** (비공개)
 
 신고 시 다음을 포함해 주세요: 영향 받는 버전, 재현 절차, 영향 범위(인증 우회/세션/토큰 노출 등), 가능하면 PoC.
 
