@@ -195,6 +195,34 @@ class KeycloakServerAuthenticationConverterTest {
     }
 
     /**
+     * Low #2(불변식 고정): {@code TokenBindingException}(보안 Advisory 1 결합 검증 실패)은
+     * {@code AuthenticationException}이 아니므로 {@code isTokenExpiredOrInvalid}의 refresh 재시도
+     * 대상에도 해당하지 않고, 최종적으로 {@code convert()}의 최종 방어막
+     * {@code onErrorResume(e -> !(e instanceof AuthenticationException), ...)}에 의해 빈 Mono(미인증)로
+     * 변환된다. 향후 이 onErrorResume 그물이 더 좁은 타입으로 좁혀지더라도 결합 검증 실패가 HTTP 500으로
+     * 누출되지 않아야 한다는 불변식을 이 테스트로 고정한다.
+     */
+    @Test
+    void authManager_에서_TokenBindingException_발생시_빈_Mono_반환_non_AuthenticationException_미전파() {
+      MockServerHttpRequest request = MockServerHttpRequest.get("/api/test")
+          .cookie(new HttpCookie(KeycloakServerAuthenticationConverter.ID_TOKEN_COOKIE_NAME, ID_TOKEN))
+          .cookie(new HttpCookie(KeycloakServerAuthenticationConverter.ACCESS_TOKEN_COOKIE_NAME, ACCESS_TOKEN))
+          .build();
+      MockServerWebExchange exchange = MockServerWebExchange.from(request);
+
+      when(sessionManager.getRefreshToken(org.mockito.ArgumentMatchers.any()))
+          .thenReturn(Optional.of(REFRESH_TOKEN));
+
+      when(authManager.authenticate(org.mockito.ArgumentMatchers.any()))
+          .thenReturn(Mono.error(new com.ids.keycloak.security.exception.TokenBindingException(
+              "ID Token의 subject와 UserInfo의 subject가 일치하지 않습니다.")));
+
+      // 결합 검증 실패 → HTTP 500이 아닌 빈 Mono(미인증) → EntryPoint 경유(302/401)
+      StepVerifier.create(converter.convert(exchange))
+          .verifyComplete();
+    }
+
+    /**
      * 버그 수정 (#54): introspect 실패 후 refresh 재발급 401 → convert()가 빈 Mono 반환.
      *
      * <p>수정 전: RefreshTokenException(RuntimeException 계열)을 throw → AuthenticationWebFilter가

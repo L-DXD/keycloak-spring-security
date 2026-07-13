@@ -99,4 +99,34 @@ public class KeycloakAuthenticationProperties {
      * </pre>
      */
     private boolean requireUserInfo = false;
+
+    /**
+     * OIDC ID/Access Token 서명 검증에 사용할 issuer({@code iss}) URI를 명시적으로 지정합니다
+     * (기본값: 미설정, {@code null}).
+     *
+     * <p><b>보안 Advisory 1(High #1) 관련 — 반드시 실제 토큰의 iss(발급자, 브라우저에 노출되는 Keycloak
+     * 공개 URL/frontendUrl)와 정확히 일치해야 합니다.</b> {@code keycloak.base-url}은 이 라이브러리가
+     * Keycloak API를 서버간 호출할 때 쓰는 URL로, 내부 네트워크 주소나 {@code /etc/hosts} 매핑 호스트일 수
+     * 있어 브라우저가 보는 공개 URL과 다를 수 있습니다. 이 프로퍼티 없이 base-url이 공개 URL과 다르면
+     * {@code JwtIssuerValidator}의 exact-match 검증이 모든 요청에서 실패해 <b>OIDC 쿠키 로그인이 전면
+     * 장애</b>가 됩니다.</p>
+     *
+     * <p>미설정 시 해석 우선순위: 1) 이 프로퍼티 → 2) 표준 Spring Boot 프로퍼티
+     * {@code spring.security.oauth2.resourceserver.jwt.issuer-uri} 또는
+     * {@code spring.security.oauth2.client.provider.keycloak.issuer-uri}(Back-Channel 로그아웃 검증 및
+     * {@code oauth2Login}의 {@code ClientRegistration}과 동일 원천 — 설정해두면 자동으로 issuer가
+     * 통일됨) → 3) {@code keycloak.base-url} + {@code relative-path} + {@code realm-name}으로부터
+     * 파생(레거시 기본 동작, base-url이 공개 URL과 같은 단순 환경에서만 안전).</p>
+     *
+     * <p>{@link com.ids.keycloak.security.util.KeycloakIssuerUriResolver#resolveEffectiveIssuerUri}
+     * 가 이 우선순위를 구현합니다.</p>
+     *
+     * <pre>
+     * keycloak:
+     *   security:
+     *     authentication:
+     *       issuer-uri: https://sso.example.com/realms/myrealm
+     * </pre>
+     */
+    private String issuerUri;
 }

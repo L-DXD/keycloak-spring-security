@@ -83,6 +83,25 @@ public class TokenBindingValidator {
      * UserInfo가 없으면(조회 실패 시 빈 권한 정책, {@code require-user-info=false}) 검증을 스킵합니다 —
      * 기존 정책과 회귀 없이 공존합니다.
      *
+     * <p><b>Medium #2 — UserInfo 부재 시 스킵에 대한 설계상 수용(문서화):</b>
+     * {@code require-user-info=false}(기본값)이고 UserInfo 조회에 실패하면 이 sub 결합 검증 자체가
+     * 스킵되고, {@code KeycloakPrincipal}은 빈 권한(empty authorities)으로 인증이 성공합니다. 이것이
+     * authority confusion(다른 사용자의 권한을 오인하는 것)으로 이어지지 <b>않는</b> 이유는 다음과
+     * 같습니다.
+     * <ul>
+     *   <li><b>권한(authority)의 유일한 원천은 UserInfo입니다.</b> {@code KeycloakAuthorityExtractor}는
+     *       UserInfo의 claims에서만 권한을 추출하므로, UserInfo가 없으면 권한도 없습니다(빈 권한) —
+     *       "검증되지 않은 잘못된 권한"이 부여될 수 있는 경로 자체가 존재하지 않습니다.</li>
+     *   <li><b>신원(identity)은 UserInfo가 아니라 서명 검증을 통과한 ID Token의 sub로 결정됩니다.</b>
+     *       {@code KeycloakAuthenticationProvider#createAuthenticatedToken}이 Principal의 subject를
+     *       ID Token(JwtDecoder로 서명·iss/exp/nbf 검증 완료)에서 추출하므로, UserInfo 스킵이 "누구인지"
+     *       판단에 영향을 주지 않습니다.</li>
+     * </ul>
+     * 즉 이 스킵 경로는 "권한 없이 신원만 확인된 상태"로 귀결되며, 신원과 권한이 뒤섞여 다른 사용자의
+     * 권한이 잘못 부여되는 시나리오(authority confusion)는 이 아키텍처상 발생하지 않습니다. 보안을
+     * 강화하려면 {@code keycloak.security.authentication.require-user-info=true}로 설정해 UserInfo
+     * 실패를 인증 실패로 승격하세요.</p>
+     *
      * @param idTokenSubject  서명 검증이 완료된 ID Token에서 추출한 subject
      * @param userInfoSubject UserInfo 응답의 subject (조회 실패/미사용 시 {@code null})
      * @throws TokenBindingException 두 subject가 다를 경우

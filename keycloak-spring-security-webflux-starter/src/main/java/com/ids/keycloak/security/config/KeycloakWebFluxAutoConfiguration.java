@@ -169,9 +169,22 @@ public class KeycloakWebFluxAutoConfiguration {
      * ID Token/Access Token의 서명·iss·exp·nbf를 로컬 검증하는 {@link ReactiveJwtDecoder}를 등록합니다.
      *
      * <p><b>보안 Advisory 1 대응:</b> {@code KeycloakReactiveAuthenticationManager}가 ID Token sub를
-     * 서명 검증 없이 파싱해 Principal로 사용하던 것을 이 {@link ReactiveJwtDecoder}로 대체합니다.
-     * JWKS URI는 {@code keycloak.base-url}/{@code keycloak.relative-path}/{@code keycloak.realm-name}
-     * (모두 필수 설정)로부터 계산하므로 별도의 {@code issuer-uri} 설정이 없어도 항상 사용 가능합니다.</p>
+     * 서명 검증 없이 파싱해 Principal로 사용하던 것을 이 {@link ReactiveJwtDecoder}로 대체합니다.</p>
+     *
+     * <p><b>High #1 대응 — issuer 원천:</b> JWKS/issuer URI는 다음 우선순위로 계산합니다
+     * ({@link KeycloakIssuerUriResolver#resolveEffectiveIssuerUri} 참고).
+     * <ol>
+     *   <li>{@code keycloak.security.authentication.issuer-uri} (명시 설정)</li>
+     *   <li>표준 Spring Boot 프로퍼티 {@code spring.security.oauth2.resourceserver.jwt.issuer-uri}
+     *       또는 {@code spring.security.oauth2.client.provider.keycloak.issuer-uri} — 아래
+     *       {@code keycloakBackChannelJwtDecoder}가 사용하는 원천과 동일하므로, 설정해두면
+     *       두 decoder의 issuer가 자동으로 통일됩니다.</li>
+     *   <li>{@code keycloak.base-url}/{@code keycloak.relative-path}/{@code keycloak.realm-name}으로부터
+     *       파생(레거시 기본 동작, 모두 필수 설정이므로 항상 계산 가능하지만, base-url이 서버간 통신용
+     *       내부 URL이고 실제 토큰의 iss(Keycloak 공개 URL)와 다르면 <b>모든 OIDC 쿠키 로그인이
+     *       실패</b>합니다 — 그 경우 위 1번 또는 2번을 반드시 명시 설정하세요).</li>
+     * </ol>
+     * </p>
      *
      * <p><b>Back-Channel 로그아웃용 {@code keycloakBackChannelJwtDecoder}와 별개 빈입니다.</b>
      * 두 빈은 검증 목적이 다릅니다 — logout_token은 OIDC Back-Channel Logout 스펙상 {@code aud}가
@@ -179,13 +192,19 @@ public class KeycloakWebFluxAutoConfiguration {
      * Keycloak Audience 매퍼 설정에 따라 {@code aud}에 client-id가 없는 경우가 흔하므로 이 빈은 aud를
      * 강제하지 않습니다(azp만 {@code TokenBindingValidator}에서 별도 검증). Bean 이름 기반 조건으로
      * 등록해 서로의 {@code @ConditionalOnMissingBean(ReactiveJwtDecoder.class)}에 의해 의도치 않게
-     * 대체되지 않도록 분리합니다.</p>
+     * 대체되지 않도록 분리합니다. (issuer 원천은 위와 같이 표준 프로퍼티로 통일 가능합니다.)</p>
      */
     @Bean("keycloakOidcReactiveJwtDecoder")
     @ConditionalOnMissingBean(name = "keycloakOidcReactiveJwtDecoder")
     public ReactiveJwtDecoder keycloakOidcReactiveJwtDecoder(
-        KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig) {
-      String issuerUri = KeycloakIssuerUriResolver.resolveIssuerUri(
+        KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig,
+        KeycloakSecurityProperties securityProperties,
+        @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri:"
+            + "${spring.security.oauth2.client.provider.keycloak.issuer-uri:}}")
+        String standardIssuerUri) {
+      String issuerUri = KeycloakIssuerUriResolver.resolveEffectiveIssuerUri(
+          securityProperties.getAuthentication().getIssuerUri(),
+          standardIssuerUri,
           keycloakConfig.getBaseUrl(), keycloakConfig.getRelativePath(), keycloakConfig.getRealmName());
       String jwkSetUri = KeycloakIssuerUriResolver.resolveJwkSetUri(issuerUri);
 

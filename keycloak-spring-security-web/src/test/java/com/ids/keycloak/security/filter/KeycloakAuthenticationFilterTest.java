@@ -254,6 +254,45 @@ class KeycloakAuthenticationFilterTest {
             }
         }
 
+        /**
+         * Low #2(불변식 고정): {@link com.ids.keycloak.security.exception.TokenBindingException}은
+         * {@link org.springframework.security.core.AuthenticationException}이 아니라 현재 이 필터의
+         * 포괄 {@code catch (Exception e)} 그물에 의존해 "미인증"으로 처리된다. 향후 이 그물이 특정
+         * 타입으로 좁혀지더라도 결합 검증 실패가 HTTP 500으로 누출되지 않아야 한다는 불변식을 이 테스트로
+         * 고정한다.
+         */
+        @Test
+        void TokenBindingException_발생_시_SecurityContext를_비우고_쿠키를_삭제한다_AuthenticationException_아니어도_미인증_처리() throws Exception {
+            // Given
+            when(request.getSession(false)).thenReturn(session);
+            when(request.getSession()).thenReturn(session);
+            when(sessionManager.getRefreshToken(session)).thenReturn(Optional.of(REFRESH_TOKEN_VALUE));
+            when(authenticationManager.authenticate(any()))
+                .thenThrow(new com.ids.keycloak.security.exception.TokenBindingException(
+                    "ID Token의 subject와 UserInfo의 subject가 일치하지 않습니다."));
+
+            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class);
+                 MockedStatic<JwtUtil> jwtUtil = mockStatic(JwtUtil.class)) {
+
+                cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ID_TOKEN_NAME))
+                    .thenReturn(Optional.of(ID_TOKEN_VALUE));
+                cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ACCESS_TOKEN_NAME))
+                    .thenReturn(Optional.of(ACCESS_TOKEN_VALUE));
+
+                jwtUtil.when(() -> JwtUtil.parseSubjectWithoutValidation(anyString()))
+                    .thenReturn(USER_SUB);
+
+                // When
+                assertThatNoException().isThrownBy(
+                    () -> filter.doFilterInternal(request, response, filterChain));
+
+                // Then — HTTP 500 누출 없이(예외 미전파) 미인증 상태로 체인 계속 진행
+                cookieUtil.verify(() -> CookieUtil.deleteAllTokenCookies(response));
+                verify(filterChain).doFilter(request, response);
+                assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+            }
+        }
+
         @Test
         void UserInfoFetchException_발생_시_SecurityContext를_비우고_쿠키를_삭제한다() throws Exception {
             // Given

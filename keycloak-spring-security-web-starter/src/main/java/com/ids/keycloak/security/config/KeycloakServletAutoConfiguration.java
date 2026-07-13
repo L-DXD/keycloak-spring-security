@@ -208,9 +208,21 @@ public class KeycloakServletAutoConfiguration {
          * ID Token/Access Token의 서명·iss·exp·nbf를 로컬 검증하는 {@link JwtDecoder}를 등록합니다.
          *
          * <p><b>보안 Advisory 1 대응:</b> {@code KeycloakAuthenticationProvider}가 ID Token sub를
-         * 서명 검증 없이 파싱해 Principal로 사용하던 것을 이 {@link JwtDecoder}로 대체합니다.
-         * JWKS URI는 {@code keycloak.base-url}/{@code keycloak.relative-path}/{@code keycloak.realm-name}
-         * (모두 필수 설정)로부터 계산하므로 별도의 {@code issuer-uri} 설정이 없어도 항상 사용 가능합니다.
+         * 서명 검증 없이 파싱해 Principal로 사용하던 것을 이 {@link JwtDecoder}로 대체합니다.</p>
+         *
+         * <p><b>High #1 대응 — issuer 원천:</b> JWKS/issuer URI는 다음 우선순위로 계산합니다
+         * ({@link KeycloakIssuerUriResolver#resolveEffectiveIssuerUri} 참고).
+         * <ol>
+         *   <li>{@code keycloak.security.authentication.issuer-uri} (명시 설정)</li>
+         *   <li>표준 Spring Boot 프로퍼티 {@code spring.security.oauth2.resourceserver.jwt.issuer-uri}
+         *       또는 {@code spring.security.oauth2.client.provider.keycloak.issuer-uri} — Back-Channel
+         *       로그아웃 검증 및 {@code oauth2Login}의 {@code ClientRegistration}과 동일 원천이므로
+         *       설정해두면 자동으로 issuer가 통일됩니다.</li>
+         *   <li>{@code keycloak.base-url}/{@code keycloak.relative-path}/{@code keycloak.realm-name}으로부터
+         *       파생(레거시 기본 동작, 모두 필수 설정이므로 항상 계산 가능하지만, base-url이 서버간 통신용
+         *       내부 URL이고 실제 토큰의 iss(Keycloak 공개 URL)와 다르면 <b>모든 OIDC 쿠키 로그인이
+         *       실패</b>합니다 — 그 경우 위 1번 또는 2번을 반드시 명시 설정하세요).</li>
+         * </ol>
          * {@code NimbusJwtDecoder.withJwkSetUri(...)}는 JWKS를 최초 {@code decode()} 호출 시점에 지연
          * 조회하므로, 애플리케이션 기동 시점에 Keycloak이 아직 기동되지 않았어도 컨텍스트 초기화가
          * 실패하지 않습니다.</p>
@@ -219,8 +231,15 @@ public class KeycloakServletAutoConfiguration {
          */
         @Bean
         @ConditionalOnMissingBean(JwtDecoder.class)
-        public JwtDecoder keycloakJwtDecoder(KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig) {
-            String issuerUri = KeycloakIssuerUriResolver.resolveIssuerUri(
+        public JwtDecoder keycloakJwtDecoder(
+            KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig,
+            KeycloakSecurityProperties securityProperties,
+            @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri:"
+                + "${spring.security.oauth2.client.provider.keycloak.issuer-uri:}}")
+            String standardIssuerUri) {
+            String issuerUri = KeycloakIssuerUriResolver.resolveEffectiveIssuerUri(
+                securityProperties.getAuthentication().getIssuerUri(),
+                standardIssuerUri,
                 keycloakConfig.getBaseUrl(), keycloakConfig.getRelativePath(), keycloakConfig.getRealmName());
             String jwkSetUri = KeycloakIssuerUriResolver.resolveJwkSetUri(issuerUri);
 
