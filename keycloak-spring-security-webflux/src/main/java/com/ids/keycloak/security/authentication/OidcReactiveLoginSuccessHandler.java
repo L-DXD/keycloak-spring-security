@@ -4,6 +4,7 @@ import com.ids.keycloak.security.config.KeycloakCookieProperties;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.session.ReactiveSessionManager;
 import com.ids.keycloak.security.util.ReactiveCookieUtil;
+import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
@@ -79,15 +80,21 @@ public class OidcReactiveLoginSuccessHandler implements ServerAuthenticationSucc
     log.debug("[OidcSuccessHandler] OIDC 로그인 성공. principal={}", authentication.getName());
 
     // 1. AuthorizedClient에서 Access Token / Refresh Token 조회
+    // 주의: issueTokenCookiesAndSaveSession/issueIdTokenCookieOnly는 모두 Mono<Void>(onNext 없이
+    // onComplete)를 반환하므로, flatMap 결과에 switchIfEmpty를 연결하면 AuthorizedClient 조회 성공
+    // 여부와 무관하게 switchIfEmpty가 항상 발화해 두 경로가 이중 실행된다(세션 ID 이중 회전 등).
+    // Optional로 존재 여부를 먼저 확정한 뒤 단일 경로만 선택하도록 한다.
     return authorizedClientService
         .loadAuthorizedClient(
             oauthToken.getAuthorizedClientRegistrationId(),
             authentication.getName())
-        .flatMap(authorizedClient ->
-            issueTokenCookiesAndSaveSession(
-                webFilterExchange, authentication, oidcUser, authorizedClient))
-        .switchIfEmpty(
-            Mono.defer(() -> {
+        .map(Optional::of)
+        .defaultIfEmpty(Optional.empty())
+        .flatMap(maybeAuthorizedClient -> maybeAuthorizedClient
+            .map(authorizedClient ->
+                issueTokenCookiesAndSaveSession(
+                    webFilterExchange, authentication, oidcUser, authorizedClient))
+            .orElseGet(() -> {
               log.warn("[OidcSuccessHandler] AuthorizedClient를 찾을 수 없음. 쿠키 없이 진행합니다.");
               return issueIdTokenCookieOnly(webFilterExchange, authentication, oidcUser);
             }));
