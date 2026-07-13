@@ -130,9 +130,16 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
 
       // === 2. 세션 관리 ===
       // Spring Security가 세션을 생성하지 않음 (애플리케이션에서 관리)
+      // 보안 Advisory 2: Session Fixation Protection — OIDC 로그인 성공 시 기존 세션 ID를 그대로
+      // 유지하던 sf.none() 설정을 제거하고, 인증 성공 시 changeSessionId()로 세션 ID를 회전한다.
+      // (OAuth2LoginAuthenticationFilter가 OidcLoginSuccessHandler를 호출하기 전에
+      //  AbstractAuthenticationProcessingFilter#successfulAuthentication에서 세션 전략이 먼저 적용되므로,
+      //  Refresh Token/Principal Name/Keycloak sid는 항상 회전된 새 세션 ID에 저장된다.)
+      // SessionCreationPolicy.NEVER 환경에서도 안전: 인증 전 세션이 없으면 changeSessionId는 아무 것도
+      // 하지 않는다(AbstractSessionFixationProtectionStrategy#onAuthentication 참고).
       http.sessionManagement(session -> session
           .sessionCreationPolicy(SessionCreationPolicy.NEVER)
-          .sessionFixation(sf -> sf.none())
+          .sessionFixation(sessionFixation -> sessionFixation.changeSessionId())
       );
 
       // Filter에서 사용할 수 있도록 SharedObject로 저장

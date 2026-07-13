@@ -131,27 +131,30 @@ public class OidcReactiveLoginSuccessHandler implements ServerAuthenticationSucc
         keycloakPrincipal.getAuthorities(),
         ((OAuth2AuthenticationToken) authentication).getAuthorizedClientRegistrationId());
 
-    // 세션에 Refresh Token / sid / principalName 저장
+    // 보안 Advisory 2: 세션 고정 보호 — 인증 상태(Refresh Token/Principal Name/sid) 저장 전에
+    // 반드시 changeSessionId()로 세션 ID를 회전한다. OAuth2 authorization request 처리 중 생성됐을 수 있는
+    // 인증 전 세션 ID가 로그인 후에도 그대로 유지되는 것을 방지한다.
     return exchange.getSession()
-        .flatMap(session -> {
-          // Refresh Token 저장
-          if (authorizedClient.getRefreshToken() != null) {
-            sessionManager.saveRefreshToken(session, authorizedClient.getRefreshToken().getTokenValue());
-            log.debug("[OidcSuccessHandler] Refresh Token 세션 저장 완료.");
-          }
+        .flatMap(session -> session.changeSessionId()
+            .then(Mono.defer(() -> {
+              // Refresh Token 저장
+              if (authorizedClient.getRefreshToken() != null) {
+                sessionManager.saveRefreshToken(session, authorizedClient.getRefreshToken().getTokenValue());
+                log.debug("[OidcSuccessHandler] Refresh Token 세션 저장 완료.");
+              }
 
-          // Principal Name 저장 (FindByIndexNameSessionRepository 호환 — Back-Channel 로그아웃 인덱스)
-          sessionManager.savePrincipalName(session, keycloakPrincipal.getName());
+              // Principal Name 저장 (FindByIndexNameSessionRepository 호환 — Back-Channel 로그아웃 인덱스)
+              sessionManager.savePrincipalName(session, keycloakPrincipal.getName());
 
-          // Keycloak Session ID (sid 클레임) 저장
-          String keycloakSid = oidcUser.getIdToken().getClaimAsString("sid");
-          if (keycloakSid != null) {
-            sessionManager.saveKeycloakSessionId(session, keycloakSid);
-            log.debug("[OidcSuccessHandler] Keycloak SID 세션 저장 완료: {}", keycloakSid);
-          }
+              // Keycloak Session ID (sid 클레임) 저장
+              String keycloakSid = oidcUser.getIdToken().getClaimAsString("sid");
+              if (keycloakSid != null) {
+                sessionManager.saveKeycloakSessionId(session, keycloakSid);
+                log.debug("[OidcSuccessHandler] Keycloak SID 세션 저장 완료: {}", keycloakSid);
+              }
 
-          return session.save();
-        })
+              return session.save();
+            })))
         .then(redirectHandler.onAuthenticationSuccess(webFilterExchange, newToken));
   }
 
@@ -176,15 +179,18 @@ public class OidcReactiveLoginSuccessHandler implements ServerAuthenticationSucc
         keycloakPrincipal.getAuthorities(),
         ((OAuth2AuthenticationToken) authentication).getAuthorizedClientRegistrationId());
 
+    // 보안 Advisory 2: 세션 고정 보호 — ID Token만 발급되는 경로도 동일하게 인증 상태 저장 전
+    // changeSessionId()로 세션 ID를 회전한다.
     return exchange.getSession()
-        .flatMap(session -> {
-          sessionManager.savePrincipalName(session, keycloakPrincipal.getName());
-          String keycloakSid = oidcUser.getIdToken().getClaimAsString("sid");
-          if (keycloakSid != null) {
-            sessionManager.saveKeycloakSessionId(session, keycloakSid);
-          }
-          return session.save();
-        })
+        .flatMap(session -> session.changeSessionId()
+            .then(Mono.defer(() -> {
+              sessionManager.savePrincipalName(session, keycloakPrincipal.getName());
+              String keycloakSid = oidcUser.getIdToken().getClaimAsString("sid");
+              if (keycloakSid != null) {
+                sessionManager.saveKeycloakSessionId(session, keycloakSid);
+              }
+              return session.save();
+            })))
         .then(redirectHandler.onAuthenticationSuccess(webFilterExchange, newToken));
   }
 

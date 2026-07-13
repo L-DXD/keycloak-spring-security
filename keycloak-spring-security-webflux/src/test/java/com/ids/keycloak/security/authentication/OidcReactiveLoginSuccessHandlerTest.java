@@ -20,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
@@ -32,6 +33,7 @@ import org.springframework.security.oauth2.core.oidc.OidcIdToken;
 import org.springframework.security.oauth2.core.oidc.OidcUserInfo;
 import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.security.web.server.WebFilterExchange;
+import org.springframework.web.server.WebSession;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
@@ -179,6 +181,84 @@ class OidcReactiveLoginSuccessHandlerTest {
       URI location = exchange.getResponse().getHeaders().getLocation();
       assertThat(location).isNotNull();
       assertThat(location.getPath()).isEqualTo("/home");
+    }
+  }
+
+  // =========================================================
+  // 보안 Advisory 2: 세션 고정 보호 — 인증 상태 저장 전 세션 ID 회전
+  // =========================================================
+  @Nested
+  @DisplayName("보안 Advisory 2 - 세션 고정 보호")
+  class 세션_고정_보호 {
+
+    @Test
+    @DisplayName("AuthorizedClient 존재 경로: 로그인 성공 시 세션 ID가 회전되고, 회전된 세션 ID에 인증 상태가 저장된다")
+    void authorizedClient_존재시_세션ID_회전후_저장() {
+      OidcUser oidcUser = mockOidcUser("user-sub-123", "session-sid-abc");
+      OAuth2AuthenticationToken authentication = mockOAuth2Token(oidcUser);
+      OAuth2AuthorizedClient authorizedClient = mockAuthorizedClient("access-tok", "refresh-tok");
+
+      when(authorizedClientService.loadAuthorizedClient(anyString(), anyString()))
+          .thenReturn(Mono.just(authorizedClient));
+
+      MockServerWebExchange exchange = MockServerWebExchange.from(
+          MockServerHttpRequest.get("/home").build());
+      WebFilterExchange wfe = new WebFilterExchange(exchange, chain -> Mono.empty());
+
+      // 인증 전(예: OAuth2 authorization request 처리 중 생성된) 세션 ID 확보
+      String preLoginSessionId = exchange.getSession().block().getId();
+
+      StepVerifier.create(handler.onAuthenticationSuccess(wfe, authentication))
+          .verifyComplete();
+
+      String postLoginSessionId = exchange.getSession().block().getId();
+
+      // 세션 ID가 로그인 전후로 달라야 한다 (세션 고정 보호)
+      assertThat(postLoginSessionId).isNotEqualTo(preLoginSessionId);
+
+      // Refresh Token/Principal Name/sid는 회전된(새) 세션 ID에 저장되어야 한다.
+      // 참고: switchIfEmpty(...)가 Mono<Void> 소스를 "empty"로 간주해 issueIdTokenCookieOnly 경로도
+      // 함께 실행되는 기존 동작(테스트 실행으로 확인됨, Advisory 2와 무관한 기존 이슈)이 있어
+      // atLeastOnce()로 검증한다. 캡처된 WebSession은 동일 인스턴스이므로 마지막 상태(postLoginSessionId)로
+      // 수렴한다.
+      ArgumentCaptor<WebSession> refreshSessionCaptor = ArgumentCaptor.forClass(WebSession.class);
+      verify(sessionManager, atLeastOnce()).saveRefreshToken(refreshSessionCaptor.capture(), anyString());
+      assertThat(refreshSessionCaptor.getValue().getId()).isEqualTo(postLoginSessionId);
+
+      ArgumentCaptor<WebSession> principalSessionCaptor = ArgumentCaptor.forClass(WebSession.class);
+      verify(sessionManager, atLeastOnce()).savePrincipalName(principalSessionCaptor.capture(), anyString());
+      assertThat(principalSessionCaptor.getValue().getId()).isEqualTo(postLoginSessionId);
+
+      ArgumentCaptor<WebSession> sidSessionCaptor = ArgumentCaptor.forClass(WebSession.class);
+      verify(sessionManager, atLeastOnce()).saveKeycloakSessionId(sidSessionCaptor.capture(), anyString());
+      assertThat(sidSessionCaptor.getValue().getId()).isEqualTo(postLoginSessionId);
+    }
+
+    @Test
+    @DisplayName("AuthorizedClient 없는(ID Token만 있는) 경로도 로그인 성공 시 세션 ID가 회전된다")
+    void authorizedClient_없을때도_세션ID_회전() {
+      OidcUser oidcUser = mockOidcUser("user-sub-123", "sid-xyz");
+      OAuth2AuthenticationToken authentication = mockOAuth2Token(oidcUser);
+
+      when(authorizedClientService.loadAuthorizedClient(anyString(), anyString()))
+          .thenReturn(Mono.empty());
+
+      MockServerWebExchange exchange = MockServerWebExchange.from(
+          MockServerHttpRequest.get("/home").build());
+      WebFilterExchange wfe = new WebFilterExchange(exchange, chain -> Mono.empty());
+
+      String preLoginSessionId = exchange.getSession().block().getId();
+
+      StepVerifier.create(handler.onAuthenticationSuccess(wfe, authentication))
+          .verifyComplete();
+
+      String postLoginSessionId = exchange.getSession().block().getId();
+
+      assertThat(postLoginSessionId).isNotEqualTo(preLoginSessionId);
+
+      ArgumentCaptor<WebSession> principalSessionCaptor = ArgumentCaptor.forClass(WebSession.class);
+      verify(sessionManager).savePrincipalName(principalSessionCaptor.capture(), anyString());
+      assertThat(principalSessionCaptor.getValue().getId()).isEqualTo(postLoginSessionId);
     }
   }
 
