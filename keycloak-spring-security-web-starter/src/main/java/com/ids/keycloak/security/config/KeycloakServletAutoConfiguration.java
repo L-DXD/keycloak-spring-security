@@ -15,6 +15,7 @@ import com.ids.keycloak.security.logging.DefaultPiiMaskingSanitizer;
 import com.ids.keycloak.security.logging.LoggingValueSanitizer;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
 import com.ids.keycloak.security.util.CookieUtil;
+import com.ids.keycloak.security.util.KeycloakIssuerUriResolver;
 import com.ids.keycloak.security.exception.KeycloakAuthenticationEntryPoint;
 import com.sd.KeycloakClient.config.AbstractKeycloakConfig;
 import com.sd.KeycloakClient.config.ClientConfiguration;
@@ -51,6 +52,9 @@ import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequest
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestResolver;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.util.matcher.RequestMatcher;
@@ -200,16 +204,46 @@ public class KeycloakServletAutoConfiguration {
     @Slf4j
     protected static class KeycloakAuthenticationConfiguration {
 
+        /**
+         * ID Token/Access Token의 서명·iss·exp·nbf를 로컬 검증하는 {@link JwtDecoder}를 등록합니다.
+         *
+         * <p><b>보안 Advisory 1 대응:</b> {@code KeycloakAuthenticationProvider}가 ID Token sub를
+         * 서명 검증 없이 파싱해 Principal로 사용하던 것을 이 {@link JwtDecoder}로 대체합니다.
+         * JWKS URI는 {@code keycloak.base-url}/{@code keycloak.relative-path}/{@code keycloak.realm-name}
+         * (모두 필수 설정)로부터 계산하므로 별도의 {@code issuer-uri} 설정이 없어도 항상 사용 가능합니다.
+         * {@code NimbusJwtDecoder.withJwkSetUri(...)}는 JWKS를 최초 {@code decode()} 호출 시점에 지연
+         * 조회하므로, 애플리케이션 기동 시점에 Keycloak이 아직 기동되지 않았어도 컨텍스트 초기화가
+         * 실패하지 않습니다.</p>
+         *
+         * <p>사용자가 직접 {@link JwtDecoder} 빈을 등록하면 이 빈은 생략됩니다.</p>
+         */
+        @Bean
+        @ConditionalOnMissingBean(JwtDecoder.class)
+        public JwtDecoder keycloakJwtDecoder(KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig) {
+            String issuerUri = KeycloakIssuerUriResolver.resolveIssuerUri(
+                keycloakConfig.getBaseUrl(), keycloakConfig.getRelativePath(), keycloakConfig.getRealmName());
+            String jwkSetUri = KeycloakIssuerUriResolver.resolveJwkSetUri(issuerUri);
+
+            NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSetUri(jwkSetUri).build();
+            decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(issuerUri));
+
+            log.info("핵심 Bean을 등록합니다: [JwtDecoder] (OIDC ID/Access Token 서명+iss+exp+nbf 검증, issuer={})",
+                issuerUri);
+            return decoder;
+        }
+
         @Bean
         @ConditionalOnMissingBean(AuthenticationManager.class)
         public AuthenticationManager authenticationManager(
             KeycloakClient keycloakClient,
             KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig,
-            KeycloakSecurityProperties securityProperties
+            KeycloakSecurityProperties securityProperties,
+            JwtDecoder jwtDecoder
         ) {
             List<AuthenticationProvider> providers = new ArrayList<>();
 
-            KeycloakAuthenticationProvider oidcProvider = new KeycloakAuthenticationProvider(keycloakClient, keycloakConfig.getClientId());
+            KeycloakAuthenticationProvider oidcProvider =
+                new KeycloakAuthenticationProvider(keycloakClient, keycloakConfig.getClientId(), jwtDecoder);
             // M-2: require-user-info 토글 (기본 false = 기존 동작 유지, 회귀 0)
             oidcProvider.setRequireUserInfo(securityProperties.getAuthentication().isRequireUserInfo());
             providers.add(oidcProvider);

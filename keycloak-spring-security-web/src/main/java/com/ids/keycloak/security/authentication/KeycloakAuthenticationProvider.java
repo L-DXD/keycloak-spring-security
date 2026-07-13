@@ -3,15 +3,16 @@ package com.ids.keycloak.security.authentication;
 import com.ids.keycloak.security.exception.AuthenticationFailedException;
 import com.ids.keycloak.security.exception.ConfigurationException;
 import com.ids.keycloak.security.exception.IntrospectionFailedException;
+import com.ids.keycloak.security.exception.TokenBindingException;
 import com.ids.keycloak.security.exception.UserInfoFetchException;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.util.JwtUtil;
 import com.ids.keycloak.security.util.KeycloakAuthorityExtractor;
+import com.ids.keycloak.security.util.TokenBindingValidator;
 import com.sd.KeycloakClient.dto.KeycloakResponse;
 import com.sd.KeycloakClient.dto.auth.KeycloakIntrospectResponse;
 import com.sd.KeycloakClient.dto.user.KeycloakUserInfo;
 import com.sd.KeycloakClient.factory.KeycloakClient;
-import java.time.Instant;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
@@ -22,20 +23,28 @@ import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.oauth2.core.oidc.OidcIdToken;
 import org.springframework.security.oauth2.core.oidc.OidcUserInfo;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtException;
 import org.springframework.web.client.RestClientException;
 
 /**
  * {@link KeycloakAuthentication}을 처리하는 {@link AuthenticationProvider} 구현체입니다.
  * <p>
- * 토큰 유효성 검증은 Keycloak Introspect API(온라인 검증)에 완전히 위임합니다.
- * 로컬에서는 서명/만료 검증 없이 토큰 클레임만 파싱하여 사용합니다.
+ * 토큰 유효성 검증은 Keycloak Introspect API(온라인 검증, 폐기/활성 여부 확인)와
+ * {@link JwtDecoder}(로컬 서명·iss·exp·nbf 검증) 두 단계로 이루어집니다.
  * </p>
+ * <p><b>보안 Advisory 1 대응:</b> ID Token은 {@link JwtDecoder}로 서명 검증을 통과한 뒤에만 Principal
+ * 식별자(subject)로 사용하며, ID Token과 Access Token(UserInfo)이 동일 사용자·동일 Client에서
+ * 발급되었는지({@link TokenBindingValidator}) 검증합니다. 하나라도 불일치하면
+ * {@link TokenBindingException}이 발생해 인증에 실패합니다.</p>
  */
 @Slf4j
 public class KeycloakAuthenticationProvider implements AuthenticationProvider {
 
    private final KeycloakClient keycloakClient;
    private final String clientId;
+   private final JwtDecoder jwtDecoder;
 
    /**
     * UserInfo 실패 시 인증 실패 처리 여부.
@@ -44,9 +53,16 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
     */
    private boolean requireUserInfo = false;
 
-   public KeycloakAuthenticationProvider(KeycloakClient keycloakClient, String clientId) {
+   /**
+    * @param keycloakClient Keycloak Introspect/UserInfo 호출용 클라이언트
+    * @param clientId       이 애플리케이션의 OIDC client-id (토큰 결합 검증에 사용)
+    * @param jwtDecoder     ID Token/Access Token의 서명·iss·exp·nbf를 검증하는 {@link JwtDecoder}
+    *                       (Keycloak Realm JWKS 기반)
+    */
+   public KeycloakAuthenticationProvider(KeycloakClient keycloakClient, String clientId, JwtDecoder jwtDecoder) {
       this.keycloakClient = keycloakClient;
       this.clientId = clientId;
+      this.jwtDecoder = jwtDecoder;
    }
 
    /**
@@ -89,28 +105,83 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
 
    /**
     * 검증된 토큰으로 인증 객체를 생성합니다.
-    * Filter에서 토큰 재발급 후 직접 호출할 수 있도록 public으로 노출합니다.
+    * Filter에서 토큰 재발급(Refresh) 후에도 직접 호출하므로, 이 메서드 자체가 검증 파이프라인의
+    * 단일 진입점(choke point)입니다 — {@code authenticate()}를 우회해도 동일하게 검증됩니다.
+    *
+    * <p><b>보안 Advisory 1 대응 처리 순서:</b>
+    * <ol>
+    *   <li>ID Token을 {@link JwtDecoder}로 디코딩(서명·iss·exp·nbf 검증) — 실패 시 {@link TokenBindingException}</li>
+    *   <li>Access Token으로 UserInfo 조회(기존 로직)</li>
+    *   <li>ID Token의 aud/azp가 이 애플리케이션의 client-id와 일치하는지 검증</li>
+    *   <li>ID Token의 subject와 UserInfo의 subject가 일치하는지 검증</li>
+    *   <li>Access Token이 JWT 형식이면 추가로 디코딩하여 azp를 검증(Opaque면 로컬 결합 검증은 스킵)</li>
+    * </ol>
+    * 하나라도 실패하면 {@link TokenBindingException}이 발생해 인증이 실패합니다(SecurityContext 미생성).</p>
     *
     * @param idTokenValue     ID Token
     * @param accessTokenValue Access Token
     * @return 인증된 Authentication 객체
+    * @throws TokenBindingException ID Token 검증 실패 또는 토큰 결합 검증 실패 시
     */
    public Authentication createAuthenticatedToken(String idTokenValue, String accessTokenValue) {
-      // ID Token에서 subject(사용자 ID)와 클레임 추출
-      Map<String, Object> idTokenClaims = JwtUtil.parseClaimsWithoutValidation(idTokenValue);
-      String subject = JwtUtil.parseSubjectWithoutValidation(idTokenValue);
+      // Advisory 1 STEP 1: 서명 검증을 통과한 ID Token만 사용 (미검증 파싱 금지)
+      Jwt idToken = decodeIdToken(idTokenValue);
 
-      // UserInfo 엔드포인트 호출
+      // UserInfo 엔드포인트 호출 (기존 로직 유지)
       OidcUserInfo oidcUserInfo = fetchUserInfo(accessTokenValue);
 
-      // OidcIdToken 객체 생성
-      OidcIdToken oidcIdToken = createOidcIdToken(idTokenValue, idTokenClaims);
+      // Advisory 1 STEP 2: 토큰 결합 검증 — 하나라도 불일치하면 TokenBindingException
+      TokenBindingValidator.validateIdTokenBinding(idToken, clientId);
+      TokenBindingValidator.validateSubjectBinding(
+          idToken.getSubject(), oidcUserInfo != null ? oidcUserInfo.getSubject() : null);
+      validateAccessTokenIfJwt(accessTokenValue);
 
-      KeycloakPrincipal principal = createPrincipal(oidcIdToken, oidcUserInfo, subject);
+      OidcIdToken oidcIdToken = createOidcIdToken(idTokenValue, idToken);
+      KeycloakPrincipal principal = createPrincipal(oidcIdToken, oidcUserInfo, idToken.getSubject());
       KeycloakAuthentication authenticatedToken = new KeycloakAuthentication(principal, idTokenValue, accessTokenValue, true);
 
       log.debug("[Provider] 최종 인증 객체 생성 완료: {}", principal.getName());
       return authenticatedToken;
+   }
+
+   /**
+    * ID Token을 {@link JwtDecoder}로 디코딩합니다(서명·iss·exp·nbf 검증).
+    *
+    * @throws TokenBindingException 서명/클레임 검증 실패 시
+    */
+   private Jwt decodeIdToken(String idTokenValue) {
+      try {
+         return jwtDecoder.decode(idTokenValue);
+      } catch (JwtException e) {
+         log.warn("[Provider] ID Token 서명/클레임 검증 실패: {}", e.getMessage());
+         throw new TokenBindingException(
+             "ID Token 서명 또는 클레임(iss/exp/nbf) 검증에 실패했습니다: " + e.getMessage(), e);
+      }
+   }
+
+   /**
+    * Access Token이 구조적으로 JWT 형식일 때만 추가로 디코딩하여 azp 결합 검증을 수행합니다.
+    *
+    * <p><b>알려진 제약(Opaque Access Token):</b> Access Token이 Opaque(비-JWT) 형식이면
+    * Keycloak Introspect 응답이 {@code active} 여부만 노출하므로(라이브러리 제약) 로컬 aud/azp
+    * 결합 검증을 수행할 수 없습니다. 이 경우 UserInfo 200 응답 + subject 일치 검증으로만 보호됩니다
+    * (기존 정책과 동일, 회귀 없음).</p>
+    *
+    * @throws TokenBindingException Access Token이 JWT 구조인데 서명/클레임 검증에 실패한 경우
+    */
+   private void validateAccessTokenIfJwt(String accessTokenValue) {
+      if (!JwtUtil.isStructurallyJwt(accessTokenValue)) {
+         log.debug("[Provider] Access Token이 JWT 구조가 아님(Opaque 추정) — aud/azp 로컬 결합 검증 스킵.");
+         return;
+      }
+      try {
+         Jwt accessToken = jwtDecoder.decode(accessTokenValue);
+         TokenBindingValidator.validateAccessTokenAzp(accessToken, clientId);
+      } catch (JwtException e) {
+         log.warn("[Provider] Access Token 서명/클레임 검증 실패: {}", e.getMessage());
+         throw new TokenBindingException(
+             "Access Token 서명 또는 클레임 검증에 실패했습니다: " + e.getMessage(), e);
+      }
    }
 
    /**
@@ -207,27 +278,14 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
    }
 
    /**
-    * ID Token 문자열과 클레임에서 OidcIdToken 객체를 생성합니다.
+    * 서명 검증이 완료된 ID Token {@link Jwt}에서 OidcIdToken 객체를 생성합니다.
     *
     * @param idTokenValue ID Token 문자열
-    * @param claims       파싱된 클레임
+    * @param idToken      서명 검증이 완료된 {@link Jwt}
     * @return OidcIdToken 객체
     */
-   private OidcIdToken createOidcIdToken(String idTokenValue, Map<String, Object> claims) {
-      Instant issuedAt = extractInstant(claims, "iat");
-      Instant expiresAt = extractInstant(claims, "exp");
-      return new OidcIdToken(idTokenValue, issuedAt, expiresAt, claims);
-   }
-
-   /**
-    * 클레임에서 Instant 값을 추출합니다.
-    */
-   private Instant extractInstant(Map<String, Object> claims, String claimName) {
-      Object value = claims.get(claimName);
-      if (value instanceof Number) {
-         return Instant.ofEpochSecond(((Number) value).longValue());
-      }
-      return null;
+   private OidcIdToken createOidcIdToken(String idTokenValue, Jwt idToken) {
+      return new OidcIdToken(idTokenValue, idToken.getIssuedAt(), idToken.getExpiresAt(), idToken.getClaims());
    }
 
    /**

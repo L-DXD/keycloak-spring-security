@@ -177,7 +177,7 @@ class KeycloakServerAuthenticationConverterTest {
           org.mockito.ArgumentMatchers.any(),
           org.mockito.ArgumentMatchers.any(),
           org.mockito.ArgumentMatchers.isNull()))
-          .thenReturn(fakeAuth);
+          .thenReturn(Mono.just(fakeAuth));
 
       // H-N1 검증:
       // save()가 체인에 포함되지 않았다면 saveSession.then(userInfo) 자체가 cold Mono가 되어

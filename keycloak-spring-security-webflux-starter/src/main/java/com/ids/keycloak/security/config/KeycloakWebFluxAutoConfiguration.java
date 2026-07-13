@@ -12,6 +12,7 @@ import com.ids.keycloak.security.logging.MdcContextPropagationAccessor;
 import com.ids.keycloak.security.ratelimit.InMemoryRateLimiter;
 import com.ids.keycloak.security.ratelimit.RateLimiter;
 import com.ids.keycloak.security.session.ReactiveSessionManager;
+import com.ids.keycloak.security.util.KeycloakIssuerUriResolver;
 import com.ids.keycloak.security.web.reactive.KeycloakServerAccessDeniedHandler;
 import com.ids.keycloak.security.web.reactive.KeycloakServerAuthenticationEntryPoint;
 import com.sd.KeycloakClient.config.AbstractKeycloakConfig;
@@ -24,6 +25,7 @@ import java.util.List;
 import java.util.function.Consumer;
 import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -163,15 +165,48 @@ public class KeycloakWebFluxAutoConfiguration {
   @Slf4j
   protected static class KeycloakAuthenticationConfiguration {
 
+    /**
+     * ID Token/Access Token의 서명·iss·exp·nbf를 로컬 검증하는 {@link ReactiveJwtDecoder}를 등록합니다.
+     *
+     * <p><b>보안 Advisory 1 대응:</b> {@code KeycloakReactiveAuthenticationManager}가 ID Token sub를
+     * 서명 검증 없이 파싱해 Principal로 사용하던 것을 이 {@link ReactiveJwtDecoder}로 대체합니다.
+     * JWKS URI는 {@code keycloak.base-url}/{@code keycloak.relative-path}/{@code keycloak.realm-name}
+     * (모두 필수 설정)로부터 계산하므로 별도의 {@code issuer-uri} 설정이 없어도 항상 사용 가능합니다.</p>
+     *
+     * <p><b>Back-Channel 로그아웃용 {@code keycloakBackChannelJwtDecoder}와 별개 빈입니다.</b>
+     * 두 빈은 검증 목적이 다릅니다 — logout_token은 OIDC Back-Channel Logout 스펙상 {@code aud}가
+     * 항상 client-id와 일치해야 하므로 back-channel 빈은 aud를 엄격히 검증하지만, 일반 Access Token은
+     * Keycloak Audience 매퍼 설정에 따라 {@code aud}에 client-id가 없는 경우가 흔하므로 이 빈은 aud를
+     * 강제하지 않습니다(azp만 {@code TokenBindingValidator}에서 별도 검증). Bean 이름 기반 조건으로
+     * 등록해 서로의 {@code @ConditionalOnMissingBean(ReactiveJwtDecoder.class)}에 의해 의도치 않게
+     * 대체되지 않도록 분리합니다.</p>
+     */
+    @Bean("keycloakOidcReactiveJwtDecoder")
+    @ConditionalOnMissingBean(name = "keycloakOidcReactiveJwtDecoder")
+    public ReactiveJwtDecoder keycloakOidcReactiveJwtDecoder(
+        KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig) {
+      String issuerUri = KeycloakIssuerUriResolver.resolveIssuerUri(
+          keycloakConfig.getBaseUrl(), keycloakConfig.getRelativePath(), keycloakConfig.getRealmName());
+      String jwkSetUri = KeycloakIssuerUriResolver.resolveJwkSetUri(issuerUri);
+
+      NimbusReactiveJwtDecoder decoder = NimbusReactiveJwtDecoder.withJwkSetUri(jwkSetUri).build();
+      decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(issuerUri));
+
+      log.info("핵심 Bean을 등록합니다: [ReactiveJwtDecoder] (OIDC ID/Access Token 서명+iss+exp+nbf 검증, issuer={})",
+          issuerUri);
+      return decoder;
+    }
+
     @Bean
     @ConditionalOnMissingBean(ReactiveAuthenticationManager.class)
     public ReactiveAuthenticationManager keycloakReactiveAuthenticationManager(
         KeycloakClient keycloakClient,
         KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig,
-        KeycloakSecurityProperties securityProperties) {
+        KeycloakSecurityProperties securityProperties,
+        @Qualifier("keycloakOidcReactiveJwtDecoder") ReactiveJwtDecoder jwtDecoder) {
       log.info("핵심 Bean을 등록합니다: [ReactiveAuthenticationManager] (KeycloakReactiveAuthenticationManager)");
       KeycloakReactiveAuthenticationManager manager =
-          new KeycloakReactiveAuthenticationManager(keycloakClient, keycloakConfig.getClientId());
+          new KeycloakReactiveAuthenticationManager(keycloakClient, keycloakConfig.getClientId(), jwtDecoder);
       // M-2: require-user-info 토글 (기본 false = 기존 동작 유지, 회귀 0)
       manager.setRequireUserInfo(securityProperties.getAuthentication().isRequireUserInfo());
       return manager;
@@ -366,13 +401,16 @@ public class KeycloakWebFluxAutoConfiguration {
      * {@link JwtClaimValidator}로 {@code aud} 클레임에 우리 client-id 포함 여부를 추가 검증합니다.
      * {@link DelegatingOAuth2TokenValidator}로 기존 issuer 검증과 결합합니다.</p>
      *
-     * <p>사용자가 직접 {@link ReactiveJwtDecoder} 빈을 등록하면 이 빈은 생략됩니다.</p>
+     * <p>사용자가 같은 이름의 빈을 직접 등록하면 이 빈은 생략됩니다. <b>보안 Advisory 1 관련:</b> OIDC
+     * Cookie 인증용 {@code keycloakOidcReactiveJwtDecoder}(aud 미검증)와는 검증 목적이 달라 별개
+     * 빈으로 유지합니다 — 조건을 타입({@code ReactiveJwtDecoder.class})이 아닌 이 빈의 이름으로 좁혀,
+     * 두 빈이 서로의 {@code @ConditionalOnMissingBean}에 의해 의도치 않게 대체되지 않도록 합니다.</p>
      *
      * @param issuerUri  OIDC issuer URI (JWKS 엔드포인트 자동 검색)
      * @param clientId   audience 검증에 사용할 우리 client-id
      */
     @Bean("keycloakBackChannelJwtDecoder")
-    @ConditionalOnMissingBean(ReactiveJwtDecoder.class)
+    @ConditionalOnMissingBean(name = "keycloakBackChannelJwtDecoder")
     public ReactiveJwtDecoder keycloakBackChannelJwtDecoder(
         @org.springframework.beans.factory.annotation.Value(
             "${spring.security.oauth2.resourceserver.jwt.issuer-uri:"
@@ -421,7 +459,7 @@ public class KeycloakWebFluxAutoConfiguration {
     @SuppressWarnings("unchecked")
     public ReactiveOidcBackChannelLogoutHandler reactiveOidcBackChannelLogoutHandler(
         ReactiveFindByIndexNameSessionRepository<?> sessionRepository,
-        ReactiveJwtDecoder jwtDecoder) {
+        @Qualifier("keycloakBackChannelJwtDecoder") ReactiveJwtDecoder jwtDecoder) {
       log.info("핵심 Bean을 등록합니다: [ReactiveOidcBackChannelLogoutHandler] (서명 검증 활성)");
       return new ReactiveOidcBackChannelLogoutHandler(sessionRepository, jwtDecoder);
     }

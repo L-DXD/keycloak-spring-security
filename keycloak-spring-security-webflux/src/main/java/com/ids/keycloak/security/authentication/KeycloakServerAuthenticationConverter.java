@@ -162,27 +162,34 @@ public class KeycloakServerAuthenticationConverter implements ServerAuthenticati
             }
 
             // session.save() 완료 후 UserInfo 조회 → 인증 객체 반환
-            return saveSession
-                .then(keycloakClient.userAsync().getUserInfo(newTokens.getAccessToken()))
-                .flatMap(userInfoResponse -> {
-                  org.springframework.security.oauth2.core.oidc.OidcUserInfo oidcUserInfo = null;
-                  if (userInfoResponse.getStatus() == 200) {
-                    com.sd.KeycloakClient.dto.user.KeycloakUserInfo keycloakUserInfo =
-                        userInfoResponse.getBody().orElse(null);
-                    if (keycloakUserInfo != null) {
-                      oidcUserInfo = toOidcUserInfo(keycloakUserInfo);
-                    }
-                  }
-                  Authentication auth = authManager.createAuthenticatedToken(
-                      newTokens.getIdToken(), newTokens.getAccessToken(), oidcUserInfo);
-                  return Mono.just(auth);
-                })
-                .onErrorResume(e -> {
-                  log.warn("[Converter] 재발급 후 UserInfo 조회 실패, 빈 권한으로 진행: {}", e.getMessage());
-                  Authentication auth = authManager.createAuthenticatedToken(
-                      newTokens.getIdToken(), newTokens.getAccessToken(), null);
-                  return Mono.just(auth);
-                });
+            //
+            // 보안 Advisory 1: UserInfo 조회 실패에 대한 onErrorResume은 UserInfo Mono에만 좁게 적용한다.
+            // authManager.createAuthenticatedToken(...)(ID Token 서명/토큰 결합 검증)에서 발생하는
+            // TokenBindingException까지 이 onErrorResume이 삼켜서 "빈 권한으로 재시도"하면 결합 검증
+            // 실패를 무력화하는 우회로가 되므로, UserInfo 조회 단계와 분리해 좁게 스코프한다.
+            Mono<org.springframework.security.oauth2.core.oidc.OidcUserInfo> userInfoMono =
+                keycloakClient.userAsync().getUserInfo(newTokens.getAccessToken())
+                    .flatMap(userInfoResponse -> {
+                      if (userInfoResponse.getStatus() == 200) {
+                        com.sd.KeycloakClient.dto.user.KeycloakUserInfo keycloakUserInfo =
+                            userInfoResponse.getBody().orElse(null);
+                        if (keycloakUserInfo != null) {
+                          return Mono.just(toOidcUserInfo(keycloakUserInfo));
+                        }
+                      }
+                      return Mono.<org.springframework.security.oauth2.core.oidc.OidcUserInfo>empty();
+                    })
+                    .onErrorResume(e -> {
+                      log.warn("[Converter] 재발급 후 UserInfo 조회 실패, 빈 권한으로 진행: {}", e.getMessage());
+                      return Mono.empty();
+                    });
+
+            return saveSession.then(
+                userInfoMono
+                    .flatMap(oidcUserInfo -> authManager.createAuthenticatedToken(
+                        newTokens.getIdToken(), newTokens.getAccessToken(), oidcUserInfo))
+                    .switchIfEmpty(Mono.defer(() -> authManager.createAuthenticatedToken(
+                        newTokens.getIdToken(), newTokens.getAccessToken(), null))));
 
           } else if (status == 400 || status == 401) {
             // 토큰 무효 (Refresh Token 만료/폐기): 미인증으로 처리 → Mono.empty()

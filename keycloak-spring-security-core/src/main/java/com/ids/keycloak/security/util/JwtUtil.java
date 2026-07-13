@@ -93,4 +93,27 @@ public class JwtUtil {
             return null;
         }
     }
+
+    /**
+     * 토큰이 구조적으로 JWT(서명된 JWS, header.payload.signature) 형식인지만 확인합니다.
+     * <p>
+     * <b>이 메서드는 신뢰(trust) 판단에 사용해서는 안 됩니다.</b> 서명 검증을 전혀 수행하지 않으며,
+     * 단순히 파싱 가능한 구조인지만 확인합니다(예: Opaque Access Token과 JWT Access Token을
+     * 구분해 이후 처리 분기를 결정하는 용도).
+     * </p>
+     *
+     * @param token 확인할 토큰 문자열
+     * @return 구조적으로 JWT 형식이면 {@code true}, Opaque 등 그 외 형식이면 {@code false}
+     */
+    public static boolean isStructurallyJwt(String token) {
+        if (token == null) {
+            return false;
+        }
+        try {
+            SignedJWT.parse(token);
+            return true;
+        } catch (ParseException | IllegalArgumentException e) {
+            return false;
+        }
+    }
 }

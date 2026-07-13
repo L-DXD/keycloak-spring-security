@@ -31,6 +31,7 @@ import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInit
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestResolver;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
@@ -118,7 +119,10 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
 
         // === 1. Authentication Provider 등록 ===
         String clientId = clientRegistrationRepository.findByRegistrationId("keycloak").getClientId();
-        KeycloakAuthenticationProvider provider = new KeycloakAuthenticationProvider(keycloakClient, clientId);
+        // 보안 Advisory 1: ID/Access Token 서명 검증 및 토큰 결합 검증용 JwtDecoder
+        JwtDecoder jwtDecoder = context.getBean(JwtDecoder.class);
+        KeycloakAuthenticationProvider provider =
+            new KeycloakAuthenticationProvider(keycloakClient, clientId, jwtDecoder);
         // M-2: require-user-info 토글 적용 (기본 false = 기존 동작 유지, 회귀 0)
         KeycloakSecurityProperties securityPropertiesForProvider = context.getBean(KeycloakSecurityProperties.class);
         provider.setRequireUserInfo(securityPropertiesForProvider.getAuthentication().isRequireUserInfo());
