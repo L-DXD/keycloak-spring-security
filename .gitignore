@@ -55,3 +55,8 @@ secret.asc
 
 # Claude Code Bash 도구가 생성하는 cwd 추적 임시파일 (커밋 금지)
 tmpclaude-*
+
+# 임시 설정 사본은 자격증명이 담길 수 있어 커밋 금지
+*.yml_TMP
+*.yaml_TMP
+*_TMP
