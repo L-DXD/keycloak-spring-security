@@ -318,6 +318,7 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         // === 9. Basic Auth 필터 등록 (조건부) ===
         if (securityProperties.getBasicAuth().isEnabled()) {
             BasicAuthenticationFilter basicAuthFilter = new BasicAuthenticationFilter(authenticationManager);
+            basicAuthFilter.setTrustedProxyCount(securityProperties.getTrustedProxyCount());
             http.addFilterBefore(basicAuthFilter, KeycloakAuthenticationFilter.class);
         }
 
@@ -333,6 +334,7 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
                 RateLimitFilter rateLimitFilter = new RateLimitFilter(
                     rateLimiter, securityProperties.getRateLimit(), rateLimitPaths
                 );
+                rateLimitFilter.setTrustedProxyCount(securityProperties.getTrustedProxyCount());
                 // BasicAuthenticationFilter보다 앞에 위치 (차단된 요청은 인증 시도 자체를 하지 않음)
                 http.addFilterBefore(rateLimitFilter, BasicAuthenticationFilter.class);
                 log.info("Rate Limit 필터 등록 완료 (대상 경로: {}, Basic Auth 포함: {})",

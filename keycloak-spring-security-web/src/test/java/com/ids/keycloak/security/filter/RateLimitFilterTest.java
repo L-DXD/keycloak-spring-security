@@ -239,9 +239,25 @@ class RateLimitFilterTest {
     class IP_추출 {
 
         @Test
-        void X_Forwarded_For_헤더가_있으면_첫번째_IP를_사용한다() throws Exception {
+        void trustedProxyCount_기본값_0에서는_스푸핑된_X_Forwarded_For를_무시하고_remoteAddr를_사용한다() throws Exception {
+            // 보안 기본값(trustedProxyCount=0): 클라이언트가 조작 가능한 XFF는 완전히 무시한다.
             request.setRequestURI("/auth/token");
             request.addHeader("X-Forwarded-For", "10.0.0.5, 172.16.0.1, 192.168.1.1");
+            request.setRemoteAddr("172.16.0.1");
+            when(rateLimiter.isBlocked("ip:172.16.0.1")).thenReturn(false);
+
+            filter.doFilterInternal(request, response, filterChain);
+
+            verify(filterChain).doFilter(request, response);
+            verify(rateLimiter, never()).isBlocked("ip:10.0.0.5");
+        }
+
+        @Test
+        void trustedProxyCount가_1이면_XFF_우측에서_두번째_값을_클라이언트_IP로_사용한다() throws Exception {
+            // X-Forwarded-For: client, proxy1 에서 신뢰 프록시 1개(proxy1)를 건너뛰고 client를 사용.
+            filter.setTrustedProxyCount(1);
+            request.setRequestURI("/auth/token");
+            request.addHeader("X-Forwarded-For", "10.0.0.5, 172.16.0.1");
             request.setRemoteAddr("172.16.0.1");
             when(rateLimiter.isBlocked("ip:10.0.0.5")).thenReturn(false);
 

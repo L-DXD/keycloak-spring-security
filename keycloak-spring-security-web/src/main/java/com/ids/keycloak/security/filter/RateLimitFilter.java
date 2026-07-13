@@ -4,6 +4,7 @@ import com.ids.keycloak.security.config.KeycloakRateLimitProperties;
 import com.ids.keycloak.security.config.RateLimitKeyStrategy;
 import com.ids.keycloak.security.ratelimit.AuthenticationEventLogger;
 import com.ids.keycloak.security.ratelimit.RateLimiter;
+import com.ids.keycloak.security.util.ClientIpResolver;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -48,12 +49,29 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private final KeycloakRateLimitProperties properties;
     private final List<String> rateLimitPaths;
 
+    /**
+     * X-Forwarded-For 헤더에서 신뢰할 프록시 홉 수.
+     * 기본값 0: XFF 헤더를 완전히 무시하고 TCP 연결 원격 주소를 사용합니다(보안상 기본값).
+     * {@code KeycloakHttpConfigurer}에서 {@code keycloak.security.trusted-proxy-count} 값을 주입합니다.
+     * {@link ClientIpResolver} 참고.
+     */
+    private int trustedProxyCount = 0;
+
     public RateLimitFilter(RateLimiter rateLimiter,
                            KeycloakRateLimitProperties properties,
                            List<String> rateLimitPaths) {
         this.rateLimiter = rateLimiter;
         this.properties = properties;
         this.rateLimitPaths = rateLimitPaths;
+    }
+
+    /**
+     * 신뢰 프록시 홉 수를 설정합니다.
+     *
+     * @param trustedProxyCount 신뢰 프록시 홉 수 (0: XFF 무시, -1: 레거시 동작, N&gt;0: 홉 기반 파싱)
+     */
+    public void setTrustedProxyCount(int trustedProxyCount) {
+        this.trustedProxyCount = trustedProxyCount;
     }
 
     @Override
@@ -181,11 +199,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
     }
 
     private String getClientIp(HttpServletRequest request) {
-        String xff = request.getHeader(X_FORWARDED_FOR_HEADER);
-        if (xff != null && !xff.isBlank()) {
-            return xff.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
+        return ClientIpResolver.resolve(
+            request.getHeader(X_FORWARDED_FOR_HEADER),
+            request.getRemoteAddr(),
+            trustedProxyCount
+        );
     }
 
     /**

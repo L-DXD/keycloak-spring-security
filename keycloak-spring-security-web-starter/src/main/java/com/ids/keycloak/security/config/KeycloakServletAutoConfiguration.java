@@ -526,12 +526,15 @@ public class KeycloakServletAutoConfiguration {
         @ConditionalOnMissingBean(RateLimiter.class)
         public RateLimiter rateLimiter(KeycloakSecurityProperties properties) {
             KeycloakRateLimitProperties rlProps = properties.getRateLimit();
-            log.info("Rate Limit Bean을 등록합니다: [InMemoryRateLimiter] (max={}, window={}s, block={}s)",
-                rlProps.getMaxRequests(), rlProps.getWindowSeconds(), rlProps.getBlockDurationSeconds());
+            log.info("Rate Limit Bean을 등록합니다: [InMemoryRateLimiter] "
+                    + "(max={}, window={}s, block={}s, maxTrackedKeys={})",
+                rlProps.getMaxRequests(), rlProps.getWindowSeconds(), rlProps.getBlockDurationSeconds(),
+                rlProps.getMaxTrackedKeys());
             return new InMemoryRateLimiter(
                 rlProps.getMaxRequests(),
                 rlProps.getWindowSeconds(),
-                rlProps.getBlockDurationSeconds()
+                rlProps.getBlockDurationSeconds(),
+                rlProps.getMaxTrackedKeys()
             );
         }
     }

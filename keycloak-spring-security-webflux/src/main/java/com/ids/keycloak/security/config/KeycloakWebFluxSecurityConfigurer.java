@@ -125,6 +125,7 @@ public final class KeycloakWebFluxSecurityConfigurer {
       }
       ReactiveRateLimitFilter rateLimitFilter = new ReactiveRateLimitFilter(
           rateLimiter, rateLimitProps, rateLimitPaths);
+      rateLimitFilter.setTrustedProxyCount(securityProperties.getTrustedProxyCount());
       http.addFilterBefore(rateLimitFilter, SecurityWebFiltersOrder.HTTP_BASIC);
       log.info("[Configurer] Rate Limit 필터 등록 완료 (대상 경로: {}, Basic 포함: {})",
           rateLimitPaths, rateLimitProps.isIncludeBasicAuth());
@@ -134,6 +135,7 @@ public final class KeycloakWebFluxSecurityConfigurer {
     if (securityProperties.getBasicAuth().isEnabled()) {
       ReactiveBasicAuthenticationFilter basicAuthFilter =
           new ReactiveBasicAuthenticationFilter(keycloakClient, clientId);
+      basicAuthFilter.setTrustedProxyCount(securityProperties.getTrustedProxyCount());
       http.addFilterAt(basicAuthFilter, SecurityWebFiltersOrder.HTTP_BASIC);
       log.info("[Configurer] Basic Auth 필터 등록 완료.");
     }

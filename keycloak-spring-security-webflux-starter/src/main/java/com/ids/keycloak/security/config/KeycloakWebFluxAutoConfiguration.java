@@ -508,10 +508,13 @@ public class KeycloakWebFluxAutoConfiguration {
     @ConditionalOnMissingBean(RateLimiter.class)
     public RateLimiter keycloakInMemoryRateLimiter(KeycloakSecurityProperties securityProperties) {
       KeycloakRateLimitProperties props = securityProperties.getRateLimit();
-      log.info("지원 Bean을 등록합니다: [RateLimiter] (InMemoryRateLimiter) maxRequests={} window={}s block={}s",
-          props.getMaxRequests(), props.getWindowSeconds(), props.getBlockDurationSeconds());
+      log.info("지원 Bean을 등록합니다: [RateLimiter] (InMemoryRateLimiter) "
+              + "maxRequests={} window={}s block={}s maxTrackedKeys={}",
+          props.getMaxRequests(), props.getWindowSeconds(), props.getBlockDurationSeconds(),
+          props.getMaxTrackedKeys());
       return new InMemoryRateLimiter(
-          props.getMaxRequests(), props.getWindowSeconds(), props.getBlockDurationSeconds());
+          props.getMaxRequests(), props.getWindowSeconds(), props.getBlockDurationSeconds(),
+          props.getMaxTrackedKeys());
     }
   }
 
