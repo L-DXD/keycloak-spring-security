@@ -3,7 +3,7 @@
 Keycloak을 Spring Security에 통합하는 라이브러리입니다. 의존성 하나와 최소 설정으로 OIDC 로그인·세션·로그아웃·인가가 자동 구성됩니다.
 
 - **지원**: JDK 17+, Spring Boot 3.5.x, Spring Security 6.5.x
-- **현재 버전**: `1.10.2`
+- **현재 버전**: `2.0.0`
 - **스택**: Servlet(Spring MVC) / **Reactive(WebFlux) — v1.8.0부터 servlet과 기능 동등** ([8. Reactive](#8-reactivewebflux))
 - 이 문서는 **도입 개발자용 사용 가이드**입니다. 아키텍처/기여 규칙은 [README](../README.md) 참고.
 
@@ -27,10 +27,10 @@ Keycloak을 Spring Security에 통합하는 라이브러리입니다. 의존성 
 
 ```gradle
 // Servlet (Spring MVC)
-implementation("io.github.l-dxd:keycloak-spring-security-web-starter:1.10.2")
+implementation("io.github.l-dxd:keycloak-spring-security-web-starter:2.0.0")
 
 // 또는 Reactive (WebFlux)
-implementation("io.github.l-dxd:keycloak-spring-security-webflux-starter:1.10.2")
+implementation("io.github.l-dxd:keycloak-spring-security-webflux-starter:2.0.0")
 ```
 > Redis 세션을 쓸 경우에만 추가:
 > ```gradle
@@ -366,7 +366,7 @@ LoggingValueSanitizer loggingValueSanitizer() {
 
 | 버전 | 변경 | 주의 |
 |------|------|------|
-| **Unreleased** ⚠️ | **보안 강화 8건** — OIDC ID/Access Token 결합 검증(Advisory 1), 로그인 세션 고정 방지(Advisory 2), Rate Limit IP 판정 일원화(Advisory 2), Basic Auth CSRF 전면 면제 제거(Advisory 3), 백채널 로그아웃 로그 마스킹(Advisory 5), 인메모리 세션 저장소 용량 상한(Advisory 6), Realm/Client Role 네임스페이스 분리(Advisory 7), WebFlux 백채널 decoder 검증 강화(Advisory 8) | **Breaking 3건** — 아래 [마이그레이션](#마이그레이션-unreleased--보안-강화-8건-breaking) |
+| **2.0.0** ⚠️ | **보안 강화 8건** — OIDC ID/Access Token 결합 검증(Advisory 1), 로그인 세션 고정 방지(Advisory 2), Rate Limit IP 판정 일원화(Advisory 2), Basic Auth CSRF 전면 면제 제거(Advisory 3), 백채널 로그아웃 로그 마스킹(Advisory 5), 인메모리 세션 저장소 용량 상한(Advisory 6), Realm/Client Role 네임스페이스 분리(Advisory 7), WebFlux 백채널 decoder 검증 강화(Advisory 8) | **Breaking 3건** — 아래 [마이그레이션](#마이그레이션-200--보안-강화-8건-breaking) |
 | **1.10.2** | (버그픽스 #54) webflux 토큰 무효화(백채널 로그아웃 등) 후 보호 경로 접근 시 refresh 재발급 실패가 500 나던 문제 → 미인증 처리로 EntryPoint(로그인 리다이렉트/401) 경유 | breaking 없음 |
 | **1.10.1** | (버그픽스 #52) webflux/servlet AJAX 판정 통일 — 브라우저 `Accept: */*`를 JSON으로 오판하던 문제 수정(`ajax-returns-json=true` 시 브라우저 리다이렉트 정상화) | breaking 없음 |
 | **1.10.0** ⚠️ | **보안 강화** (보안검토 13건) — reactive 백채널 JWKS 서명+aud 검증, 쿠키 secure 기본 true, XFF 신뢰 프록시, servlet SameSite/토큰 no-store, PII 마스킹 확장(JWT/OAuth2), 인가 캐시·require-user-info 토글, Redis JSON 직렬화 | **Breaking 3건** — 아래 [마이그레이션](#마이그레이션-v190--v1100-breaking) |
@@ -379,7 +379,7 @@ LoggingValueSanitizer loggingValueSanitizer() {
 
 상세: `docs/12`, `docs/13`, `docs/14`
 
-### 마이그레이션 (Unreleased — 보안 강화 8건, breaking)
+### 마이그레이션 (2.0.0 — 보안 강화 8건, breaking)
 보안 검토(Advisory 1/2/3/5/6/7/8) 반영으로 **기본 동작 2가지가 변경**되고, **수동 배선(auto-filter-chain 미사용) 사용자에 한해** API 변경이 하나 있습니다.
 
 | # | 변경 | 영향 | 해제/대응 |

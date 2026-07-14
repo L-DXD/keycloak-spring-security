@@ -34,7 +34,7 @@ public class SecurityConfig {
   @Value("${spring.security.oauth2.client.registration.keycloak.client-id}") String clientId;
   @Value("${keycloak.realm-name}") String realmName;
 
-  // 함정 7: 보안 Advisory 1(Unreleased) — ID/Access Token 서명·iss·exp·nbf 로컬 검증용 decoder.
+  // 함정 7: 보안 Advisory 1(2.0.0) — ID/Access Token 서명·iss·exp·nbf 로컬 검증용 decoder.
   // OIDC 쿠키 인증 전용이며, 백채널 로그아웃 전용 decoder(keycloakBackChannelJwtDecoder)와는 별개 빈이다.
   @Bean ReactiveJwtDecoder keycloakOidcReactiveJwtDecoder(
       @Value("${keycloak.base-url}") String baseUrl,
@@ -137,7 +137,7 @@ Bearer 요청은 entry point가 자동으로 401 처리합니다.
 - **해결**: Configurer를 쓰지 않고 §2처럼 컴포넌트를 직접 조립 + `authorizeExchange`를 직접 구성.
 - **개선 제안**: Configurer에 `authorizeExchange` Customizer 파라미터 추가, 또는 인가 매니저를 `@ConditionalOnMissingBean`으로 주입 가능하게.
 
-### 함정 7 — (Unreleased) `KeycloakReactiveAuthenticationManager` 생성자에 `ReactiveJwtDecoder` 추가
+### 함정 7 — (2.0.0) `KeycloakReactiveAuthenticationManager` 생성자에 `ReactiveJwtDecoder` 추가
 보안 Advisory 1(ID/Access Token 결합 검증) 대응으로 생성자가 `(KeycloakClient, String)` 2-arg에서 `(KeycloakClient, String, ReactiveJwtDecoder)` 3-arg로 바뀌었습니다. 구 시그니처로 인스턴스화하던 수동 배선 코드는 컴파일이 깨집니다.
 - **해결**: §2처럼 `keycloakOidcReactiveJwtDecoder` 빈(issuer는 `KeycloakIssuerUriResolver.resolveEffectiveIssuerUri`로 계산, JWKS는 `withJwkSetUri`로 지연 로딩)을 구성해 생성자에 전달. Realm/Client Role 네임스페이스 분리(Advisory 7)를 쓰려면 `authManager.setRoleMapping(props.getRoleMapping())`도 함께 호출(생략 시 기본값 `SEPARATE_NAMESPACE` 그대로 적용되어 회귀는 없음).
 - servlet `KeycloakAuthenticationProvider`도 동일하게 `JwtDecoder` 파라미터가 추가됐습니다(수동 배선 가이드가 없는 servlet은 통상 starter autoconfig를 통해서만 구성되므로 영향이 제한적입니다).

@@ -8,6 +8,8 @@
 > 권장 버전 및 지원 정책은 [SECURITY.md](SECURITY.md)를 참고하세요.
 
 ## [Unreleased]
+
+## [2.0.0] - 2026-07-14
 ### Security
 - **OIDC ID/Access Token 사용자·클라이언트 결합 검증 강화 (Advisory 1)**: 쿠키 기반 OIDC 인증에서 ID Token subject를 서명 검증 없이 파싱해 Principal로 신뢰하던 로직을 제거. `JwtDecoder`(servlet) / `ReactiveJwtDecoder`(webflux)로 서명·iss·exp·nbf를 검증한 뒤에만 subject를 사용하도록 변경하고, ID Token의 `aud`/`azp`가 애플리케이션 client-id와 일치하는지, ID Token subject와 UserInfo subject가 일치하는지 추가 검증(`TokenBindingValidator`)해 서로 다른 사용자·클라이언트의 토큰이 조합되어 인증되는 것을 차단(Access Token이 JWT 형식이면 `azp`도 함께 검증, Opaque Access Token은 UserInfo 일치 검증까지 — 회귀 없음). 함께, OIDC issuer(`iss`) 해석 우선순위를 명시 프로퍼티 → 표준 Spring Boot `issuer-uri` → `base-url` 파생 순으로 정리해, `base-url`이 서버간 통신용 내부 주소라 브라우저가 보는 실제 issuer와 다른 환경에서 로그인이 전면 실패하는 문제를 예방.
 - **OIDC 로그인 세션 고정(Session Fixation) 방지 (Advisory 2)**: 로그인 성공 시 세션 전략을 `sessionFixation.none()`에서 명시적 `changeSessionId()`로 변경(servlet/webflux 동일 적용). 인증 전 발급된 세션 ID가 로그인 성공 후에도 그대로 유지되어, 공격자가 피해자에게 심어둔 세션 ID로 인증을 완료시키는 세션 고정 공격을 차단.
@@ -22,6 +24,8 @@
 - Realm/Client Role 매핑 기본값이 `SEPARATE_NAMESPACE`로 변경됨. 기존에 realm 역할과 client 역할을 구분 없이 `hasRole("ADMIN")` 등으로 검사하던 코드는 권한 문자열이 `ROLE_REALM_ADMIN`/`ROLE_CLIENT_<CLIENT>_ADMIN`으로 분리되어 더 이상 매치되지 않음. 과거 병합 동작이 반드시 필요하면 `keycloak.security.role-mapping.mode=LEGACY_MERGED`로 명시 전환할 것(비권장, 마이그레이션 기간 한정).
 - (webflux) `KeycloakReactiveAuthenticationManager#createAuthenticatedToken`의 반환 타입이 `Authentication` → `Mono<Authentication>`으로 변경. 두 클래스 모두 생성자에 `JwtDecoder`/`ReactiveJwtDecoder` 파라미터가 추가되어(servlet `KeycloakAuthenticationProvider` 동일), `new KeycloakReactiveAuthenticationManager(client, clientId)`처럼 구 시그니처로 직접 인스턴스화하던 수동 배선(auto-filter-chain 미사용) 코드는 컴파일이 깨짐. Starter 자동 구성만 사용하는 경우 영향 없음.
 - 백채널 로그아웃 전용 `ReactiveJwtDecoder` 빈의 대체 조건이 타입 기반에서 빈 이름(`keycloakBackChannelJwtDecoder`) 기반으로 변경됨. 이 빈을 직접 재정의(override)하던 경우 동일한 빈 이름을 사용해야 함.
+### Changed
+- webflux 인증 이벤트 로그 포맷을 servlet과 동일한 `AuthenticationEventLogger` 구현으로 통합하면서 로그 태그가 `[AuthEvent]` → `[AUTH]`, 필드명이 `clientIp=` → `ip=`로 통일됨(servlet 쪽 canonical 포맷에 맞춤). 테스트로 고정된 동작은 아니었으나, webflux 로그를 파싱하는 외부 로그 수집기·대시보드가 있다면 패턴 갱신 필요.
 ### Added
 - `keycloak.security.authentication.issuer-uri` — OIDC ID/Access Token 서명 검증에 사용할 issuer 명시 지정(기본값 없음, 미설정 시 표준 프로퍼티 → `base-url` 파생 순으로 자동 해석)
 - `keycloak.security.rate-limit.max-tracked-keys` — 인메모리 rate limiter가 동시에 추적할 최대 키(IP/username) 수(기본값 100,000)
@@ -105,7 +109,8 @@
 ### Added
 - `@EnableMethodSecurity` 적용, 초기 OIDC 로그인/세션/로그아웃/Redis 세션 등 기반 기능
 
-[Unreleased]: https://github.com/L-DXD/keycloak-spring-security/compare/v1.10.2...HEAD
+[Unreleased]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/L-DXD/keycloak-spring-security/compare/v1.10.2...v2.0.0
 [1.10.2]: https://github.com/L-DXD/keycloak-spring-security/compare/v1.10.1...v1.10.2
 [1.10.1]: https://github.com/L-DXD/keycloak-spring-security/compare/v1.10.0...v1.10.1
 [1.10.0]: https://github.com/L-DXD/keycloak-spring-security/compare/v1.9.0...v1.10.0
