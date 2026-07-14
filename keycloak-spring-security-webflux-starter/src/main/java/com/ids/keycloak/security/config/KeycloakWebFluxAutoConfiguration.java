@@ -228,6 +228,8 @@ public class KeycloakWebFluxAutoConfiguration {
           new KeycloakReactiveAuthenticationManager(keycloakClient, keycloakConfig.getClientId(), jwtDecoder);
       // M-2: require-user-info 토글 (기본 false = 기존 동작 유지, 회귀 0)
       manager.setRequireUserInfo(securityProperties.getAuthentication().isRequireUserInfo());
+      // 보안 Advisory 7: Realm/Client 역할 네임스페이스 분리 설정 적용 (기본 SEPARATE_NAMESPACE)
+      manager.setRoleMapping(securityProperties.getRoleMapping());
       return manager;
     }
 

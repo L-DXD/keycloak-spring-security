@@ -136,6 +136,8 @@ public final class KeycloakWebFluxSecurityConfigurer {
       ReactiveBasicAuthenticationFilter basicAuthFilter =
           new ReactiveBasicAuthenticationFilter(keycloakClient, clientId);
       basicAuthFilter.setTrustedProxyCount(securityProperties.getTrustedProxyCount());
+      // 보안 Advisory 7: Realm/Client 역할 네임스페이스 분리 설정 적용 (기본 SEPARATE_NAMESPACE)
+      basicAuthFilter.setRoleMapping(securityProperties.getRoleMapping());
       http.addFilterAt(basicAuthFilter, SecurityWebFiltersOrder.HTTP_BASIC);
       log.info("[Configurer] Basic Auth 필터 등록 완료.");
     }
@@ -164,6 +166,8 @@ public final class KeycloakWebFluxSecurityConfigurer {
     if (securityProperties.getBearerToken().isEnabled()) {
       KeycloakReactiveOpaqueTokenIntrospector introspector =
           new KeycloakReactiveOpaqueTokenIntrospector(keycloakClient, clientId);
+      // 보안 Advisory 7: Realm/Client 역할 네임스페이스 분리 설정 적용 (기본 SEPARATE_NAMESPACE)
+      introspector.setRoleMapping(securityProperties.getRoleMapping());
       http.oauth2ResourceServer(rs -> rs
           .opaqueToken(opaque -> opaque.introspector(introspector))
       );

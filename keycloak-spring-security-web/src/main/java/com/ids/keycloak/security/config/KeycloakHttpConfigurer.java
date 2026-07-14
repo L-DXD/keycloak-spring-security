@@ -126,6 +126,8 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         // M-2: require-user-info 토글 적용 (기본 false = 기존 동작 유지, 회귀 0)
         KeycloakSecurityProperties securityPropertiesForProvider = context.getBean(KeycloakSecurityProperties.class);
         provider.setRequireUserInfo(securityPropertiesForProvider.getAuthentication().isRequireUserInfo());
+        // 보안 Advisory 7: Realm/Client 역할 네임스페이스 분리 설정 적용 (기본 SEPARATE_NAMESPACE)
+        provider.setRoleMapping(securityPropertiesForProvider.getRoleMapping());
         http.authenticationProvider(provider);
 
       // === 2. 세션 관리 ===

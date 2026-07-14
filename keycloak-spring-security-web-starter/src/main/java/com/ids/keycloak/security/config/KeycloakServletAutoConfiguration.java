@@ -265,6 +265,8 @@ public class KeycloakServletAutoConfiguration {
                 new KeycloakAuthenticationProvider(keycloakClient, keycloakConfig.getClientId(), jwtDecoder);
             // M-2: require-user-info 토글 (기본 false = 기존 동작 유지, 회귀 0)
             oidcProvider.setRequireUserInfo(securityProperties.getAuthentication().isRequireUserInfo());
+            // 보안 Advisory 7: Realm/Client 역할 네임스페이스 분리 설정 적용 (기본 SEPARATE_NAMESPACE)
+            oidcProvider.setRoleMapping(securityProperties.getRoleMapping());
             providers.add(oidcProvider);
 
             if (securityProperties.getBasicAuth().isEnabled()) {
@@ -558,10 +560,15 @@ public class KeycloakServletAutoConfiguration {
         @ConditionalOnMissingBean(OpaqueTokenIntrospector.class)
         public OpaqueTokenIntrospector keycloakOpaqueTokenIntrospector(
             KeycloakClient keycloakClient,
-            KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig
+            KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig,
+            KeycloakSecurityProperties securityProperties
         ) {
             log.info("Bearer Token Bean을 등록합니다: [OpaqueTokenIntrospector] (Keycloak Introspect)");
-            return new KeycloakOpaqueTokenIntrospector(keycloakClient, keycloakConfig.getClientId());
+            KeycloakOpaqueTokenIntrospector introspector =
+                new KeycloakOpaqueTokenIntrospector(keycloakClient, keycloakConfig.getClientId());
+            // 보안 Advisory 7: Realm/Client 역할 네임스페이스 분리 설정 적용 (기본 SEPARATE_NAMESPACE)
+            introspector.setRoleMapping(securityProperties.getRoleMapping());
+            return introspector;
         }
 
         /**

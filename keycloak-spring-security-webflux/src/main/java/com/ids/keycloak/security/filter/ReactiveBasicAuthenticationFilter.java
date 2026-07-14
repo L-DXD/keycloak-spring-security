@@ -1,6 +1,7 @@
 package com.ids.keycloak.security.filter;
 
 import com.ids.keycloak.security.authentication.BasicAuthenticationToken;
+import com.ids.keycloak.security.config.KeycloakRoleMappingProperties;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.ratelimit.AuthenticationEventLogger;
 import com.ids.keycloak.security.util.ClientIpResolver;
@@ -63,6 +64,22 @@ public class ReactiveBasicAuthenticationFilter implements WebFilter, Ordered {
    */
   public void setTrustedProxyCount(int trustedProxyCount) {
     this.trustedProxyCount = trustedProxyCount;
+  }
+
+  /**
+   * Realm/Client 역할 → GrantedAuthority 매핑 전략 (보안 Advisory 7, CWE-863 대응).
+   * 기본값은 realm/client 역할을 별도 네임스페이스로 분리하는 {@code SEPARATE_NAMESPACE}.
+   * {@code KeycloakWebFluxSecurityConfigurer}에서 {@code keycloak.security.role-mapping} 값을 주입합니다.
+   */
+  private KeycloakRoleMappingProperties roleMapping = new KeycloakRoleMappingProperties();
+
+  /**
+   * Realm/Client 역할 매핑 전략을 설정합니다.
+   *
+   * @param roleMapping Realm/Client 역할 네임스페이스 전략 (null이면 기본값 유지)
+   */
+  public void setRoleMapping(KeycloakRoleMappingProperties roleMapping) {
+    this.roleMapping = roleMapping != null ? roleMapping : new KeycloakRoleMappingProperties();
   }
 
   @Override
@@ -206,7 +223,7 @@ public class ReactiveBasicAuthenticationFilter implements WebFilter, Ordered {
               Map<String, Object> mergedClaims = new HashMap<>(idTokenClaims);
               mergedClaims.putAll(userInfoClaims);
               Collection<GrantedAuthority> authorities =
-                  KeycloakAuthorityExtractor.extract(mergedClaims, clientId);
+                  KeycloakAuthorityExtractor.extract(mergedClaims, clientId, roleMapping);
               KeycloakPrincipal principal =
                   new KeycloakPrincipal(finalSubject, authorities, null, oidcUserInfo);
               return Mono.<Authentication>just(
@@ -227,7 +244,8 @@ public class ReactiveBasicAuthenticationFilter implements WebFilter, Ordered {
    */
   private Authentication buildAuthenticationFromIdToken(
       String subject, String idToken, String accessToken, Map<String, Object> claims) {
-    Collection<GrantedAuthority> authorities = KeycloakAuthorityExtractor.extract(claims, clientId);
+    Collection<GrantedAuthority> authorities =
+        KeycloakAuthorityExtractor.extract(claims, clientId, roleMapping);
     KeycloakPrincipal principal = new KeycloakPrincipal(subject, authorities, null, null);
     return new BasicAuthenticationToken(principal, idToken, accessToken);
   }

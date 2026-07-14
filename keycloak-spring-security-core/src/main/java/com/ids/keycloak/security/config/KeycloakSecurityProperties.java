@@ -26,6 +26,8 @@ import java.util.List;
  *     cookie:
  *       http-only: true
  *       secure: true
+ *     role-mapping:
+ *       mode: SEPARATE_NAMESPACE
  * </pre>
  * </p>
  */
@@ -92,6 +94,13 @@ public class KeycloakSecurityProperties {
      */
     @NestedConfigurationProperty
     private KeycloakRateLimitProperties rateLimit = new KeycloakRateLimitProperties();
+
+    /**
+     * Realm/Client 역할(Role) → GrantedAuthority 매핑 관련 설정 (보안 Advisory 7, CWE-863 대응).
+     * 기본값은 realm/client 역할을 별도 네임스페이스로 분리하는 {@code SEPARATE_NAMESPACE}입니다.
+     */
+    @NestedConfigurationProperty
+    private KeycloakRoleMappingProperties roleMapping = new KeycloakRoleMappingProperties();
 
     /**
      * Keycloak {@code SecurityFilterChain}이 담당할 요청 경로 매처 설정.

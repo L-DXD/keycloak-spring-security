@@ -1,5 +1,6 @@
 package com.ids.keycloak.security.authentication;
 
+import com.ids.keycloak.security.config.KeycloakRoleMappingProperties;
 import com.ids.keycloak.security.exception.AuthenticationFailedException;
 import com.ids.keycloak.security.exception.ConfigurationException;
 import com.ids.keycloak.security.exception.IntrospectionFailedException;
@@ -54,6 +55,14 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
    private boolean requireUserInfo = false;
 
    /**
+    * Realm/Client 역할 → GrantedAuthority 매핑 전략 (보안 Advisory 7, CWE-863 대응).
+    * 기본값은 realm/client 역할을 별도 네임스페이스로 분리하는 {@code SEPARATE_NAMESPACE}.
+    * {@code KeycloakHttpConfigurer}/AutoConfiguration에서
+    * {@code keycloak.security.role-mapping} 설정을 주입합니다.
+    */
+   private KeycloakRoleMappingProperties roleMapping = new KeycloakRoleMappingProperties();
+
+   /**
     * @param keycloakClient Keycloak Introspect/UserInfo 호출용 클라이언트
     * @param clientId       이 애플리케이션의 OIDC client-id (토큰 결합 검증에 사용)
     * @param jwtDecoder     ID Token/Access Token의 서명·iss·exp·nbf를 검증하는 {@link JwtDecoder}
@@ -73,6 +82,16 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
     */
    public void setRequireUserInfo(boolean requireUserInfo) {
       this.requireUserInfo = requireUserInfo;
+   }
+
+   /**
+    * Realm/Client 역할 매핑 전략을 설정합니다.
+    * {@code KeycloakHttpConfigurer}에서 {@code keycloak.security.role-mapping} 값을 주입합니다.
+    *
+    * @param roleMapping Realm/Client 역할 네임스페이스 전략 (null이면 기본값 유지)
+    */
+   public void setRoleMapping(KeycloakRoleMappingProperties roleMapping) {
+      this.roleMapping = roleMapping != null ? roleMapping : new KeycloakRoleMappingProperties();
    }
 
    /**
@@ -343,7 +362,8 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
    private KeycloakPrincipal createPrincipal(OidcIdToken oidcIdToken, OidcUserInfo oidcUserInfo, String subject) {
       // UserInfo에서 권한 추출 (UserInfo 조회 실패 시 빈 권한)
       Map<String, Object> claims = (oidcUserInfo != null) ? oidcUserInfo.getClaims() : Map.of();
-      Collection<GrantedAuthority> authorities = KeycloakAuthorityExtractor.extract(claims, clientId);
+      Collection<GrantedAuthority> authorities =
+          KeycloakAuthorityExtractor.extract(claims, clientId, roleMapping);
 
       log.debug("[Provider] 사용자 '{}' Principal 생성 완료. 권한: {}", subject, authorities);
 
