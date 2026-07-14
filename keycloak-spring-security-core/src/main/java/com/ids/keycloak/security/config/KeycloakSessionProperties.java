@@ -49,6 +49,15 @@ public class KeycloakSessionProperties {
      * 처리되고, 이미 저장된 세션은 상한과 무관하게 정상적으로 갱신·조회됩니다.
      * (Rate Limiting의 {@code maxTrackedKeys}와 동일한 정책입니다.)
      * </p>
+     * <p>
+     * <b>잔여 트레이드오프(login-availability):</b> 이 상한은 메모리 무한 증가(OOM)를
+     * 막기 위한 것이며, 상한 도달 시 신규 세션 생성(신규 로그인 개시 포함)이 일시적으로
+     * 거부될 수 있다는 가용성 저하를 대가로 합니다. 이미 인증된 기존 세션은 영향받지
+     * 않고, {@code timeout} 경과분은 {@code cleanupInterval} 스케줄에 의해 자동 회수되어
+     * 상한에 다시 여유가 생깁니다. 인터넷에 노출되는 운영 환경에서는 {@code store-type:
+     * redis} 전환과 더불어 OIDC 로그인 개시 엔드포인트에 대한 별도의 rate limit을 함께
+     * 적용해 이 트레이드오프를 보완하는 것을 권장합니다.
+     * </p>
      * <p>0 이하로 설정해도 기본값으로 대체됩니다(무제한 비허용).</p>
      * 기본값: 10,000
      */

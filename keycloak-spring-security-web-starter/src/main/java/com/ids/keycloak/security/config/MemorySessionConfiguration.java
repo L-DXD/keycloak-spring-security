@@ -24,6 +24,15 @@ import org.springframework.session.config.annotation.web.http.EnableSpringHttpSe
  * 노출되는 운영 배포에서는 {@code keycloak.security.session.store-type=redis}로
  * 전환하여 {@link RedisSessionConfiguration}을 사용하는 것을 권장합니다.
  * </p>
+ * <p>
+ * <b>잔여 트레이드오프(login-availability):</b> {@code maxSessions} 상한에 도달하면
+ * OOM을 막기 위해 신규 세션(신규 로그인 개시 포함)이 fail-closed로 거부될 수 있습니다.
+ * 이미 인증된 기존 세션은 상한과 무관하게 계속 유지되며, {@code timeout}이 지난 세션은
+ * 스케줄 정리로 자동 회수되어 시간이 지나면 상한에 다시 여유가 생깁니다. 인터넷에
+ * 노출되는 운영 환경에서는 Redis 전환에 더해 OIDC 로그인 개시 엔드포인트에 대한
+ * 별도의 rate limit을 함께 적용해 이 트레이드오프를 보완하는 것을 권장합니다. 자세한
+ * 내용은 {@link IndexedMapSessionRepository}의 클래스 Javadoc을 참고하십시오.
+ * </p>
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)

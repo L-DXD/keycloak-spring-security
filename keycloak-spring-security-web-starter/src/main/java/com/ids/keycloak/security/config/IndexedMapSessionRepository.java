@@ -1,5 +1,6 @@
 package com.ids.keycloak.security.config;
 
+import com.ids.keycloak.security.util.LogMaskingUtil;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.session.FindByIndexNameSessionRepository;
@@ -7,7 +8,6 @@ import org.springframework.session.MapSession;
 
 import java.time.Duration;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -41,6 +41,17 @@ import java.util.stream.Collectors;
  * 세션을 강제로 축출(evict)할 수는 없습니다.
  * </p>
  * <p>
+ * <b>잔여 트레이드오프(login-availability):</b> 위 fail-closed 정책은 메모리 고갈(OOM)을
+ * 막기 위한 것이며, 그 대가로 상한에 도달한 동안에는 <b>신규 세션 생성(신규 로그인 개시
+ * 포함)이 거부될 수 있습니다.</b> 즉 공격자가 상한을 채우면 그 시점 이후의 신규 사용자
+ * 로그인이 일시적으로 막히는 가용성 저하가 발생할 수 있습니다(반면 이미 인증된 기존
+ * 세션은 영향을 받지 않고 그대로 유지·갱신됩니다). 이 상태는 영구적이지 않습니다 —
+ * {@code timeout}이 지난 세션은 스케줄 정리에 의해 주기적으로 회수되므로, 상한은
+ * 시간이 지나면 자동으로 여유가 생깁니다. 인터넷에 노출되는 운영 환경에서는 이 저장소
+ * 대신 Redis 기반 저장소로 전환하고, 여기에 OIDC 로그인 개시 엔드포인트에 대한 별도의
+ * rate limit을 추가로 적용하여 이 트레이드오프를 보완하는 것을 권장합니다.
+ * </p>
+ * <p>
  * <b>운영 배포 안내:</b> 이 저장소는 JVM 힙 기반 단일 인스턴스 저장소입니다.
  * 인터넷에 노출되는 운영 환경에서는 상한·TTL이 있는 외부 저장소(Redis 등)로
  * 전환하는 것을 권장합니다.
@@ -67,7 +78,12 @@ public class IndexedMapSessionRepository implements FindByIndexNameSessionReposi
     private final Map<String, MapSession> sessions;
     private final int maxSessions;
     private final ScheduledExecutorService cleanupExecutor;
-    private Duration defaultMaxInactiveInterval;
+    /**
+     * 설정 시점(생성자/{@link #setDefaultMaxInactiveInterval(Duration)})의 쓰기 스레드와
+     * {@link #createSession()}을 호출하는 서블릿 요청 스레드 사이의 가시성을 보장하기 위해
+     * {@code volatile}로 선언합니다.
+     */
+    private volatile Duration defaultMaxInactiveInterval;
 
     /** 용량 상한으로 인한 누적 거부(신규 세션 저장 거부) 횟수. 외부 메트릭 수집용으로 노출. */
     private final AtomicLong capacityRejectionCount = new AtomicLong(0);
@@ -138,10 +154,15 @@ public class IndexedMapSessionRepository implements FindByIndexNameSessionReposi
         MapSession copy = new MapSession(session);
         String id = session.getId();
 
-        // ConcurrentHashMap#compute는 동일 키에 대해 원자적으로 실행되므로,
-        // "신규 키 여부 확인 + 용량 검사 + 삽입"이 하나의 원자적 단위로 처리되어
-        // 신규 세션 삽입 경로의 race condition(상한 초과)을 방지합니다.
-        // 이미 추적 중인 세션(existing != null)의 갱신은 상한 검사 없이 항상 허용합니다.
+        // 주의: ConcurrentHashMap#compute는 "같은 키"에 대한 호출끼리만 원자적으로
+        // 직렬화됩니다. 서로 다른 신규 세션 ID에 대한 compute 호출은 동시에 실행될 수
+        // 있고, 콜백 안에서 읽는 this.sessions.size()는 compute와 함께 잠기지 않는
+        // 전역 스냅샷일 뿐입니다. 따라서 서로 다른 신규 키를 동시에 삽입하는 여러
+        // 스레드가 각자 size() == maxSessions - 1 시점을 관찰해 함께 통과할 수 있어,
+        // maxSessions는 정확한 하드 리밋이 아니라 근사(soft) 상한입니다. 초과 폭은
+        // 그 순간 동시에 삽입을 시도하는 스레드 수만큼으로 유한하고, 메모리는 여전히
+        // 바운드됩니다. 이미 추적 중인 세션(existing != null)의 갱신은 상한 검사 없이
+        // 항상 허용합니다.
         this.sessions.compute(id, (key, existing) -> {
             if (existing != null) {
                 return copy;
@@ -197,12 +218,17 @@ public class IndexedMapSessionRepository implements FindByIndexNameSessionReposi
      * @return 해당 사용자의 모든 유효한 세션 맵
      */
     public Map<String, MapSession> findByPrincipalName(String principalName) {
-        // 만료된 세션 정리
-        cleanExpiredSessions();
-
+        // 만료 세션의 물리적 제거(맵에서 삭제)는 스케줄러(cleanupExecutor)가 주기적으로
+        // 전담합니다. 백채널 로그아웃 경로는 즉시성이 필요하지 않으므로, 여기서
+        // cleanExpiredSessions()를 인라인 호출해 매번 별도의 O(n) 삭제 패스를 중복
+        // 수행하지 않습니다. 다만 검색 결과에는 만료된 세션이 섞여 나오면 안 되므로,
+        // 아래 필터에서 이미 진행 중인 단일 스캔에 만료 여부 확인만 곁들여 걸러냅니다.
         return this.sessions.entrySet().stream()
             .filter(entry -> {
                 MapSession session = entry.getValue();
+                if (session.isExpired()) {
+                    return false;
+                }
                 String sessionPrincipal = session.getAttribute(PRINCIPAL_NAME_INDEX_NAME);
                 return principalName.equals(sessionPrincipal);
             })
@@ -235,16 +261,13 @@ public class IndexedMapSessionRepository implements FindByIndexNameSessionReposi
      * 만료된 세션들을 정리합니다.
      */
     private void cleanExpiredSessions() {
-        Set<String> expiredSessionIds = this.sessions.entrySet().stream()
-            .filter(entry -> entry.getValue().isExpired())
-            .map(Map.Entry::getKey)
-            .collect(Collectors.toSet());
+        int before = this.sessions.size();
+        this.sessions.entrySet().removeIf(entry -> entry.getValue().isExpired());
+        int removed = before - this.sessions.size();
 
-        expiredSessionIds.forEach(this.sessions::remove);
-
-        if (!expiredSessionIds.isEmpty()) {
+        if (removed > 0) {
             log.debug("Keycloak Session: 만료된 세션 {}개를 정리했습니다. (현재 {}개)",
-                expiredSessionIds.size(), this.sessions.size());
+                removed, this.sessions.size());
         }
     }
 
@@ -254,7 +277,9 @@ public class IndexedMapSessionRepository implements FindByIndexNameSessionReposi
      * 공격 볼륨만큼 매 요청마다 {@code warn} 로그가 찍히면 로그 자체가 2차 DoS 벡터가 되므로,
      * 최초 발생 시 즉시 로그를 남기고 이후에는 {@link #CAPACITY_WARN_LOG_INTERVAL_MS} 주기로
      * 요약만 기록합니다. 누적 발생 횟수는 {@link #getCapacityRejectionCount()}로 외부 메트릭
-     * 수집기에 노출할 수 있습니다.
+     * 수집기에 노출할 수 있습니다. 거부된 세션 ID는 원문 그대로 로그에 남기지 않고
+     * {@link LogMaskingUtil#maskIdentifier(String)}로 마스킹하여 세션 하이재킹에 악용될 수
+     * 있는 식별자 원문 노출을 방지합니다.
      * </p>
      */
     private void recordCapacitySaturated(String rejectedSessionId) {
@@ -268,7 +293,7 @@ public class IndexedMapSessionRepository implements FindByIndexNameSessionReposi
             log.warn("Keycloak Session: 저장소 용량 상한({})에 도달하여 최근 {}초간 신규 세션 {}회를 "
                     + "거부 처리했습니다(누적 {}회, 최근 거부 sessionId={}). 로그 폭주 방지를 위해 주기 요약만 기록합니다.",
                 maxSessions, CAPACITY_WARN_LOG_INTERVAL_MS / 1000, summarized,
-                capacityRejectionCount.get(), rejectedSessionId);
+                capacityRejectionCount.get(), LogMaskingUtil.maskIdentifier(rejectedSessionId));
         }
     }
 
