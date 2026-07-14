@@ -2,6 +2,7 @@ package com.ids.keycloak.security.authentication;
 
 import com.ids.keycloak.security.model.KeycloakLogoutToken;
 import com.ids.keycloak.security.session.ReactiveSessionManager;
+import com.ids.keycloak.security.util.LogMaskingUtil;
 import java.util.Collections;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
@@ -121,9 +122,10 @@ public class ReactiveOidcBackChannelLogoutHandler implements ServerLogoutHandler
         .flatMap(jwt -> processVerifiedLogoutToken(webFilterExchange.getExchange(), jwt))
         .onErrorResume(e -> {
           // JwtException — 서명 불일치, 만료, iss/aud 불일치 등 모든 검증 실패
+          // 보안: 상세 사유(e.getMessage())는 로그에만 남기고, 응답 본문에는 고정 문구만 노출한다.
           log.warn("[BackChannelLogoutHandler] logout_token 서명/검증 실패: {}", e.getMessage());
           return respondBadRequest(webFilterExchange.getExchange(),
-              "logout_token verification failed: " + e.getMessage());
+              "logout_token verification failed");
         });
   }
 
@@ -147,8 +149,9 @@ public class ReactiveOidcBackChannelLogoutHandler implements ServerLogoutHandler
     String subject = logoutToken.getSubject();
     String keycloakSessionId = logoutToken.getSessionId();
 
-    log.debug("[BackChannelLogoutHandler] 서명 검증 완료. Logout Token - sub={}, sid={}", subject,
-        keycloakSessionId);
+    // 보안: subject(sub)/sessionId(sid)는 사용자 식별자·세션 식별자이므로 로그 레벨과 무관하게 마스킹한다.
+    log.debug("[BackChannelLogoutHandler] 서명 검증 완료. Logout Token - sub={}, sid={}",
+        LogMaskingUtil.maskIdentifier(subject), LogMaskingUtil.maskIdentifier(keycloakSessionId));
 
     if (subject == null && keycloakSessionId == null) {
       log.warn("[BackChannelLogoutHandler] sub와 sid 모두 없음 — 처리 스킵");
@@ -207,11 +210,11 @@ public class ReactiveOidcBackChannelLogoutHandler implements ServerLogoutHandler
         .flatMap(entry -> {
           log.debug(
               "[BackChannelLogoutHandler] 세션 삭제 - Spring Session ID: {}, Keycloak SID: {}",
-              entry.getKey(), keycloakSessionId);
+              entry.getKey(), LogMaskingUtil.maskIdentifier(keycloakSessionId));
           return reactiveRepo.deleteById(entry.getKey())
               .doOnSuccess(v -> log.info(
                   "[BackChannelLogoutHandler] Keycloak SID '{}' 세션 폐기 완료",
-                  keycloakSessionId));
+                  LogMaskingUtil.maskIdentifier(keycloakSessionId)));
         })
         .then();
   }
@@ -229,7 +232,8 @@ public class ReactiveOidcBackChannelLogoutHandler implements ServerLogoutHandler
         })
         .then()
         .doOnSuccess(v -> log.info(
-            "[BackChannelLogoutHandler] subject '{}' 모든 세션 폐기 완료", subject));
+            "[BackChannelLogoutHandler] subject '{}' 모든 세션 폐기 완료",
+            LogMaskingUtil.maskIdentifier(subject)));
   }
 
   private Mono<Void> respondOk(ServerWebExchange exchange) {

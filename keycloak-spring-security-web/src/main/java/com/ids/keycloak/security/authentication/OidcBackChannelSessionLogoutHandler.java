@@ -1,5 +1,6 @@
 package com.ids.keycloak.security.authentication;
 
+import com.ids.keycloak.security.util.LogMaskingUtil;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.util.Map;
@@ -20,10 +21,6 @@ import org.springframework.session.Session;
  * <p>
  * logout_token에 sid(세션 ID)가 포함된 경우 해당 세션만 삭제하고,
  * sub(사용자 ID)만 포함된 경우 해당 사용자의 모든 세션을 삭제합니다.
- * </p>
- * <p>
- * Replay Attack 방지를 위해 로그아웃 토큰의 jti(JWT ID)를 추적합니다.
- * 이미 처리된 토큰은 무시됩니다.
  * </p>
  */
 @Slf4j
@@ -62,12 +59,15 @@ public class OidcBackChannelSessionLogoutHandler implements LogoutHandler {
         }
         // 보안: Logout Token(JWT) 원문은 sub/sid 등 보안 클레임을 포함하므로 어떤 로그 레벨에서도 기록하지 않는다.
         // 추적이 필요한 경우 jti(JWT ID)를 비가역적으로 일부만 마스킹하여 남긴다.
-        log.debug("[BackChannelLogoutHandler] logout_token 수신 (jti={})", maskIdentifier(logoutToken.getId()));
+        log.debug("[BackChannelLogoutHandler] logout_token 수신 (jti={})",
+                LogMaskingUtil.maskIdentifier(logoutToken.getId()));
 
         String subject = logoutToken.getSubject();
         String keycloakSessionId = logoutToken.getSessionId(); // sid 클레임
 
-        log.debug("[BackChannelLogoutHandler] Logout Token - Subject: {}, SessionId(sid): {}", subject, keycloakSessionId);
+        // 보안: subject(sub)/sessionId(sid)는 사용자 식별자·세션 식별자이므로 로그 레벨과 무관하게 마스킹한다.
+        log.debug("[BackChannelLogoutHandler] Logout Token - Subject: {}, SessionId(sid): {}",
+                LogMaskingUtil.maskIdentifier(subject), LogMaskingUtil.maskIdentifier(keycloakSessionId));
 
         if (subject == null) {
             log.warn("[BackChannelLogoutHandler] Subject가 null - 처리 스킵");
@@ -104,7 +104,8 @@ public class OidcBackChannelSessionLogoutHandler implements LogoutHandler {
      */
     private void revokeSessionByKeycloakSid(String subject, String keycloakSessionId) {
         Map<String, ? extends Session> sessions = sessionRepository.findByPrincipalName(subject);
-        log.debug("[BackChannelLogoutHandler] Subject '{}'의 세션 {} 개 검색됨", subject, sessions.size());
+        log.debug("[BackChannelLogoutHandler] Subject '{}'의 세션 {} 개 검색됨",
+                LogMaskingUtil.maskIdentifier(subject), sessions.size());
 
         int revokedCount = 0;
         for (Map.Entry<String, ? extends Session> entry : sessions.entrySet()) {
@@ -113,7 +114,7 @@ public class OidcBackChannelSessionLogoutHandler implements LogoutHandler {
 
             if (keycloakSessionId.equals(storedSid)) {
                 log.debug("[BackChannelLogoutHandler] 매칭되는 세션 삭제 - Spring Session ID: {}, Keycloak SID: {}",
-                        entry.getKey(), storedSid);
+                        entry.getKey(), LogMaskingUtil.maskIdentifier(storedSid));
                 sessionRepository.deleteById(entry.getKey());
                 revokedCount++;
             }
@@ -121,9 +122,10 @@ public class OidcBackChannelSessionLogoutHandler implements LogoutHandler {
 
         if (revokedCount > 0) {
             log.info("[BackChannelLogoutHandler] Keycloak SID '{}'에 해당하는 세션 {} 개 폐기 완료",
-                    keycloakSessionId, revokedCount);
+                    LogMaskingUtil.maskIdentifier(keycloakSessionId), revokedCount);
         } else {
-            log.warn("[BackChannelLogoutHandler] Keycloak SID '{}'에 해당하는 세션을 찾지 못함", keycloakSessionId);
+            log.warn("[BackChannelLogoutHandler] Keycloak SID '{}'에 해당하는 세션을 찾지 못함",
+                    LogMaskingUtil.maskIdentifier(keycloakSessionId));
         }
     }
 
@@ -144,22 +146,8 @@ public class OidcBackChannelSessionLogoutHandler implements LogoutHandler {
             sessionRepository.deleteById(sessionId);
         });
 
-        log.info("[BackChannelLogoutHandler] 사용자 '{}'의 모든 세션 {} 개 폐기 완료", subject, sessions.size());
-    }
-
-    /**
-     * 추적용 식별자(jti 등)를 비가역적으로 일부만 마스킹합니다.
-     * <p>
-     * 원문 전체를 로그에 남기지 않기 위한 용도이며, 마스킹 라이브러리(PII sanitizer)에
-     * 의존하지 않고 호출부에서 직접 마스킹된 값만 로그 인자로 전달합니다.
-     * </p>
-     */
-    private static String maskIdentifier(String value) {
-        if (value == null || value.isBlank()) {
-            return "(none)";
-        }
-        int visibleLength = Math.min(4, value.length());
-        return "***" + value.substring(value.length() - visibleLength);
+        log.info("[BackChannelLogoutHandler] 사용자 '{}'의 모든 세션 {} 개 폐기 완료",
+                LogMaskingUtil.maskIdentifier(subject), sessions.size());
     }
 
 }
