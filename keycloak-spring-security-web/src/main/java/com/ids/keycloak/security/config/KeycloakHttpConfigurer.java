@@ -31,6 +31,7 @@ import org.springframework.security.oauth2.client.oidc.web.logout.OidcClientInit
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestResolver;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
@@ -118,17 +119,29 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
 
         // === 1. Authentication Provider 등록 ===
         String clientId = clientRegistrationRepository.findByRegistrationId("keycloak").getClientId();
-        KeycloakAuthenticationProvider provider = new KeycloakAuthenticationProvider(keycloakClient, clientId);
+        // 보안 Advisory 1: ID/Access Token 서명 검증 및 토큰 결합 검증용 JwtDecoder
+        JwtDecoder jwtDecoder = context.getBean(JwtDecoder.class);
+        KeycloakAuthenticationProvider provider =
+            new KeycloakAuthenticationProvider(keycloakClient, clientId, jwtDecoder);
         // M-2: require-user-info 토글 적용 (기본 false = 기존 동작 유지, 회귀 0)
         KeycloakSecurityProperties securityPropertiesForProvider = context.getBean(KeycloakSecurityProperties.class);
         provider.setRequireUserInfo(securityPropertiesForProvider.getAuthentication().isRequireUserInfo());
+        // 보안 Advisory 7: Realm/Client 역할 네임스페이스 분리 설정 적용 (기본 SEPARATE_NAMESPACE)
+        provider.setRoleMapping(securityPropertiesForProvider.getRoleMapping());
         http.authenticationProvider(provider);
 
       // === 2. 세션 관리 ===
       // Spring Security가 세션을 생성하지 않음 (애플리케이션에서 관리)
+      // 보안 Advisory 2: Session Fixation Protection — OIDC 로그인 성공 시 기존 세션 ID를 그대로
+      // 유지하던 sf.none() 설정을 제거하고, 인증 성공 시 changeSessionId()로 세션 ID를 회전한다.
+      // (OAuth2LoginAuthenticationFilter가 OidcLoginSuccessHandler를 호출하기 전에
+      //  AbstractAuthenticationProcessingFilter#successfulAuthentication에서 세션 전략이 먼저 적용되므로,
+      //  Refresh Token/Principal Name/Keycloak sid는 항상 회전된 새 세션 ID에 저장된다.)
+      // SessionCreationPolicy.NEVER 환경에서도 안전: 인증 전 세션이 없으면 changeSessionId는 아무 것도
+      // 하지 않는다(AbstractSessionFixationProtectionStrategy#onAuthentication 참고).
       http.sessionManagement(session -> session
           .sessionCreationPolicy(SessionCreationPolicy.NEVER)
-          .sessionFixation(sf -> sf.none())
+          .sessionFixation(sessionFixation -> sessionFixation.changeSessionId())
       );
 
       // Filter에서 사용할 수 있도록 SharedObject로 저장
@@ -218,13 +231,12 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
               ignoreMatchers.add(new AntPathRequestMatcher(path));
           }
 
-          // Basic Auth 요청 면제 (Authorization: Basic 헤더 기반 API 클라이언트)
-          if (securityProperties.getBasicAuth().isEnabled()) {
-              ignoreMatchers.add(request -> {
-                  String auth = request.getHeader("Authorization");
-                  return auth != null && auth.startsWith("Basic ");
-              });
-          }
+          // 보안 Advisory 3: Authorization: Basic 헤더 보유 여부만으로 CSRF를 전면 면제하지 않는다.
+          // 브라우저가 HTTP Basic 자격증명을 캐시해 자동 재전송하면(ambient credential),
+          // cross-origin 폼 제출이 캐시된 Basic 자격증명을 실은 채 CSRF 검증을 우회할 수 있다
+          // (CWE-352). Authorization 헤더 존재는 "비-브라우저 요청"의 증거가 될 수 없다.
+          // 머신 전용 API 등 CSRF 면제가 필요한 경로는 위 csrfProperties.ignorePaths에
+          // 명시적으로 등록해야 한다(전면 면제 금지, 명시 allowlist만 허용).
 
           http.csrf(csrf -> csrf
               .ignoringRequestMatchers(ignoreMatchers.toArray(new RequestMatcher[0]))
@@ -307,6 +319,7 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         // === 9. Basic Auth 필터 등록 (조건부) ===
         if (securityProperties.getBasicAuth().isEnabled()) {
             BasicAuthenticationFilter basicAuthFilter = new BasicAuthenticationFilter(authenticationManager);
+            basicAuthFilter.setTrustedProxyCount(securityProperties.getTrustedProxyCount());
             http.addFilterBefore(basicAuthFilter, KeycloakAuthenticationFilter.class);
         }
 
@@ -322,6 +335,7 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
                 RateLimitFilter rateLimitFilter = new RateLimitFilter(
                     rateLimiter, securityProperties.getRateLimit(), rateLimitPaths
                 );
+                rateLimitFilter.setTrustedProxyCount(securityProperties.getTrustedProxyCount());
                 // BasicAuthenticationFilter보다 앞에 위치 (차단된 요청은 인증 시도 자체를 하지 않음)
                 http.addFilterBefore(rateLimitFilter, BasicAuthenticationFilter.class);
                 log.info("Rate Limit 필터 등록 완료 (대상 경로: {}, Basic Auth 포함: {})",

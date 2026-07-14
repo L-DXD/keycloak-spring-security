@@ -1,16 +1,18 @@
 package com.ids.keycloak.security.authentication;
 
+import com.ids.keycloak.security.config.KeycloakRoleMappingProperties;
 import com.ids.keycloak.security.exception.AuthenticationFailedException;
 import com.ids.keycloak.security.exception.ConfigurationException;
 import com.ids.keycloak.security.exception.IntrospectionFailedException;
+import com.ids.keycloak.security.exception.TokenBindingException;
 import com.ids.keycloak.security.exception.UserInfoFetchException;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.util.JwtUtil;
 import com.ids.keycloak.security.util.KeycloakAuthorityExtractor;
+import com.ids.keycloak.security.util.TokenBindingValidator;
 import com.sd.KeycloakClient.dto.auth.KeycloakIntrospectResponse;
 import com.sd.KeycloakClient.dto.user.KeycloakUserInfo;
 import com.sd.KeycloakClient.factory.KeycloakClient;
-import java.time.Instant;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
@@ -21,20 +23,30 @@ import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.oauth2.core.oidc.OidcIdToken;
 import org.springframework.security.oauth2.core.oidc.OidcUserInfo;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.JwtException;
+import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
 import reactor.core.publisher.Mono;
 
 /**
  * Keycloak OIDC 인증을 처리하는 {@link ReactiveAuthenticationManager} 구현체입니다.
  *
  * <p>servlet 모듈의 {@code KeycloakAuthenticationProvider}를 Reactive Mono 체이닝으로 포팅합니다.
- * 토큰 유효성 검증은 Keycloak Introspect API(온라인 검증)에 완전히 위임하며,
- * 블로킹 호출 없이 {@code authAsync()}/{@code userAsync()} API만 사용합니다.</p>
+ * 토큰 유효성 검증은 Keycloak Introspect API(온라인 검증, 폐기/활성 여부 확인)와
+ * {@link ReactiveJwtDecoder}(로컬 서명·iss·exp·nbf 검증) 두 단계로 이루어지며,
+ * 블로킹 호출 없이 {@code authAsync()}/{@code userAsync()}/{@code ReactiveJwtDecoder} API만 사용합니다.</p>
+ *
+ * <p><b>보안 Advisory 1 대응:</b> ID Token은 {@link ReactiveJwtDecoder}로 서명 검증을 통과한 뒤에만
+ * Principal 식별자(subject)로 사용하며, ID Token과 Access Token(UserInfo)이 동일 사용자·동일 Client에서
+ * 발급되었는지({@link TokenBindingValidator}) 검증합니다. 하나라도 불일치하면
+ * {@link TokenBindingException}이 발생해 인증에 실패합니다.</p>
  */
 @Slf4j
 public class KeycloakReactiveAuthenticationManager implements ReactiveAuthenticationManager {
 
   private final KeycloakClient keycloakClient;
   private final String clientId;
+  private final ReactiveJwtDecoder jwtDecoder;
 
   /**
    * UserInfo 실패 시 인증 실패 처리 여부.
@@ -43,9 +55,23 @@ public class KeycloakReactiveAuthenticationManager implements ReactiveAuthentica
    */
   private boolean requireUserInfo = false;
 
-  public KeycloakReactiveAuthenticationManager(KeycloakClient keycloakClient, String clientId) {
+  /**
+   * Realm/Client 역할 → GrantedAuthority 매핑 전략 (보안 Advisory 7, CWE-863 대응).
+   * 기본값은 realm/client 역할을 별도 네임스페이스로 분리하는 {@code SEPARATE_NAMESPACE}.
+   */
+  private KeycloakRoleMappingProperties roleMapping = new KeycloakRoleMappingProperties();
+
+  /**
+   * @param keycloakClient Keycloak Introspect/UserInfo 호출용 클라이언트
+   * @param clientId       이 애플리케이션의 OIDC client-id (토큰 결합 검증에 사용)
+   * @param jwtDecoder     ID Token/Access Token의 서명·iss·exp·nbf를 검증하는 {@link ReactiveJwtDecoder}
+   *                       (Keycloak Realm JWKS 기반)
+   */
+  public KeycloakReactiveAuthenticationManager(
+      KeycloakClient keycloakClient, String clientId, ReactiveJwtDecoder jwtDecoder) {
     this.keycloakClient = keycloakClient;
     this.clientId = clientId;
+    this.jwtDecoder = jwtDecoder;
   }
 
   /**
@@ -58,13 +84,23 @@ public class KeycloakReactiveAuthenticationManager implements ReactiveAuthentica
   }
 
   /**
+   * Realm/Client 역할 매핑 전략을 설정합니다.
+   *
+   * @param roleMapping Realm/Client 역할 네임스페이스 전략 (null이면 기본값 유지)
+   */
+  public void setRoleMapping(KeycloakRoleMappingProperties roleMapping) {
+    this.roleMapping = roleMapping != null ? roleMapping : new KeycloakRoleMappingProperties();
+  }
+
+  /**
    * 토큰을 검증하고 인증 객체를 생성합니다.
    *
    * <p>처리 흐름:
    * <ol>
-   *   <li>idToken으로 Keycloak Introspect 온라인 검증</li>
+   *   <li>idToken으로 Keycloak Introspect 온라인 검증(폐기/활성 여부)</li>
    *   <li>accessToken으로 UserInfo 조회</li>
-   *   <li>JwtUtil로 idToken 클레임 파싱, OidcIdToken 생성</li>
+   *   <li>{@link #createAuthenticatedToken(String, String, OidcUserInfo)}에 위임 —
+   *       ID Token 서명 검증(JwtDecoder), 토큰 결합 검증(sub/aud/azp), OidcIdToken 생성</li>
    *   <li>KeycloakAuthorityExtractor로 권한 추출</li>
    *   <li>KeycloakPrincipal / KeycloakAuthentication(authenticated=true) 생성</li>
    * </ol>
@@ -83,8 +119,8 @@ public class KeycloakReactiveAuthenticationManager implements ReactiveAuthentica
 
     return verifyTokenOnline(idTokenValue)
         .then(Mono.defer(() -> fetchUserInfo(accessTokenValue)
-            .map(oidcUserInfo -> createAuthenticatedToken(idTokenValue, accessTokenValue, oidcUserInfo))
-            .switchIfEmpty(Mono.fromCallable(
+            .flatMap(oidcUserInfo -> createAuthenticatedToken(idTokenValue, accessTokenValue, oidcUserInfo))
+            .switchIfEmpty(Mono.defer(
                 () -> createAuthenticatedToken(idTokenValue, accessTokenValue, null)))))
         .cast(Authentication.class)
         .onErrorResume(
@@ -99,20 +135,84 @@ public class KeycloakReactiveAuthenticationManager implements ReactiveAuthentica
 
   /**
    * 검증된 토큰으로 인증 객체를 생성합니다.
-   * UserInfo 조회 후 직접 호출합니다.
+   * UserInfo 조회 후 직접 호출합니다. Refresh Token 재발급 경로에서도 이 메서드가 유일한 진입점이므로
+   * (choke point), {@code authenticate()}를 우회해도 동일하게 검증됩니다.
+   *
+   * <p><b>보안 Advisory 1 대응 처리 순서:</b>
+   * <ol>
+   *   <li>ID Token을 {@link ReactiveJwtDecoder}로 디코딩(서명·iss·exp·nbf 검증) — 실패 시 {@link TokenBindingException}</li>
+   *   <li>ID Token의 aud/azp가 이 애플리케이션의 client-id와 일치하는지 검증</li>
+   *   <li>ID Token의 subject와 UserInfo의 subject가 일치하는지 검증</li>
+   *   <li>Access Token이 JWT 형식이면 추가로 디코딩하여 azp를 검증(Opaque면 로컬 결합 검증은 스킵)</li>
+   * </ol>
+   * 하나라도 실패하면 반환된 {@link Mono}가 {@link TokenBindingException}으로 에러 신호를 보냅니다.</p>
    *
    * @param idTokenValue     ID Token
    * @param accessTokenValue Access Token
    * @param oidcUserInfo     UserInfo (null 가능)
-   * @return 인증된 {@link Authentication} 객체
+   * @return 인증된 {@link Authentication}을 담은 {@link Mono} (검증 실패 시 {@link TokenBindingException}로 에러)
    */
-  public Authentication createAuthenticatedToken(
+  public Mono<Authentication> createAuthenticatedToken(
       String idTokenValue, String accessTokenValue, OidcUserInfo oidcUserInfo) {
-    Map<String, Object> idTokenClaims = JwtUtil.parseClaimsWithoutValidation(idTokenValue);
-    String subject = JwtUtil.parseSubjectWithoutValidation(idTokenValue);
+    return decodeIdToken(idTokenValue)
+        .flatMap(idToken -> validateAccessTokenIfJwt(accessTokenValue)
+            .then(Mono.fromCallable(
+                () -> buildAuthenticatedToken(idToken, idTokenValue, accessTokenValue, oidcUserInfo))));
+  }
 
-    OidcIdToken oidcIdToken = createOidcIdToken(idTokenValue, idTokenClaims);
-    KeycloakPrincipal principal = createPrincipal(oidcIdToken, oidcUserInfo, subject);
+  /**
+   * ID Token을 {@link ReactiveJwtDecoder}로 디코딩합니다(서명·iss·exp·nbf 검증).
+   *
+   * @throws TokenBindingException 서명/클레임 검증 실패 시
+   */
+  private Mono<Jwt> decodeIdToken(String idTokenValue) {
+    return jwtDecoder.decode(idTokenValue)
+        .onErrorMap(JwtException.class, e -> {
+          log.warn("[ReactiveAuthManager] ID Token 서명/클레임 검증 실패: {}", e.getMessage());
+          return new TokenBindingException(
+              "ID Token 서명 또는 클레임(iss/exp/nbf) 검증에 실패했습니다: " + e.getMessage(), e);
+        });
+  }
+
+  /**
+   * Access Token이 구조적으로 JWT 형식일 때만 추가로 디코딩하여 azp 결합 검증을 수행합니다.
+   *
+   * <p><b>알려진 제약(Opaque Access Token):</b> servlet {@code KeycloakAuthenticationProvider}와
+   * 동일하게, Access Token이 Opaque(비-JWT) 형식이면 로컬 aud/azp 결합 검증을 수행할 수 없습니다
+   * (Keycloak Introspect 응답이 {@code active} 여부만 노출하는 라이브러리 제약). 이 경우 UserInfo 200
+   * 응답 + subject 일치 검증으로만 보호됩니다(기존 정책과 동일, 회귀 없음).</p>
+   *
+   * @throws TokenBindingException Access Token이 JWT 구조인데 서명/클레임 검증에 실패한 경우
+   */
+  private Mono<Void> validateAccessTokenIfJwt(String accessTokenValue) {
+    if (!JwtUtil.isStructurallyJwt(accessTokenValue)) {
+      log.debug("[ReactiveAuthManager] Access Token이 JWT 구조가 아님(Opaque 추정) — aud/azp 로컬 결합 검증 스킵.");
+      return Mono.empty();
+    }
+    return jwtDecoder.decode(accessTokenValue)
+        .doOnNext(accessToken -> TokenBindingValidator.validateAccessTokenAzp(accessToken, clientId))
+        .onErrorMap(JwtException.class, e -> {
+          log.warn("[ReactiveAuthManager] Access Token 서명/클레임 검증 실패: {}", e.getMessage());
+          return new TokenBindingException(
+              "Access Token 서명 또는 클레임 검증에 실패했습니다: " + e.getMessage(), e);
+        })
+        .then();
+  }
+
+  /**
+   * 서명 검증이 완료된 ID Token, UserInfo로부터 최종 인증 객체를 생성합니다.
+   * 토큰 결합 검증(sub/aud/azp)을 수행한 뒤 Principal을 생성합니다.
+   *
+   * @throws TokenBindingException 토큰 결합 검증 실패 시
+   */
+  private Authentication buildAuthenticatedToken(
+      Jwt idToken, String idTokenValue, String accessTokenValue, OidcUserInfo oidcUserInfo) {
+    TokenBindingValidator.validateIdTokenBinding(idToken, clientId);
+    TokenBindingValidator.validateSubjectBinding(
+        idToken.getSubject(), oidcUserInfo != null ? oidcUserInfo.getSubject() : null);
+
+    OidcIdToken oidcIdToken = createOidcIdToken(idTokenValue, idToken);
+    KeycloakPrincipal principal = createPrincipal(oidcIdToken, oidcUserInfo, idToken.getSubject());
 
     log.debug("[ReactiveAuthManager] 최종 인증 객체 생성 완료: {}", principal.getName());
     return new KeycloakAuthentication(principal, idTokenValue, accessTokenValue, true);
@@ -258,23 +358,10 @@ public class KeycloakReactiveAuthenticationManager implements ReactiveAuthentica
   }
 
   /**
-   * ID Token 문자열과 클레임에서 OidcIdToken 객체를 생성합니다.
+   * 서명 검증이 완료된 ID Token {@link Jwt}에서 OidcIdToken 객체를 생성합니다.
    */
-  private OidcIdToken createOidcIdToken(String idTokenValue, Map<String, Object> claims) {
-    Instant issuedAt = extractInstant(claims, "iat");
-    Instant expiresAt = extractInstant(claims, "exp");
-    return new OidcIdToken(idTokenValue, issuedAt, expiresAt, claims);
-  }
-
-  /**
-   * 클레임에서 Instant 값을 추출합니다.
-   */
-  private Instant extractInstant(Map<String, Object> claims, String claimName) {
-    Object value = claims.get(claimName);
-    if (value instanceof Number) {
-      return Instant.ofEpochSecond(((Number) value).longValue());
-    }
-    return null;
+  private OidcIdToken createOidcIdToken(String idTokenValue, Jwt idToken) {
+    return new OidcIdToken(idTokenValue, idToken.getIssuedAt(), idToken.getExpiresAt(), idToken.getClaims());
   }
 
   /**
@@ -283,7 +370,8 @@ public class KeycloakReactiveAuthenticationManager implements ReactiveAuthentica
   private KeycloakPrincipal createPrincipal(
       OidcIdToken oidcIdToken, OidcUserInfo oidcUserInfo, String subject) {
     Map<String, Object> claims = (oidcUserInfo != null) ? oidcUserInfo.getClaims() : Map.of();
-    Collection<GrantedAuthority> authorities = KeycloakAuthorityExtractor.extract(claims, clientId);
+    Collection<GrantedAuthority> authorities =
+        KeycloakAuthorityExtractor.extract(claims, clientId, roleMapping);
 
     log.debug(
         "[ReactiveAuthManager] 사용자 '{}' Principal 생성 완료. 권한: {}", subject, authorities);

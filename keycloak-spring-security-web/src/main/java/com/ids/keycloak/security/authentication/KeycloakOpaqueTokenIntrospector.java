@@ -1,5 +1,6 @@
 package com.ids.keycloak.security.authentication;
 
+import com.ids.keycloak.security.config.KeycloakRoleMappingProperties;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.util.KeycloakAuthorityExtractor;
 import com.sd.KeycloakClient.dto.KeycloakResponse;
@@ -32,9 +33,25 @@ public class KeycloakOpaqueTokenIntrospector implements OpaqueTokenIntrospector 
     private final KeycloakClient keycloakClient;
     private final String clientId;
 
+    /**
+     * Realm/Client 역할 → GrantedAuthority 매핑 전략 (보안 Advisory 7, CWE-863 대응).
+     * 기본값은 realm/client 역할을 별도 네임스페이스로 분리하는 {@code SEPARATE_NAMESPACE}.
+     * AutoConfiguration에서 {@code keycloak.security.role-mapping} 설정을 주입합니다.
+     */
+    private KeycloakRoleMappingProperties roleMapping = new KeycloakRoleMappingProperties();
+
     public KeycloakOpaqueTokenIntrospector(KeycloakClient keycloakClient, String clientId) {
         this.keycloakClient = keycloakClient;
         this.clientId = clientId;
+    }
+
+    /**
+     * Realm/Client 역할 매핑 전략을 설정합니다.
+     *
+     * @param roleMapping Realm/Client 역할 네임스페이스 전략 (null이면 기본값 유지)
+     */
+    public void setRoleMapping(KeycloakRoleMappingProperties roleMapping) {
+        this.roleMapping = roleMapping != null ? roleMapping : new KeycloakRoleMappingProperties();
     }
 
     /**
@@ -56,7 +73,8 @@ public class KeycloakOpaqueTokenIntrospector implements OpaqueTokenIntrospector 
 
         // 3. UserInfo 클레임에서 권한 추출
         Map<String, Object> claims = (oidcUserInfo != null) ? oidcUserInfo.getClaims() : Map.of();
-        Collection<GrantedAuthority> authorities = KeycloakAuthorityExtractor.extract(claims, clientId);
+        Collection<GrantedAuthority> authorities =
+            KeycloakAuthorityExtractor.extract(claims, clientId, roleMapping);
 
         // 4. OidcIdToken 생성 (Bearer에서는 access_token 기반)
         OidcIdToken oidcIdToken = new OidcIdToken(token, Instant.now(), null, Map.of("sub", extractSubject(claims)));

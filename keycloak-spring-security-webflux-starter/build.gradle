@@ -39,6 +39,10 @@ dependencies {
     testImplementation 'org.springframework:spring-test'
     testImplementation 'org.springframework.security:spring-security-oauth2-client'
     testImplementation 'io.projectreactor:reactor-test'
+    // Back-Channel 로그아웃 AutoConfiguration 통합 테스트: spring-session-core (compileOnly → test에서도 필요)
+    testImplementation 'org.springframework.session:spring-session-core'
+    // ApplicationContextRunner (Back-Channel AutoConfiguration 통합 테스트용)
+    testImplementation 'org.springframework.boot:spring-boot-test'
 }
 
 signing {

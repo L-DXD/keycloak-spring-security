@@ -4,6 +4,7 @@ import com.ids.keycloak.security.config.KeycloakRateLimitProperties;
 import com.ids.keycloak.security.config.RateLimitKeyStrategy;
 import com.ids.keycloak.security.ratelimit.AuthenticationEventLogger;
 import com.ids.keycloak.security.ratelimit.RateLimiter;
+import com.ids.keycloak.security.util.ClientIpResolver;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.List;
@@ -44,6 +45,7 @@ public class ReactiveRateLimitFilter implements WebFilter, Ordered {
   private static final String AUTHORIZATION_HEADER = "Authorization";
   private static final String BASIC_PREFIX = "Basic ";
   private static final String X_FORWARDED_FOR_HEADER = "X-Forwarded-For";
+  private static final String AUTH_METHOD_TOKEN_API = "TOKEN_API";
   private static final byte[] RATE_LIMIT_ERROR_BODY =
       "{\"error\":\"rate_limit_exceeded\",\"error_description\":\"Too many authentication attempts. Please try again later.\"}"
           .getBytes(StandardCharsets.UTF_8);
@@ -52,6 +54,14 @@ public class ReactiveRateLimitFilter implements WebFilter, Ordered {
   private final KeycloakRateLimitProperties properties;
   private final List<String> rateLimitPaths;
 
+  /**
+   * X-Forwarded-For 헤더에서 신뢰할 프록시 홉 수.
+   * 기본값 0: XFF 헤더를 완전히 무시하고 TCP 연결 원격 주소를 사용합니다(보안상 기본값).
+   * {@code KeycloakWebFluxSecurityConfigurer}에서 {@code keycloak.security.trusted-proxy-count} 값을 주입합니다.
+   * {@link ClientIpResolver} 참고.
+   */
+  private int trustedProxyCount = 0;
+
   public ReactiveRateLimitFilter(
       RateLimiter rateLimiter,
       KeycloakRateLimitProperties properties,
@@ -59,6 +69,15 @@ public class ReactiveRateLimitFilter implements WebFilter, Ordered {
     this.rateLimiter = rateLimiter;
     this.properties = properties;
     this.rateLimitPaths = rateLimitPaths;
+  }
+
+  /**
+   * 신뢰 프록시 홉 수를 설정합니다.
+   *
+   * @param trustedProxyCount 신뢰 프록시 홉 수 (0: XFF 무시, -1: 레거시 동작, N&gt;0: 홉 기반 파싱)
+   */
+  public void setTrustedProxyCount(int trustedProxyCount) {
+    this.trustedProxyCount = trustedProxyCount;
   }
 
   @Override
@@ -88,11 +107,17 @@ public class ReactiveRateLimitFilter implements WebFilter, Ordered {
     }
 
     // 2단계: 다음 필터 실행 후 응답 상태에 따라 실패 기록
+    // - 401/403: Basic Auth 등 일반적인 인증 실패
+    // - 400(토큰 엔드포인트 한정): Keycloak token endpoint는 invalid_grant(잘못된 자격증명)를
+    //   OAuth2 표준에 따라 400으로 응답하므로, 이를 카운트하지 않으면 /auth/token
+    //   브루트포스가 Rate Limit에서 완전히 빠져나간다.
     return chain.filter(exchange)
         .doFinally(signal -> {
           if (exchange.getResponse().getStatusCode() != null) {
             int status = exchange.getResponse().getStatusCode().value();
-            if (status == 401 || status == 403) {
+            boolean isAuthFailure = status == 401 || status == 403
+                || (AUTH_METHOD_TOKEN_API.equals(authMethod) && status == 400);
+            if (isAuthFailure) {
               recordFailure(strategy, clientIp, username);
             }
           }
@@ -216,16 +241,17 @@ public class ReactiveRateLimitFilter implements WebFilter, Ordered {
     if (authHeader != null && authHeader.startsWith(BASIC_PREFIX)) {
       return "BASIC";
     }
-    return "TOKEN_API";
+    return AUTH_METHOD_TOKEN_API;
   }
 
   private String getClientIp(ServerWebExchange exchange) {
-    String xff = exchange.getRequest().getHeaders().getFirst(X_FORWARDED_FOR_HEADER);
-    if (xff != null && !xff.isBlank()) {
-      return xff.split(",")[0].trim();
-    }
-    return exchange.getRequest().getRemoteAddress() != null
+    String remoteAddr = exchange.getRequest().getRemoteAddress() != null
         ? exchange.getRequest().getRemoteAddress().getAddress().getHostAddress()
-        : "unknown";
+        : null;
+    return ClientIpResolver.resolve(
+        exchange.getRequest().getHeaders().getFirst(X_FORWARDED_FOR_HEADER),
+        remoteAddr,
+        trustedProxyCount
+    );
   }
 }

@@ -17,6 +17,7 @@ import lombok.Setter;
  *       block-duration-seconds: 300     # 차단 지속 시간 (초), 0이면 윈도우와 동일
  *       key-strategy: IP_AND_USERNAME   # IP, USERNAME, IP_AND_USERNAME
  *       include-basic-auth: true        # Basic Auth에도 적용 (기본값: true)
+ *       max-tracked-keys: 100000        # 인메모리 카운터 맵 최대 추적 키 수
  * </pre>
  * </p>
  * <p>
@@ -64,4 +65,16 @@ public class KeycloakRateLimitProperties {
      * 기본값: true
      */
     private boolean includeBasicAuth = true;
+
+    /**
+     * 인메모리 Rate Limiter가 동시에 추적할 수 있는 최대 키(IP/username) 수.
+     * <p>
+     * <b>보안 설계:</b> XFF 등으로 매 요청마다 새로운 키(IP)를 생성하는 카디널리티 공격은
+     * 메모리를 무한히 소비시킬 수 있습니다(CWE-400). 이 값을 초과하면 새 키에 대한
+     * 요청은 <b>fail-closed</b>(즉시 차단)로 처리되어 메모리 상한을 보장합니다.
+     * 기존에 추적 중인 키는 계속 정상적으로 판단됩니다.
+     * </p>
+     * 기본값: 100,000
+     */
+    private int maxTrackedKeys = 100_000;
 }

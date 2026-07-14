@@ -157,8 +157,10 @@ class MdcRequestFilterTest {
         }
 
         @Test
-        void trusted_proxy_count가_1이면_XFF_우측에서_1홉_건너뛴_IP를_사용한다() throws ServletException, IOException {
-            // Given: trustedProxyCount=1 → XFF "client, proxy1" 에서 "client" 사용
+        void trusted_proxy_count가_1이면_신뢰_프록시가_append한_값_바로_앞을_IP로_사용한다() throws ServletException, IOException {
+            // Given: trustedProxyCount=1 → XFF "client, proxy1"(append 방식) 에서
+            // 신뢰 프록시(proxy1)가 append한 우측 값의 바로 앞("192.168.1.1")을 클라이언트 IP로 사용.
+            // "10.0.0.1"은 공격자가 통제 가능한 좌측 구간이므로 신뢰해서는 안 된다.
             securityProperties.setTrustedProxyCount(1);
             String xff = "10.0.0.1, 192.168.1.1";
             when(request.getHeader("X-Forwarded-For")).thenReturn(xff);
@@ -168,8 +170,8 @@ class MdcRequestFilterTest {
             // When
             mdcRequestFilter.doFilter(request, response, filterChain);
 
-            // Then: XFF 우측에서 1홉(192.168.1.1)을 프록시로 보고, 그 앞의 "10.0.0.1"을 클라이언트 IP로 사용
-            verify(contextAccessor).put(LoggingContextKeys.CLIENT_IP, "10.0.0.1");
+            // Then: XFF 우측 1번째("192.168.1.1")가 마지막 신뢰 프록시가 관찰한 실제 클라이언트 IP
+            verify(contextAccessor).put(LoggingContextKeys.CLIENT_IP, "192.168.1.1");
         }
     }
 

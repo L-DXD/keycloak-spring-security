@@ -15,6 +15,7 @@ import com.ids.keycloak.security.logging.DefaultPiiMaskingSanitizer;
 import com.ids.keycloak.security.logging.LoggingValueSanitizer;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
 import com.ids.keycloak.security.util.CookieUtil;
+import com.ids.keycloak.security.util.KeycloakIssuerUriResolver;
 import com.ids.keycloak.security.exception.KeycloakAuthenticationEntryPoint;
 import com.sd.KeycloakClient.config.AbstractKeycloakConfig;
 import com.sd.KeycloakClient.config.ClientConfiguration;
@@ -51,6 +52,9 @@ import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequest
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestResolver;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtValidators;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.util.matcher.RequestMatcher;
@@ -200,18 +204,69 @@ public class KeycloakServletAutoConfiguration {
     @Slf4j
     protected static class KeycloakAuthenticationConfiguration {
 
+        /**
+         * ID Token/Access Token의 서명·iss·exp·nbf를 로컬 검증하는 {@link JwtDecoder}를 등록합니다.
+         *
+         * <p><b>보안 Advisory 1 대응:</b> {@code KeycloakAuthenticationProvider}가 ID Token sub를
+         * 서명 검증 없이 파싱해 Principal로 사용하던 것을 이 {@link JwtDecoder}로 대체합니다.</p>
+         *
+         * <p><b>High #1 대응 — issuer 원천:</b> JWKS/issuer URI는 다음 우선순위로 계산합니다
+         * ({@link KeycloakIssuerUriResolver#resolveEffectiveIssuerUri} 참고).
+         * <ol>
+         *   <li>{@code keycloak.security.authentication.issuer-uri} (명시 설정)</li>
+         *   <li>표준 Spring Boot 프로퍼티 {@code spring.security.oauth2.resourceserver.jwt.issuer-uri}
+         *       또는 {@code spring.security.oauth2.client.provider.keycloak.issuer-uri} — Back-Channel
+         *       로그아웃 검증 및 {@code oauth2Login}의 {@code ClientRegistration}과 동일 원천이므로
+         *       설정해두면 자동으로 issuer가 통일됩니다.</li>
+         *   <li>{@code keycloak.base-url}/{@code keycloak.relative-path}/{@code keycloak.realm-name}으로부터
+         *       파생(레거시 기본 동작, 모두 필수 설정이므로 항상 계산 가능하지만, base-url이 서버간 통신용
+         *       내부 URL이고 실제 토큰의 iss(Keycloak 공개 URL)와 다르면 <b>모든 OIDC 쿠키 로그인이
+         *       실패</b>합니다 — 그 경우 위 1번 또는 2번을 반드시 명시 설정하세요).</li>
+         * </ol>
+         * {@code NimbusJwtDecoder.withJwkSetUri(...)}는 JWKS를 최초 {@code decode()} 호출 시점에 지연
+         * 조회하므로, 애플리케이션 기동 시점에 Keycloak이 아직 기동되지 않았어도 컨텍스트 초기화가
+         * 실패하지 않습니다.</p>
+         *
+         * <p>사용자가 직접 {@link JwtDecoder} 빈을 등록하면 이 빈은 생략됩니다.</p>
+         */
+        @Bean
+        @ConditionalOnMissingBean(JwtDecoder.class)
+        public JwtDecoder keycloakJwtDecoder(
+            KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig,
+            KeycloakSecurityProperties securityProperties,
+            @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri:"
+                + "${spring.security.oauth2.client.provider.keycloak.issuer-uri:}}")
+            String standardIssuerUri) {
+            String issuerUri = KeycloakIssuerUriResolver.resolveEffectiveIssuerUri(
+                securityProperties.getAuthentication().getIssuerUri(),
+                standardIssuerUri,
+                keycloakConfig.getBaseUrl(), keycloakConfig.getRelativePath(), keycloakConfig.getRealmName());
+            String jwkSetUri = KeycloakIssuerUriResolver.resolveJwkSetUri(issuerUri);
+
+            NimbusJwtDecoder decoder = NimbusJwtDecoder.withJwkSetUri(jwkSetUri).build();
+            decoder.setJwtValidator(JwtValidators.createDefaultWithIssuer(issuerUri));
+
+            log.info("핵심 Bean을 등록합니다: [JwtDecoder] (OIDC ID/Access Token 서명+iss+exp+nbf 검증, issuer={})",
+                issuerUri);
+            return decoder;
+        }
+
         @Bean
         @ConditionalOnMissingBean(AuthenticationManager.class)
         public AuthenticationManager authenticationManager(
             KeycloakClient keycloakClient,
             KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig,
-            KeycloakSecurityProperties securityProperties
+            KeycloakSecurityProperties securityProperties,
+            JwtDecoder jwtDecoder
         ) {
             List<AuthenticationProvider> providers = new ArrayList<>();
 
-            KeycloakAuthenticationProvider oidcProvider = new KeycloakAuthenticationProvider(keycloakClient, keycloakConfig.getClientId());
+            KeycloakAuthenticationProvider oidcProvider =
+                new KeycloakAuthenticationProvider(keycloakClient, keycloakConfig.getClientId(), jwtDecoder);
             // M-2: require-user-info 토글 (기본 false = 기존 동작 유지, 회귀 0)
             oidcProvider.setRequireUserInfo(securityProperties.getAuthentication().isRequireUserInfo());
+            // 보안 Advisory 7: Realm/Client 역할 네임스페이스 분리 설정 적용 (기본 SEPARATE_NAMESPACE)
+            oidcProvider.setRoleMapping(securityProperties.getRoleMapping());
             providers.add(oidcProvider);
 
             if (securityProperties.getBasicAuth().isEnabled()) {
@@ -473,12 +528,15 @@ public class KeycloakServletAutoConfiguration {
         @ConditionalOnMissingBean(RateLimiter.class)
         public RateLimiter rateLimiter(KeycloakSecurityProperties properties) {
             KeycloakRateLimitProperties rlProps = properties.getRateLimit();
-            log.info("Rate Limit Bean을 등록합니다: [InMemoryRateLimiter] (max={}, window={}s, block={}s)",
-                rlProps.getMaxRequests(), rlProps.getWindowSeconds(), rlProps.getBlockDurationSeconds());
+            log.info("Rate Limit Bean을 등록합니다: [InMemoryRateLimiter] "
+                    + "(max={}, window={}s, block={}s, maxTrackedKeys={})",
+                rlProps.getMaxRequests(), rlProps.getWindowSeconds(), rlProps.getBlockDurationSeconds(),
+                rlProps.getMaxTrackedKeys());
             return new InMemoryRateLimiter(
                 rlProps.getMaxRequests(),
                 rlProps.getWindowSeconds(),
-                rlProps.getBlockDurationSeconds()
+                rlProps.getBlockDurationSeconds(),
+                rlProps.getMaxTrackedKeys()
             );
         }
     }
@@ -502,10 +560,15 @@ public class KeycloakServletAutoConfiguration {
         @ConditionalOnMissingBean(OpaqueTokenIntrospector.class)
         public OpaqueTokenIntrospector keycloakOpaqueTokenIntrospector(
             KeycloakClient keycloakClient,
-            KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig
+            KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig,
+            KeycloakSecurityProperties securityProperties
         ) {
             log.info("Bearer Token Bean을 등록합니다: [OpaqueTokenIntrospector] (Keycloak Introspect)");
-            return new KeycloakOpaqueTokenIntrospector(keycloakClient, keycloakConfig.getClientId());
+            KeycloakOpaqueTokenIntrospector introspector =
+                new KeycloakOpaqueTokenIntrospector(keycloakClient, keycloakConfig.getClientId());
+            // 보안 Advisory 7: Realm/Client 역할 네임스페이스 분리 설정 적용 (기본 SEPARATE_NAMESPACE)
+            introspector.setRoleMapping(securityProperties.getRoleMapping());
+            return introspector;
         }
 
         /**

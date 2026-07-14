@@ -4,6 +4,7 @@ import com.ids.keycloak.security.config.KeycloakRateLimitProperties;
 import com.ids.keycloak.security.config.RateLimitKeyStrategy;
 import com.ids.keycloak.security.ratelimit.AuthenticationEventLogger;
 import com.ids.keycloak.security.ratelimit.RateLimiter;
+import com.ids.keycloak.security.util.ClientIpResolver;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -41,6 +42,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private static final String AUTHORIZATION_HEADER = "Authorization";
     private static final String BASIC_PREFIX = "Basic ";
     private static final String X_FORWARDED_FOR_HEADER = "X-Forwarded-For";
+    private static final String AUTH_METHOD_TOKEN_API = "TOKEN_API";
     private static final String RATE_LIMIT_ERROR_BODY =
         "{\"error\":\"rate_limit_exceeded\",\"error_description\":\"Too many authentication attempts. Please try again later.\"}";
 
@@ -48,12 +50,29 @@ public class RateLimitFilter extends OncePerRequestFilter {
     private final KeycloakRateLimitProperties properties;
     private final List<String> rateLimitPaths;
 
+    /**
+     * X-Forwarded-For 헤더에서 신뢰할 프록시 홉 수.
+     * 기본값 0: XFF 헤더를 완전히 무시하고 TCP 연결 원격 주소를 사용합니다(보안상 기본값).
+     * {@code KeycloakHttpConfigurer}에서 {@code keycloak.security.trusted-proxy-count} 값을 주입합니다.
+     * {@link ClientIpResolver} 참고.
+     */
+    private int trustedProxyCount = 0;
+
     public RateLimitFilter(RateLimiter rateLimiter,
                            KeycloakRateLimitProperties properties,
                            List<String> rateLimitPaths) {
         this.rateLimiter = rateLimiter;
         this.properties = properties;
         this.rateLimitPaths = rateLimitPaths;
+    }
+
+    /**
+     * 신뢰 프록시 홉 수를 설정합니다.
+     *
+     * @param trustedProxyCount 신뢰 프록시 홉 수 (0: XFF 무시, -1: 레거시 동작, N&gt;0: 홉 기반 파싱)
+     */
+    public void setTrustedProxyCount(int trustedProxyCount) {
+        this.trustedProxyCount = trustedProxyCount;
     }
 
     @Override
@@ -105,9 +124,15 @@ public class RateLimitFilter extends OncePerRequestFilter {
         // 2단계: 다음 필터 실행 (인증 처리)
         filterChain.doFilter(request, response);
 
-        // 3단계: 인증 실패 응답(401, 403)인 경우에만 실패 기록
+        // 3단계: 인증 실패 응답인 경우에만 실패 기록
+        // - 401/403: Basic Auth 등 일반적인 인증 실패
+        // - 400(토큰 엔드포인트 한정): Keycloak token endpoint는 invalid_grant(잘못된 자격증명)를
+        //   OAuth2 표준에 따라 400으로 응답하므로, 이를 카운트하지 않으면 /auth/token
+        //   브루트포스가 Rate Limit에서 완전히 빠져나간다.
         int status = response.getStatus();
-        if (status == 401 || status == 403) {
+        boolean isAuthFailure = status == 401 || status == 403
+            || (AUTH_METHOD_TOKEN_API.equals(authMethod) && status == 400);
+        if (isAuthFailure) {
             recordFailure(strategy, clientIp, username);
         }
     }
@@ -181,11 +206,11 @@ public class RateLimitFilter extends OncePerRequestFilter {
     }
 
     private String getClientIp(HttpServletRequest request) {
-        String xff = request.getHeader(X_FORWARDED_FOR_HEADER);
-        if (xff != null && !xff.isBlank()) {
-            return xff.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
+        return ClientIpResolver.resolve(
+            request.getHeader(X_FORWARDED_FOR_HEADER),
+            request.getRemoteAddr(),
+            trustedProxyCount
+        );
     }
 
     /**
@@ -217,6 +242,6 @@ public class RateLimitFilter extends OncePerRequestFilter {
             return "BASIC";
         }
         // Token API 경로 요청
-        return "TOKEN_API";
+        return AUTH_METHOD_TOKEN_API;
     }
 }

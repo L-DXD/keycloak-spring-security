@@ -203,8 +203,8 @@ keycloak:
 - `/logout/connect/back-channel/**` (Back-Channel 로그아웃)
 - Bearer Token 활성화 시: `/auth/token`, `/auth/refresh`, `/auth/logout`
 
-**Basic Auth 연동:**
-`basic-auth.enabled: true` 설정 시, `Authorization: Basic` 헤더가 포함된 요청은 자동으로 CSRF 면제됩니다. Basic Auth는 헤더 기반 API 클라이언트용이므로 CSRF 토큰을 전달할 수 없기 때문입니다.
+**Basic Auth와 CSRF (보안 경고):**
+`basic-auth.enabled: true`로 설정해도 `Authorization: Basic` 헤더 보유만으로 CSRF가 자동 면제되지 **않습니다**. HTTP Basic 자격증명은 브라우저가 origin 단위로 캐시해 이후 요청(공격자의 cross-origin 폼 제출 포함)에 자동 재전송할 수 있는 ambient credential이라, 헤더 존재를 "비-브라우저 요청"의 증거로 삼을 수 없기 때문입니다(CWE-352). Basic Auth는 브라우저가 개입하지 않는 머신 클라이언트(curl, 서버-to-서버 호출 등) 전용으로 사용하고, CSRF 면제가 필요한 경로는 반드시 `ignore-paths`에 명시적으로 등록하세요.
 
 ### 🔹 Basic Authentication
 
@@ -238,4 +238,20 @@ keycloak:
       block-duration-seconds: 300      # 차단 지속 시간 (초)
       key-strategy: IP_AND_USERNAME    # IP, USERNAME, IP_AND_USERNAME
       include-basic-auth: true         # Basic Auth에도 적용
+      max-tracked-keys: 100000         # 인메모리 카운터 맵 최대 추적 키 수(카디널리티 공격 방지, 초과 시 fail-closed)
 ```
+
+클라이언트 IP는 `ClientIpResolver`가 `trusted-proxy-count`(신뢰 프록시 수, 기본 `0`)를 기준으로 판정하므로, 리버스 프록시 뒤에서는 `keycloak.security.trusted-proxy-count`를 프록시 수에 맞게 설정해야 `X-Forwarded-For` 스푸핑으로 rate limit이 우회되지 않습니다.
+
+### 🔹 Role 매핑 (Realm/Client 역할 네임스페이스)
+
+```yaml
+keycloak:
+  security:
+    role-mapping:
+      mode: SEPARATE_NAMESPACE          # 기본값. REALM_ONLY / CLIENT_ONLY / LEGACY_MERGED
+      realm-role-prefix: ROLE_REALM_    # mode=SEPARATE_NAMESPACE일 때 Realm 역할 접두사
+      client-role-prefix: ROLE_CLIENT_  # mode=SEPARATE_NAMESPACE일 때 Client 역할 접두사
+```
+
+**보안 경고(Breaking):** 과거에는 `realm_access.roles`와 `resource_access.{clientId}.roles`가 모두 동일한 `ROLE_<이름>` 권한으로 병합되어, 동명의 realm 역할과 client 역할을 구분할 수 없었습니다(CWE-863 — realm 역할 보유자가 client 전용 `hasRole(...)` 검사를 의도치 않게 통과 가능). 기본값이 realm/client 역할을 서로 다른 접두사(`ROLE_REALM_*`/`ROLE_CLIENT_<CLIENT>_*`)로 분리하는 `SEPARATE_NAMESPACE`로 바뀌었으므로, 기존 `hasRole(...)`/`hasAuthority(...)` 참조를 새 권한 문자열에 맞게 갱신하세요. 과도기적으로만 과거 동작이 필요하면 `mode: LEGACY_MERGED`(비권장, CWE-863 재노출)를 명시 설정할 수 있습니다.

@@ -2,8 +2,10 @@ package com.ids.keycloak.security.authentication;
 
 import com.ids.keycloak.security.model.KeycloakLogoutToken;
 import com.ids.keycloak.security.session.ReactiveSessionManager;
-import java.util.Collections;
+import com.ids.keycloak.security.util.LogMaskingUtil;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
@@ -66,6 +68,27 @@ public class ReactiveOidcBackChannelLogoutHandler implements ServerLogoutHandler
   private final ReactiveJwtDecoder jwtDecoder;
 
   /**
+   * 보안 Advisory 8: 주입된 {@link #jwtDecoder}의 검증 결과와 무관하게, 이 핸들러가 <b>독립적으로</b>
+   * 다시 강제하는 예상 issuer/audience입니다.
+   *
+   * <p>기본값은 {@code null}(검증 생략, 기존 동작과 100% 동일 — 회귀 0)이며, 오토컨피규레이션이
+   * {@link #setExpectedIssuer(String)}/{@link #setExpectedAudience(String)}로 명시 설정합니다.
+   * 이렇게 두 단계로 나눠 강제하는 이유는, 이름 기반 {@code @ConditionalOnMissingBean}이라도
+   * 사용자가 같은 이름의 decoder 빈을 직접 재정의(override)하면 그 decoder가 aud/iss를
+   * 검증하지 않을 수 있기 때문입니다 — 이 경우에도 핸들러 자체가 최후 방어선 역할을 합니다.</p>
+   */
+  private volatile String expectedIssuer;
+  private volatile String expectedAudience;
+
+  /**
+   * code-review Low 1: 수동 배선 시 {@link #expectedIssuer}/{@link #expectedAudience}가 설정되지
+   * 않아 심층 방어가 조용히 비활성 상태로 동작하는 것을 운영자가 인지할 수 있도록, 첫 logout 처리
+   * 시점에 1회만 WARN을 남기기 위한 플래그입니다(자동 배선 시에는 두 값이 항상 주입되므로 로깅되지
+   * 않습니다).
+   */
+  private final AtomicBoolean deepDefenseInactiveWarningLogged = new AtomicBoolean(false);
+
+  /**
    * 서명 검증용 {@link ReactiveJwtDecoder}를 주입받는 생성자입니다.
    *
    * <p>{@link ReactiveJwtDecoder}는 Keycloak JWKS 엔드포인트를 기반으로 생성해야 합니다:
@@ -95,6 +118,27 @@ public class ReactiveOidcBackChannelLogoutHandler implements ServerLogoutHandler
   }
 
   /**
+   * 보안 Advisory 8: logout_token의 {@code iss} 클레임이 일치해야 하는 예상 issuer를 설정합니다.
+   *
+   * <p>{@code null}(기본값)이면 이 핸들러는 독립 issuer 강제를 생략하고 주입된
+   * {@link #jwtDecoder}의 검증 결과만 신뢰합니다(레거시 동작과 동일).</p>
+   */
+  public void setExpectedIssuer(String expectedIssuer) {
+    this.expectedIssuer = expectedIssuer;
+  }
+
+  /**
+   * 보안 Advisory 8: logout_token의 {@code aud} 클레임이 포함해야 하는 예상 client-id(audience)를
+   * 설정합니다.
+   *
+   * <p>{@code null}(기본값)이면 이 핸들러는 독립 audience 강제를 생략하고 주입된
+   * {@link #jwtDecoder}의 검증 결과만 신뢰합니다(레거시 동작과 동일).</p>
+   */
+  public void setExpectedAudience(String expectedAudience) {
+    this.expectedAudience = expectedAudience;
+  }
+
+  /**
    * Back-Channel logout_token을 <b>서명 검증</b> 후 해당 세션을 무효화합니다.
    *
    * <p>이 핸들러는 {@link ReactiveBackChannelLogoutEndpointFilter}에 의해 호출됩니다.
@@ -121,9 +165,10 @@ public class ReactiveOidcBackChannelLogoutHandler implements ServerLogoutHandler
         .flatMap(jwt -> processVerifiedLogoutToken(webFilterExchange.getExchange(), jwt))
         .onErrorResume(e -> {
           // JwtException — 서명 불일치, 만료, iss/aud 불일치 등 모든 검증 실패
+          // 보안: 상세 사유(e.getMessage())는 로그에만 남기고, 응답 본문에는 고정 문구만 노출한다.
           log.warn("[BackChannelLogoutHandler] logout_token 서명/검증 실패: {}", e.getMessage());
           return respondBadRequest(webFilterExchange.getExchange(),
-              "logout_token verification failed: " + e.getMessage());
+              "logout_token verification failed");
         });
   }
 
@@ -138,6 +183,28 @@ public class ReactiveOidcBackChannelLogoutHandler implements ServerLogoutHandler
       return respondBadRequest(exchange, "Empty claims in logout_token");
     }
 
+    // 보안 Advisory 8: 주입된 jwtDecoder가 (재정의 등으로) iss/aud를 검증하지 않더라도,
+    // 이 핸들러가 독립적으로 예상 issuer/audience를 다시 강제한다 (심층 방어, C-1과는 별개 계층).
+    String expIssuer = this.expectedIssuer;
+    String expAudience = this.expectedAudience;
+    warnIfDeepDefenseInactive(expIssuer, expAudience);
+
+    if (expIssuer != null && !expIssuer.isBlank()) {
+      String tokenIssuer = jwt.getClaimAsString("iss");
+      if (!expIssuer.equals(tokenIssuer)) {
+        log.warn("[BackChannelLogoutHandler] logout_token의 iss가 예상 issuer와 일치하지 않음 — 거부");
+        return respondBadRequest(exchange, "logout_token has unexpected issuer");
+      }
+    }
+
+    if (expAudience != null && !expAudience.isBlank()) {
+      List<String> audience = jwt.getAudience();
+      if (audience == null || !audience.contains(expAudience)) {
+        log.warn("[BackChannelLogoutHandler] logout_token의 aud에 예상 client-id가 포함되지 않음 — 거부");
+        return respondBadRequest(exchange, "logout_token has unexpected audience");
+      }
+    }
+
     KeycloakLogoutToken logoutToken = new KeycloakLogoutToken(claims);
     if (!logoutToken.isLogoutToken()) {
       log.warn("[BackChannelLogoutHandler] 유효한 Back-Channel Logout 이벤트가 없음 — events 클레임 누락");
@@ -147,8 +214,9 @@ public class ReactiveOidcBackChannelLogoutHandler implements ServerLogoutHandler
     String subject = logoutToken.getSubject();
     String keycloakSessionId = logoutToken.getSessionId();
 
-    log.debug("[BackChannelLogoutHandler] 서명 검증 완료. Logout Token - sub={}, sid={}", subject,
-        keycloakSessionId);
+    // 보안: subject(sub)/sessionId(sid)는 사용자 식별자·세션 식별자이므로 로그 레벨과 무관하게 마스킹한다.
+    log.debug("[BackChannelLogoutHandler] 서명 검증 완료. Logout Token - sub={}, sid={}",
+        LogMaskingUtil.maskIdentifier(subject), LogMaskingUtil.maskIdentifier(keycloakSessionId));
 
     if (subject == null && keycloakSessionId == null) {
       log.warn("[BackChannelLogoutHandler] sub와 sid 모두 없음 — 처리 스킵");
@@ -172,6 +240,25 @@ public class ReactiveOidcBackChannelLogoutHandler implements ServerLogoutHandler
           log.error("[BackChannelLogoutHandler] 세션 무효화 중 오류: {}", e.getMessage(), e);
           return respondBadRequest(exchange, "Session revocation failed");
         });
+  }
+
+  /**
+   * code-review Low 1: {@code expectedIssuer}/{@code expectedAudience}가 (하나라도) 설정되지 않아
+   * 심층 방어 재검증이 부분적으로 또는 전부 비활성 상태로 동작할 때, 최초 logout 처리 1회에 한해
+   * WARN을 남깁니다. 자동 배선(오토컨피규레이션) 시에는 두 값이 항상 함께 주입되므로 호출되지 않고,
+   * 수동 배선 시 setter를 호출하지 않은 경우에만 관측됩니다.
+   */
+  private void warnIfDeepDefenseInactive(String expIssuer, String expAudience) {
+    boolean issuerInactive = expIssuer == null || expIssuer.isBlank();
+    boolean audienceInactive = expAudience == null || expAudience.isBlank();
+    if ((issuerInactive || audienceInactive)
+        && deepDefenseInactiveWarningLogged.compareAndSet(false, true)) {
+      log.warn("[BackChannelLogoutHandler] 심층방어 재검증이 비활성 상태입니다 "
+              + "(issuer 재검증={}, audience 재검증={}). 수동 배선 시 setExpectedIssuer()/"
+              + "setExpectedAudience() 호출을 권장합니다. (jwtDecoder 자체의 iss/aud 검증은 "
+              + "이 설정과 무관하게 정상 동작합니다)",
+          issuerInactive ? "비활성" : "활성", audienceInactive ? "비활성" : "활성");
+    }
   }
 
   /**
@@ -207,11 +294,11 @@ public class ReactiveOidcBackChannelLogoutHandler implements ServerLogoutHandler
         .flatMap(entry -> {
           log.debug(
               "[BackChannelLogoutHandler] 세션 삭제 - Spring Session ID: {}, Keycloak SID: {}",
-              entry.getKey(), keycloakSessionId);
+              entry.getKey(), LogMaskingUtil.maskIdentifier(keycloakSessionId));
           return reactiveRepo.deleteById(entry.getKey())
               .doOnSuccess(v -> log.info(
                   "[BackChannelLogoutHandler] Keycloak SID '{}' 세션 폐기 완료",
-                  keycloakSessionId));
+                  LogMaskingUtil.maskIdentifier(keycloakSessionId)));
         })
         .then();
   }
@@ -229,7 +316,8 @@ public class ReactiveOidcBackChannelLogoutHandler implements ServerLogoutHandler
         })
         .then()
         .doOnSuccess(v -> log.info(
-            "[BackChannelLogoutHandler] subject '{}' 모든 세션 폐기 완료", subject));
+            "[BackChannelLogoutHandler] subject '{}' 모든 세션 폐기 완료",
+            LogMaskingUtil.maskIdentifier(subject)));
   }
 
   private Mono<Void> respondOk(ServerWebExchange exchange) {

@@ -1,5 +1,6 @@
 package com.ids.keycloak.security.authentication;
 
+import com.ids.keycloak.security.config.KeycloakRoleMappingProperties;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.util.KeycloakAuthorityExtractor;
 import com.sd.KeycloakClient.dto.auth.KeycloakIntrospectResponse;
@@ -32,9 +33,25 @@ public class KeycloakReactiveOpaqueTokenIntrospector implements ReactiveOpaqueTo
   private final KeycloakClient keycloakClient;
   private final String clientId;
 
+  /**
+   * Realm/Client 역할 → GrantedAuthority 매핑 전략 (보안 Advisory 7, CWE-863 대응).
+   * 기본값은 realm/client 역할을 별도 네임스페이스로 분리하는 {@code SEPARATE_NAMESPACE}.
+   * AutoConfiguration에서 {@code keycloak.security.role-mapping} 설정을 주입합니다.
+   */
+  private KeycloakRoleMappingProperties roleMapping = new KeycloakRoleMappingProperties();
+
   public KeycloakReactiveOpaqueTokenIntrospector(KeycloakClient keycloakClient, String clientId) {
     this.keycloakClient = keycloakClient;
     this.clientId = clientId;
+  }
+
+  /**
+   * Realm/Client 역할 매핑 전략을 설정합니다.
+   *
+   * @param roleMapping Realm/Client 역할 네임스페이스 전략 (null이면 기본값 유지)
+   */
+  public void setRoleMapping(KeycloakRoleMappingProperties roleMapping) {
+    this.roleMapping = roleMapping != null ? roleMapping : new KeycloakRoleMappingProperties();
   }
 
   /**
@@ -115,7 +132,8 @@ public class KeycloakReactiveOpaqueTokenIntrospector implements ReactiveOpaqueTo
    */
   private OAuth2AuthenticatedPrincipal buildPrincipal(String token, OidcUserInfo oidcUserInfo) {
     Map<String, Object> claims = (oidcUserInfo != null) ? oidcUserInfo.getClaims() : Map.of();
-    Collection<GrantedAuthority> authorities = KeycloakAuthorityExtractor.extract(claims, clientId);
+    Collection<GrantedAuthority> authorities =
+        KeycloakAuthorityExtractor.extract(claims, clientId, roleMapping);
 
     String subject = extractSubject(claims);
     OidcIdToken oidcIdToken = new OidcIdToken(

@@ -9,6 +9,8 @@ public enum ErrorCode {
     TOKEN_EXPIRED("TOKEN_EXPIRED", 401, "토큰이 만료되었습니다."),
     INTROSPECTION_FAILED("INTROSPECTION_FAILED", 401, "토큰 온라인 검증에 실패했습니다."),
     USERINFO_FETCH_FAILED("USERINFO_FETCH_FAILED", 401, "UserInfo 조회에 실패했습니다."),
+    TOKEN_BINDING_FAILED("TOKEN_BINDING_FAILED", 401,
+        "ID Token과 Access Token의 서명 검증 또는 결합(sub/aud/azp) 검증에 실패했습니다."),
 
     // 403 Forbidden
     ACCESS_DENIED("ACCESS_DENIED", 403, "이 리소스에 접근할 권한이 없습니다."),

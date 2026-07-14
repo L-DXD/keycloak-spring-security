@@ -91,8 +91,9 @@ public class ReactiveBackChannelLogoutEndpointFilter implements WebFilter, Order
           return logoutHandler.logout(webFilterExchange, authentication);
         })
         .onErrorResume(e -> {
+          // 보안: 상세 사유(e.getMessage(), 스택트레이스)는 로그에만 남기고, 응답 본문에는 고정 문구만 노출한다.
           log.error("[BackChannelEndpoint] Back-Channel 로그아웃 처리 중 오류: {}", e.getMessage(), e);
-          return respondBadRequest(exchange, "Internal error: " + e.getMessage());
+          return respondBadRequest(exchange, "Internal error while processing back-channel logout");
         });
   }
 

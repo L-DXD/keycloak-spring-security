@@ -2,6 +2,7 @@ package com.ids.keycloak.security.config;
 
 import lombok.Getter;
 import lombok.Setter;
+import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.NestedConfigurationProperty;
 
@@ -26,12 +27,14 @@ import java.util.List;
  *     cookie:
  *       http-only: true
  *       secure: true
+ *     role-mapping:
+ *       mode: SEPARATE_NAMESPACE
  * </pre>
  * </p>
  */
 @Getter
 @ConfigurationProperties(prefix = "keycloak.security")
-public class KeycloakSecurityProperties {
+public class KeycloakSecurityProperties implements InitializingBean {
 
     /**
      * 인증(Authentication) 관련 설정
@@ -94,6 +97,13 @@ public class KeycloakSecurityProperties {
     private KeycloakRateLimitProperties rateLimit = new KeycloakRateLimitProperties();
 
     /**
+     * Realm/Client 역할(Role) → GrantedAuthority 매핑 관련 설정 (보안 Advisory 7, CWE-863 대응).
+     * 기본값은 realm/client 역할을 별도 네임스페이스로 분리하는 {@code SEPARATE_NAMESPACE}입니다.
+     */
+    @NestedConfigurationProperty
+    private KeycloakRoleMappingProperties roleMapping = new KeycloakRoleMappingProperties();
+
+    /**
      * Keycloak {@code SecurityFilterChain}이 담당할 요청 경로 매처 설정.
      * <p>
      * 사용자가 자체 {@code SecurityFilterChain}(예: {@code /actuator} 전용)을 추가하더라도
@@ -142,4 +152,16 @@ public class KeycloakSecurityProperties {
      */
     @Setter
     private int trustedProxyCount = 0;
+
+    /**
+     * {@code @ConfigurationProperties} 바인딩 완료 직후 호출되는 Spring 라이프사이클 콜백입니다.
+     * 오설정으로 인한 Advisory 7(CWE-863) 재현을 막기 위해 {@link #roleMapping}의 접두사 조합을
+     * 검증하고, 위반 시 기동을 즉시 실패시킵니다.
+     *
+     * @throws IllegalStateException {@link KeycloakRoleMappingProperties#validate()} 참고
+     */
+    @Override
+    public void afterPropertiesSet() {
+        roleMapping.validate();
+    }
 }

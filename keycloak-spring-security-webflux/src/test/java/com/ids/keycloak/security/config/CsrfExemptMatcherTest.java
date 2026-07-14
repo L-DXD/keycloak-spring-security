@@ -1,153 +1,191 @@
 package com.ids.keycloak.security.config;
 
-import java.util.ArrayList;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.ids.keycloak.security.authentication.KeycloakReactiveAuthenticationManager;
+import com.ids.keycloak.security.filter.ReactiveBackChannelLogoutEndpointFilter;
+import com.ids.keycloak.security.session.ReactiveSessionManager;
+import com.ids.keycloak.security.web.reactive.KeycloakServerAccessDeniedHandler;
+import com.ids.keycloak.security.web.reactive.KeycloakServerAuthenticationEntryPoint;
+import com.sd.KeycloakClient.factory.KeycloakClient;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
-import org.springframework.security.web.server.util.matcher.NegatedServerWebExchangeMatcher;
-import org.springframework.security.web.server.util.matcher.OrServerWebExchangeMatcher;
-import org.springframework.security.web.server.util.matcher.PathPatternParserServerWebExchangeMatcher;
-import org.springframework.security.web.server.util.matcher.ServerWebExchangeMatcher;
+import org.springframework.security.config.web.server.ServerHttpSecurity;
+import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
+import org.springframework.security.web.server.SecurityWebFilterChain;
+import org.springframework.security.web.server.csrf.CsrfWebFilter;
+import org.springframework.web.server.WebFilterChain;
 import reactor.test.StepVerifier;
 
 /**
- * CSRF 면제 Matcher 단위 테스트.
+ * CSRF 설정 통합 테스트.
  *
- * <p>{@link KeycloakWebFluxSecurityConfigurer}의 {@code configureCsrf} 내부에서
- * 구성되는 {@code NegatedServerWebExchangeMatcher(OrServerWebExchangeMatcher(면제경로들))} 로직을
- * 인라인으로 재현하여 검증합니다.</p>
+ * <p>인라인으로 matcher 로직을 재현하지 않고, {@link KeycloakWebFluxSecurityConfigurer#configure}를
+ * 실제로 호출해 만들어진 {@link SecurityWebFilterChain}에서 실제 {@link CsrfWebFilter} 인스턴스를
+ * 꺼내 요청을 직접 흘려보내며 검증한다. production {@code configureCsrf}가 조립한 matcher를
+ * 그대로 실행하므로, matcher 로직이 바뀌면 이 테스트가 즉시 반응한다.</p>
  *
  * <p>CSRF 보호 = NOT(면제 대상) 공식 검증:
  * <ul>
- *   <li>면제 경로 → CSRF 검사 없음(notMatch → true: 보호 안 함)</li>
- *   <li>일반 경로 → CSRF 검사(match → true: 보호 함)</li>
- *   <li>Basic Auth 헤더 → CSRF 면제</li>
+ *   <li>면제 경로(로그아웃/Back-Channel 로그아웃/Bearer Token 엔드포인트/사용자 지정 ignore-paths)
+ *   → CSRF 토큰 없이도 통과</li>
+ *   <li>일반 경로 → CSRF 토큰이 없으면 403</li>
+ *   <li><b>보안 Advisory 3:</b> {@code Authorization: Basic} 헤더 보유 여부는 더 이상 CSRF 면제
+ *   사유가 아니다. Basic 헤더가 있어도 non-ignore 경로에서는 CSRF 토큰이 없으면 403이 반환되어야
+ *   한다 — 브라우저가 캐시한 Basic 자격증명(ambient credential)을 이용한 cross-site 폼 제출이
+ *   CSRF 검증을 우회하는 것을 막기 위함이다(CWE-352).</li>
  * </ul>
  * </p>
  */
 class CsrfExemptMatcherTest {
 
-  /**
-   * KeycloakWebFluxSecurityConfigurer.configureCsrf 와 동일한 matcher 구성 로직.
-   *
-   * @param exemptPaths          CSRF 면제 경로 목록
-   * @param basicAuthExemptEnabled Basic Auth 헤더 면제 여부
-   */
-  private ServerWebExchangeMatcher buildCsrfMatcher(List<String> exemptPaths,
-      boolean basicAuthExemptEnabled) {
-    List<ServerWebExchangeMatcher> exemptMatchers = new ArrayList<>();
-    for (String path : exemptPaths) {
-      exemptMatchers.add(new PathPatternParserServerWebExchangeMatcher(path));
-    }
-    if (basicAuthExemptEnabled) {
-      ServerWebExchangeMatcher basicAuthMatcher = exchange -> {
-        String auth = exchange.getRequest().getHeaders().getFirst("Authorization");
-        if (auth != null && auth.startsWith("Basic ")) {
-          return ServerWebExchangeMatcher.MatchResult.match();
-        }
-        return ServerWebExchangeMatcher.MatchResult.notMatch();
-      };
-      exemptMatchers.add(basicAuthMatcher);
-    }
-    // CSRF 보호 = NOT(면제 대상)
-    return new NegatedServerWebExchangeMatcher(new OrServerWebExchangeMatcher(exemptMatchers));
+  // ==========================================================================
+  // 헬퍼: production configure()를 실제로 호출해 SecurityWebFilterChain을 빌드하고,
+  // 그 안에서 실제 CsrfWebFilter 인스턴스를 꺼낸다 (matcher 로직 복제 없음).
+  // ==========================================================================
+
+  private KeycloakSecurityProperties baseProperties() {
+    KeycloakSecurityProperties props = new KeycloakSecurityProperties();
+    props.getCsrf().setEnabled(true);
+    props.getBasicAuth().setEnabled(true);
+    return props;
+  }
+
+  private CsrfWebFilter buildRealCsrfFilter(KeycloakSecurityProperties props) throws Exception {
+    KeycloakClient keycloakClient = mock(KeycloakClient.class);
+    ReactiveJwtDecoder jwtDecoder = mock(ReactiveJwtDecoder.class);
+    KeycloakReactiveAuthenticationManager authenticationManager =
+        new KeycloakReactiveAuthenticationManager(keycloakClient, "test-client", jwtDecoder);
+    KeycloakServerAuthenticationEntryPoint entryPoint =
+        new KeycloakServerAuthenticationEntryPoint(new ObjectMapper());
+    KeycloakServerAccessDeniedHandler accessDeniedHandler =
+        new KeycloakServerAccessDeniedHandler(new ObjectMapper());
+    ReactiveSessionManager sessionManager = new ReactiveSessionManager();
+
+    SecurityWebFilterChain chain = KeycloakWebFluxSecurityConfigurer.configure(
+        ServerHttpSecurity.http(),
+        authenticationManager,
+        entryPoint,
+        accessDeniedHandler,
+        props,
+        keycloakClient,
+        "test-client",
+        sessionManager,
+        null,   // rateLimiter
+        null,   // loggingFilter
+        null,   // authLoggingFilter
+        null,   // clientRegistrationRepo
+        null,   // authorizedClientService
+        null,   // backChannelFilter
+        null);  // authorizationRequestResolver
+
+    return chain.getWebFilters()
+        .filter(CsrfWebFilter.class::isInstance)
+        .cast(CsrfWebFilter.class)
+        .blockFirst();
   }
 
   private MockServerWebExchange exchange(String method, String path) {
     MockServerHttpRequest request = MockServerHttpRequest
-        .method(method.equals("POST") ? HttpMethod.POST : HttpMethod.GET, path).build();
+        .method(HttpMethod.valueOf(method), path).build();
     return MockServerWebExchange.from(request);
   }
 
   private MockServerWebExchange exchangeWithHeader(String method, String path, String headerName,
       String headerValue) {
     MockServerHttpRequest request = MockServerHttpRequest
-        .method(method.equals("POST") ? HttpMethod.POST : HttpMethod.GET, path)
+        .method(HttpMethod.valueOf(method), path)
         .header(headerName, headerValue).build();
     return MockServerWebExchange.from(request);
   }
 
+  /**
+   * 실제 {@link CsrfWebFilter} 인스턴스에 요청을 흘려보내고, 하위 체인까지 도달했는지 여부를 반환한다.
+   * CSRF에 막히면 filter가 직접 403을 쓰고 완료하므로 하위 체인(terminal)에 도달하지 못한다.
+   */
+  private boolean runThroughRealFilter(CsrfWebFilter filter, MockServerWebExchange exchange) {
+    AtomicBoolean reachedDownstream = new AtomicBoolean(false);
+    WebFilterChain terminal = ex -> {
+      reachedDownstream.set(true);
+      return ex.getResponse().setComplete();
+    };
+
+    StepVerifier.create(filter.filter(exchange, terminal)).verifyComplete();
+    return reachedDownstream.get();
+  }
+
   // ==========================================================================
-  // 면제 경로 → CSRF 검사 없음 (matcher notMatch = 보호 안 함)
+  // 면제 경로 → CSRF 토큰 없이 통과
   // ==========================================================================
 
   @Nested
   class 면제_경로_CSRF_보호_없음 {
 
     @Test
-    void 로그아웃_경로_CSRF_면제() {
-      List<String> exemptPaths = List.of("/logout");
-      ServerWebExchangeMatcher csrfMatcher = buildCsrfMatcher(exemptPaths, false);
+    void BackChannel_로그아웃_경로는_토큰_없이_통과() throws Exception {
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(baseProperties());
 
-      StepVerifier.create(csrfMatcher.matches(exchange("POST", "/logout")))
-          .expectNextMatches(result -> !result.isMatch())
-          .verifyComplete();
+      MockServerWebExchange ex = exchange("POST",
+          ReactiveBackChannelLogoutEndpointFilter.BACK_CHANNEL_LOGOUT_PATH);
+
+      assertThat(runThroughRealFilter(csrfFilter, ex)).isTrue();
     }
 
     @Test
-    void BackChannel_로그아웃_경로_CSRF_면제() {
-      List<String> exemptPaths = List.of("/logout/connect/back-channel/**");
-      ServerWebExchangeMatcher csrfMatcher = buildCsrfMatcher(exemptPaths, false);
+    void Bearer_Token_엔드포인트는_토큰_없이_통과() throws Exception {
+      KeycloakSecurityProperties props = baseProperties();
+      props.getBearerToken().setEnabled(true);
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(props);
 
-      StepVerifier.create(
-              csrfMatcher.matches(exchange("POST", "/logout/connect/back-channel/keycloak")))
-          .expectNextMatches(result -> !result.isMatch())
-          .verifyComplete();
+      assertThat(runThroughRealFilter(csrfFilter, exchange("POST", "/auth/token"))).isTrue();
+      assertThat(runThroughRealFilter(csrfFilter, exchange("POST", "/auth/refresh"))).isTrue();
     }
 
     @Test
-    void Bearer_Token_엔드포인트_CSRF_면제() {
-      List<String> exemptPaths = List.of("/api/token", "/api/refresh", "/api/logout");
-      ServerWebExchangeMatcher csrfMatcher = buildCsrfMatcher(exemptPaths, false);
+    void 사용자_지정_ignorePaths는_토큰_없이_통과() throws Exception {
+      KeycloakSecurityProperties props = baseProperties();
+      props.getCsrf().setIgnorePaths(List.of("/webhook/**"));
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(props);
 
-      StepVerifier.create(csrfMatcher.matches(exchange("POST", "/api/token")))
-          .expectNextMatches(result -> !result.isMatch())
-          .verifyComplete();
-
-      StepVerifier.create(csrfMatcher.matches(exchange("POST", "/api/refresh")))
-          .expectNextMatches(result -> !result.isMatch())
-          .verifyComplete();
-    }
-
-    @Test
-    void 사용자_지정_면제_경로_CSRF_면제() {
-      List<String> exemptPaths = List.of("/webhook/**");
-      ServerWebExchangeMatcher csrfMatcher = buildCsrfMatcher(exemptPaths, false);
-
-      StepVerifier.create(csrfMatcher.matches(exchange("POST", "/webhook/event")))
-          .expectNextMatches(result -> !result.isMatch())
-          .verifyComplete();
+      assertThat(runThroughRealFilter(csrfFilter, exchange("POST", "/webhook/event"))).isTrue();
     }
   }
 
   // ==========================================================================
-  // 일반 경로 → CSRF 보호 적용 (matcher match = 보호 함)
+  // 일반 경로 → CSRF 토큰이 없으면 403
   // ==========================================================================
 
   @Nested
   class 일반_경로_CSRF_보호_적용 {
 
     @Test
-    void 일반_API_경로_CSRF_보호() {
-      List<String> exemptPaths = List.of("/logout", "/logout/connect/back-channel/**");
-      ServerWebExchangeMatcher csrfMatcher = buildCsrfMatcher(exemptPaths, false);
+    void 일반_API_경로는_토큰_없으면_403() throws Exception {
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(baseProperties());
 
-      StepVerifier.create(csrfMatcher.matches(exchange("POST", "/api/submit")))
-          .expectNextMatches(ServerWebExchangeMatcher.MatchResult::isMatch)
-          .verifyComplete();
+      MockServerWebExchange ex = exchange("POST", "/api/submit");
+      boolean reached = runThroughRealFilter(csrfFilter, ex);
+
+      assertThat(reached).isFalse();
+      assertThat(ex.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
 
     @Test
-    void 루트_경로_CSRF_보호() {
-      List<String> exemptPaths = List.of("/logout");
-      ServerWebExchangeMatcher csrfMatcher = buildCsrfMatcher(exemptPaths, false);
+    void 루트_경로는_토큰_없으면_403() throws Exception {
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(baseProperties());
 
-      StepVerifier.create(csrfMatcher.matches(exchange("POST", "/")))
-          .expectNextMatches(ServerWebExchangeMatcher.MatchResult::isMatch)
-          .verifyComplete();
+      MockServerWebExchange ex = exchange("POST", "/");
+      boolean reached = runThroughRealFilter(csrfFilter, ex);
+
+      assertThat(reached).isFalse();
+      assertThat(ex.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
   }
 
@@ -159,100 +197,104 @@ class CsrfExemptMatcherTest {
   class H4_logout_CSRF_면제_조건 {
 
     @Test
-    void bearerToken_비활성시_logout_경로는_CSRF_보호_적용됨() {
-      // Bearer Token 비활성 → /logout이 면제 목록에 없음
-      // KeycloakWebFluxSecurityConfigurer.configureCsrf: bearerToken.isEnabled()==false 이면
-      // /logout을 ignorePaths에 추가하지 않는다.
-      List<String> exemptPaths = List.of("/logout/connect/back-channel/keycloak");
-      ServerWebExchangeMatcher csrfMatcher = buildCsrfMatcher(exemptPaths, false);
+    void bearerToken_비활성시_logout_경로는_CSRF_보호_적용됨() throws Exception {
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(baseProperties());
 
-      // POST /logout → CSRF 보호 적용 (match=true)
-      StepVerifier.create(csrfMatcher.matches(exchange("POST", "/logout")))
-          .expectNextMatches(ServerWebExchangeMatcher.MatchResult::isMatch)
-          .verifyComplete();
+      MockServerWebExchange ex = exchange("POST", "/logout");
+      boolean reached = runThroughRealFilter(csrfFilter, ex);
+
+      assertThat(reached).isFalse();
+      assertThat(ex.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
 
     @Test
-    void bearerToken_활성시_logout_경로는_CSRF_면제됨() {
-      // Bearer Token 활성 → /logout이 면제 목록에 포함
-      List<String> exemptPaths = List.of("/auth/token", "/auth/refresh", "/auth/logout", "/logout",
-          "/logout/connect/back-channel/keycloak");
-      ServerWebExchangeMatcher csrfMatcher = buildCsrfMatcher(exemptPaths, false);
+    void bearerToken_활성시_logout_경로는_CSRF_면제됨() throws Exception {
+      KeycloakSecurityProperties props = baseProperties();
+      props.getBearerToken().setEnabled(true);
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(props);
 
-      // POST /logout → CSRF 면제 (match=false)
-      StepVerifier.create(csrfMatcher.matches(exchange("POST", "/logout")))
-          .expectNextMatches(result -> !result.isMatch())
-          .verifyComplete();
+      assertThat(runThroughRealFilter(csrfFilter, exchange("POST", "/logout"))).isTrue();
     }
 
     @Test
-    void bearerToken_비활성시_back_channel_경로는_여전히_CSRF_면제() {
-      // /logout/connect/back-channel/keycloak 은 항상 면제
-      List<String> exemptPaths = List.of("/logout/connect/back-channel/keycloak");
-      ServerWebExchangeMatcher csrfMatcher = buildCsrfMatcher(exemptPaths, false);
+    void bearerToken_비활성시_back_channel_경로는_여전히_CSRF_면제() throws Exception {
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(baseProperties());
 
-      StepVerifier.create(
-              csrfMatcher.matches(exchange("POST", "/logout/connect/back-channel/keycloak")))
-          .expectNextMatches(result -> !result.isMatch())
-          .verifyComplete();
+      MockServerWebExchange ex = exchange("POST",
+          ReactiveBackChannelLogoutEndpointFilter.BACK_CHANNEL_LOGOUT_PATH);
+
+      assertThat(runThroughRealFilter(csrfFilter, ex)).isTrue();
     }
   }
 
   // ==========================================================================
-  // Basic Auth 헤더 면제
+  // 보안 Advisory 3: Authorization: Basic 헤더는 더 이상 CSRF 면제 사유가 아니다.
   // ==========================================================================
 
   @Nested
-  class BasicAuth_헤더_면제 {
+  class BasicAuth_헤더는_더이상_CSRF_면제_아님 {
 
     @Test
-    void Authorization_Basic_헤더_있으면_CSRF_면제() {
-      List<String> exemptPaths = List.of("/logout");
-      ServerWebExchangeMatcher csrfMatcher = buildCsrfMatcher(exemptPaths, true);
+    void Authorization_Basic_헤더가_있어도_non_ignore_경로는_403() throws Exception {
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(baseProperties());
 
       MockServerWebExchange ex = exchangeWithHeader("POST", "/api/resource",
           "Authorization", "Basic dXNlcjpwYXNz");
+      boolean reached = runThroughRealFilter(csrfFilter, ex);
 
-      StepVerifier.create(csrfMatcher.matches(ex))
-          .expectNextMatches(result -> !result.isMatch())
-          .verifyComplete();
+      assertThat(reached)
+          .as("Basic 헤더 보유만으로 CSRF가 면제되면 안 된다 (Advisory 3)")
+          .isFalse();
+      assertThat(ex.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
 
     @Test
-    void Authorization_Bearer_헤더는_CSRF_보호_적용() {
-      List<String> exemptPaths = List.of("/logout");
-      ServerWebExchangeMatcher csrfMatcher = buildCsrfMatcher(exemptPaths, true);
+    void Authorization_Basic_헤더_브라우저성_cross_site_요청도_403() throws Exception {
+      // ambient credential 재전송 시나리오: 브라우저가 캐시한 Basic 자격증명을 실은 채
+      // 공격자 origin에서 만든 폼이 자동 제출되는 상황을 흉내낸다.
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(baseProperties());
 
-      MockServerWebExchange ex = exchangeWithHeader("POST", "/api/resource",
-          "Authorization", "Bearer some.token.here");
+      MockServerHttpRequest request = MockServerHttpRequest
+          .method(HttpMethod.POST, "/api/resource")
+          .header("Authorization", "Basic dXNlcjpwYXNz")
+          .header("Origin", "https://attacker.example")
+          .header("Content-Type", "application/x-www-form-urlencoded")
+          .build();
+      MockServerWebExchange ex = MockServerWebExchange.from(request);
 
-      StepVerifier.create(csrfMatcher.matches(ex))
-          .expectNextMatches(ServerWebExchangeMatcher.MatchResult::isMatch)
-          .verifyComplete();
+      boolean reached = runThroughRealFilter(csrfFilter, ex);
+
+      assertThat(reached).isFalse();
+      assertThat(ex.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
 
     @Test
-    void Authorization_헤더_없으면_일반_경로_CSRF_보호() {
-      List<String> exemptPaths = List.of("/logout");
-      ServerWebExchangeMatcher csrfMatcher = buildCsrfMatcher(exemptPaths, true);
+    void Authorization_Basic_헤더가_있어도_ignore_path는_통과() throws Exception {
+      KeycloakSecurityProperties props = baseProperties();
+      props.getCsrf().setIgnorePaths(List.of("/webhook/**"));
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(props);
 
-      StepVerifier.create(csrfMatcher.matches(exchange("POST", "/api/resource")))
-          .expectNextMatches(ServerWebExchangeMatcher.MatchResult::isMatch)
-          .verifyComplete();
+      MockServerWebExchange ex = exchangeWithHeader("POST", "/webhook/event",
+          "Authorization", "Basic dXNlcjpwYXNz");
+
+      assertThat(runThroughRealFilter(csrfFilter, ex))
+          .as("ignore-paths에 명시적으로 등록된 경로는 여전히 면제되어야 한다")
+          .isTrue();
     }
 
     @Test
-    void basicAuth_비활성화시_Basic_헤더_있어도_CSRF_보호() {
-      List<String> exemptPaths = List.of("/logout");
-      // basicAuthExemptEnabled=false
-      ServerWebExchangeMatcher csrfMatcher = buildCsrfMatcher(exemptPaths, false);
+    void basicAuth_비활성화여도_CSRF_보호_결과는_동일() throws Exception {
+      // Advisory 3 이후로는 basic-auth.enabled 값이 CSRF 판단에 영향을 주지 않는다.
+      KeycloakSecurityProperties props = baseProperties();
+      props.getBasicAuth().setEnabled(false);
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(props);
 
       MockServerWebExchange ex = exchangeWithHeader("POST", "/api/resource",
           "Authorization", "Basic dXNlcjpwYXNz");
+      boolean reached = runThroughRealFilter(csrfFilter, ex);
 
-      StepVerifier.create(csrfMatcher.matches(ex))
-          .expectNextMatches(ServerWebExchangeMatcher.MatchResult::isMatch)
-          .verifyComplete();
+      assertThat(reached).isFalse();
+      assertThat(ex.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
   }
 }

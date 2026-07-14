@@ -4,6 +4,7 @@ import com.ids.keycloak.security.config.KeycloakCookieProperties;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.session.ReactiveSessionManager;
 import com.ids.keycloak.security.util.ReactiveCookieUtil;
+import java.util.Optional;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
@@ -79,15 +80,21 @@ public class OidcReactiveLoginSuccessHandler implements ServerAuthenticationSucc
     log.debug("[OidcSuccessHandler] OIDC 로그인 성공. principal={}", authentication.getName());
 
     // 1. AuthorizedClient에서 Access Token / Refresh Token 조회
+    // 주의: issueTokenCookiesAndSaveSession/issueIdTokenCookieOnly는 모두 Mono<Void>(onNext 없이
+    // onComplete)를 반환하므로, flatMap 결과에 switchIfEmpty를 연결하면 AuthorizedClient 조회 성공
+    // 여부와 무관하게 switchIfEmpty가 항상 발화해 두 경로가 이중 실행된다(세션 ID 이중 회전 등).
+    // Optional로 존재 여부를 먼저 확정한 뒤 단일 경로만 선택하도록 한다.
     return authorizedClientService
         .loadAuthorizedClient(
             oauthToken.getAuthorizedClientRegistrationId(),
             authentication.getName())
-        .flatMap(authorizedClient ->
-            issueTokenCookiesAndSaveSession(
-                webFilterExchange, authentication, oidcUser, authorizedClient))
-        .switchIfEmpty(
-            Mono.defer(() -> {
+        .map(Optional::of)
+        .defaultIfEmpty(Optional.empty())
+        .flatMap(maybeAuthorizedClient -> maybeAuthorizedClient
+            .map(authorizedClient ->
+                issueTokenCookiesAndSaveSession(
+                    webFilterExchange, authentication, oidcUser, authorizedClient))
+            .orElseGet(() -> {
               log.warn("[OidcSuccessHandler] AuthorizedClient를 찾을 수 없음. 쿠키 없이 진행합니다.");
               return issueIdTokenCookieOnly(webFilterExchange, authentication, oidcUser);
             }));
@@ -131,27 +138,30 @@ public class OidcReactiveLoginSuccessHandler implements ServerAuthenticationSucc
         keycloakPrincipal.getAuthorities(),
         ((OAuth2AuthenticationToken) authentication).getAuthorizedClientRegistrationId());
 
-    // 세션에 Refresh Token / sid / principalName 저장
+    // 보안 Advisory 2: 세션 고정 보호 — 인증 상태(Refresh Token/Principal Name/sid) 저장 전에
+    // 반드시 changeSessionId()로 세션 ID를 회전한다. OAuth2 authorization request 처리 중 생성됐을 수 있는
+    // 인증 전 세션 ID가 로그인 후에도 그대로 유지되는 것을 방지한다.
     return exchange.getSession()
-        .flatMap(session -> {
-          // Refresh Token 저장
-          if (authorizedClient.getRefreshToken() != null) {
-            sessionManager.saveRefreshToken(session, authorizedClient.getRefreshToken().getTokenValue());
-            log.debug("[OidcSuccessHandler] Refresh Token 세션 저장 완료.");
-          }
+        .flatMap(session -> session.changeSessionId()
+            .then(Mono.defer(() -> {
+              // Refresh Token 저장
+              if (authorizedClient.getRefreshToken() != null) {
+                sessionManager.saveRefreshToken(session, authorizedClient.getRefreshToken().getTokenValue());
+                log.debug("[OidcSuccessHandler] Refresh Token 세션 저장 완료.");
+              }
 
-          // Principal Name 저장 (FindByIndexNameSessionRepository 호환 — Back-Channel 로그아웃 인덱스)
-          sessionManager.savePrincipalName(session, keycloakPrincipal.getName());
+              // Principal Name 저장 (FindByIndexNameSessionRepository 호환 — Back-Channel 로그아웃 인덱스)
+              sessionManager.savePrincipalName(session, keycloakPrincipal.getName());
 
-          // Keycloak Session ID (sid 클레임) 저장
-          String keycloakSid = oidcUser.getIdToken().getClaimAsString("sid");
-          if (keycloakSid != null) {
-            sessionManager.saveKeycloakSessionId(session, keycloakSid);
-            log.debug("[OidcSuccessHandler] Keycloak SID 세션 저장 완료: {}", keycloakSid);
-          }
+              // Keycloak Session ID (sid 클레임) 저장
+              String keycloakSid = oidcUser.getIdToken().getClaimAsString("sid");
+              if (keycloakSid != null) {
+                sessionManager.saveKeycloakSessionId(session, keycloakSid);
+                log.debug("[OidcSuccessHandler] Keycloak SID 세션 저장 완료: {}", keycloakSid);
+              }
 
-          return session.save();
-        })
+              return session.save();
+            })))
         .then(redirectHandler.onAuthenticationSuccess(webFilterExchange, newToken));
   }
 
@@ -176,15 +186,18 @@ public class OidcReactiveLoginSuccessHandler implements ServerAuthenticationSucc
         keycloakPrincipal.getAuthorities(),
         ((OAuth2AuthenticationToken) authentication).getAuthorizedClientRegistrationId());
 
+    // 보안 Advisory 2: 세션 고정 보호 — ID Token만 발급되는 경로도 동일하게 인증 상태 저장 전
+    // changeSessionId()로 세션 ID를 회전한다.
     return exchange.getSession()
-        .flatMap(session -> {
-          sessionManager.savePrincipalName(session, keycloakPrincipal.getName());
-          String keycloakSid = oidcUser.getIdToken().getClaimAsString("sid");
-          if (keycloakSid != null) {
-            sessionManager.saveKeycloakSessionId(session, keycloakSid);
-          }
-          return session.save();
-        })
+        .flatMap(session -> session.changeSessionId()
+            .then(Mono.defer(() -> {
+              sessionManager.savePrincipalName(session, keycloakPrincipal.getName());
+              String keycloakSid = oidcUser.getIdToken().getClaimAsString("sid");
+              if (keycloakSid != null) {
+                sessionManager.saveKeycloakSessionId(session, keycloakSid);
+              }
+              return session.save();
+            })))
         .then(redirectHandler.onAuthenticationSuccess(webFilterExchange, newToken));
   }
 
