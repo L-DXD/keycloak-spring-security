@@ -43,7 +43,9 @@ import org.springframework.security.config.annotation.method.configuration.Enabl
 import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2Error;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtClaimValidator;
 import org.springframework.security.oauth2.jwt.JwtValidators;
@@ -427,8 +429,16 @@ public class KeycloakWebFluxAutoConfiguration {
      * 빈으로 유지합니다 — 조건을 타입({@code ReactiveJwtDecoder.class})이 아닌 이 빈의 이름으로 좁혀,
      * 두 빈이 서로의 {@code @ConditionalOnMissingBean}에 의해 의도치 않게 대체되지 않도록 합니다.</p>
      *
+     * <p><b>보안 Advisory 8 대응 (CWE-347/863):</b> 조건이 {@code ReactiveJwtDecoder.class} 타입이
+     * 아니라 이 빈의 <b>이름</b>이므로, 소비 애플리케이션이 별도의 {@code ReactiveJwtDecoder}를
+     * 등록해도(무관한 issuer/aud/resource-server용이라도) 이 전용 decoder는 항상 생성되며 대체되지
+     * 않습니다. 또한 client-id가 비어있으면 aud 검증을 건너뛰지 않고 기동 자체를 실패시키며,
+     * {@code iat}/{@code exp} 클레임이 아예 없는 logout_token도 거부합니다
+     * ({@link org.springframework.security.oauth2.jwt.JwtTimestampValidator}는 두 클레임이
+     * "존재할 때만" 만료 여부를 검사하므로, 클레임 부재 자체는 별도로 강제해야 합니다).</p>
+     *
      * @param issuerUri  OIDC issuer URI (JWKS 엔드포인트 자동 검색)
-     * @param clientId   audience 검증에 사용할 우리 client-id
+     * @param clientId   audience 검증에 사용할 우리 client-id (필수 — 비어있으면 기동 실패)
      */
     @Bean("keycloakBackChannelJwtDecoder")
     @ConditionalOnMissingBean(name = "keycloakBackChannelJwtDecoder")
@@ -446,6 +456,17 @@ public class KeycloakWebFluxAutoConfiguration {
                 + "spring.security.oauth2.resourceserver.jwt.issuer-uri 또는 "
                 + "spring.security.oauth2.client.provider.keycloak.issuer-uri를 설정하세요.");
       }
+      if (clientId == null || clientId.isBlank()) {
+        // 보안 Advisory 8: client-id 없이는 logout_token의 aud(audience)를 검증할 수 없어,
+        // 다른 클라이언트/이슈어용 logout_token으로도 강제 로그아웃될 수 있다(CWE-347/863).
+        // 과거에는 이 경우 issuer 검증만 수행하고 경고만 남긴 채 기동을 계속했으나,
+        // aud 미검증 상태로 조용히 기동을 허용하지 않고 즉시 실패시킨다.
+        throw new IllegalStateException(
+            "[Advisory 8] Back-Channel 로그아웃 logout_token의 aud(audience) 검증을 위한 client-id가 "
+                + "설정되지 않았습니다. spring.security.oauth2.client.registration.keycloak.client-id를 "
+                + "설정하세요. (aud 미검증 상태로는 다른 클라이언트/이슈어용 logout_token으로도 "
+                + "강제 로그아웃될 수 있어 기동을 허용하지 않습니다)");
+      }
 
       // NimbusReactiveJwtDecoder로 래핑하여 커스텀 validator 조합 가능하게 함
       NimbusReactiveJwtDecoder decoder =
@@ -453,36 +474,76 @@ public class KeycloakWebFluxAutoConfiguration {
 
       // issuer 기본 validator + audience validator 결합 (C-1 aud 검증)
       OAuth2TokenValidator<Jwt> issuerValidator = JwtValidators.createDefaultWithIssuer(issuerUri);
+      // logout_token의 aud 클레임에 우리 client-id가 포함되어야 함
+      OAuth2TokenValidator<Jwt> audienceValidator =
+          new JwtClaimValidator<java.util.List<String>>(
+              "aud", aud -> aud != null && aud.contains(clientId));
+      // 보안 Advisory 8: iat/exp 클레임 자체의 존재를 강제한다. JwtTimestampValidator는 두 클레임이
+      // "존재할 때만" 만료/nbf 여부를 검사하므로, exp/iat이 아예 없는 logout_token은 그대로
+      // 통과시킨다 — 이를 명시적으로 거부한다.
+      OAuth2TokenValidator<Jwt> requiredClaimsValidator = jwt -> {
+        List<OAuth2Error> errors = new ArrayList<>();
+        if (jwt.getIssuedAt() == null) {
+          errors.add(new OAuth2Error("invalid_token", "logout_token에 필수 클레임 iat가 없습니다.", null));
+        }
+        if (jwt.getExpiresAt() == null) {
+          errors.add(new OAuth2Error("invalid_token", "logout_token에 필수 클레임 exp가 없습니다.", null));
+        }
+        return errors.isEmpty()
+            ? OAuth2TokenValidatorResult.success()
+            : OAuth2TokenValidatorResult.failure(errors);
+      };
 
-      if (clientId != null && !clientId.isBlank()) {
-        // logout_token의 aud 클레임에 우리 client-id가 포함되어야 함
-        OAuth2TokenValidator<Jwt> audienceValidator =
-            new JwtClaimValidator<java.util.List<String>>(
-                "aud", aud -> aud != null && aud.contains(clientId));
-        decoder.setJwtValidator(
-            new DelegatingOAuth2TokenValidator<>(issuerValidator, audienceValidator));
-        log.info(
-            "핵심 Bean을 등록합니다: [ReactiveJwtDecoder] (Back-Channel 서명+iss+aud 검증, issuer={}, clientId={})",
-            issuerUri, clientId);
-      } else {
-        // client-id 미설정 시 issuer 검증만 (aud 검증 스킵, 경고 출력)
-        decoder.setJwtValidator(issuerValidator);
-        log.warn(
-            "핵심 Bean을 등록합니다: [ReactiveJwtDecoder] (Back-Channel 서명+iss 검증만, aud 미검증 — "
-                + "spring.security.oauth2.client.registration.keycloak.client-id 설정 권장)");
-      }
+      decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
+          issuerValidator, audienceValidator, requiredClaimsValidator));
+      log.info(
+          "핵심 Bean을 등록합니다: [ReactiveJwtDecoder] "
+              + "(Back-Channel 서명+iss+aud+iat/exp 필수 검증, issuer={}, clientId={})",
+          issuerUri, clientId);
 
       return decoder;
     }
 
+    /**
+     * <p><b>보안 Advisory 8 대응:</b> {@code jwtDecoder}는 {@link Qualifier}로 명시된
+     * {@code keycloakBackChannelJwtDecoder}만 주입받습니다(타입 기반 주입 시 무관한
+     * {@code ReactiveJwtDecoder} 빈으로 대체될 수 있었던 문제 해소). 여기서 더 나아가, 이 decoder가
+     * (이름 기반 override 등으로) 실제로는 aud/iss를 검증하지 않더라도 핸들러 자신이 예상
+     * issuer/client-id를 <b>독립적으로 다시 강제</b>하도록 설정합니다 — 심층 방어.</p>
+     */
     @Bean
     @ConditionalOnMissingBean(ReactiveOidcBackChannelLogoutHandler.class)
     @SuppressWarnings("unchecked")
     public ReactiveOidcBackChannelLogoutHandler reactiveOidcBackChannelLogoutHandler(
         ReactiveFindByIndexNameSessionRepository<?> sessionRepository,
-        @Qualifier("keycloakBackChannelJwtDecoder") ReactiveJwtDecoder jwtDecoder) {
-      log.info("핵심 Bean을 등록합니다: [ReactiveOidcBackChannelLogoutHandler] (서명 검증 활성)");
-      return new ReactiveOidcBackChannelLogoutHandler(sessionRepository, jwtDecoder);
+        @Qualifier("keycloakBackChannelJwtDecoder") ReactiveJwtDecoder jwtDecoder,
+        @org.springframework.beans.factory.annotation.Value(
+            "${spring.security.oauth2.resourceserver.jwt.issuer-uri:"
+                + "${spring.security.oauth2.client.provider.keycloak.issuer-uri:}}")
+        String issuerUri,
+        @org.springframework.beans.factory.annotation.Value(
+            "${spring.security.oauth2.client.registration.keycloak.client-id:}")
+        String clientId) {
+      if (issuerUri == null || issuerUri.isBlank()) {
+        throw new IllegalStateException(
+            "[Advisory 8] Back-Channel 로그아웃 핸들러의 독립 issuer 강제를 위한 issuer-uri가 "
+                + "설정되지 않았습니다. spring.security.oauth2.resourceserver.jwt.issuer-uri 또는 "
+                + "spring.security.oauth2.client.provider.keycloak.issuer-uri를 설정하세요.");
+      }
+      if (clientId == null || clientId.isBlank()) {
+        throw new IllegalStateException(
+            "[Advisory 8] Back-Channel 로그아웃 핸들러의 독립 audience 강제를 위한 client-id가 "
+                + "설정되지 않았습니다. spring.security.oauth2.client.registration.keycloak.client-id를 "
+                + "설정하세요.");
+      }
+
+      log.info("핵심 Bean을 등록합니다: [ReactiveOidcBackChannelLogoutHandler] "
+          + "(서명 검증 활성, 독립 issuer/aud 강제 활성)");
+      ReactiveOidcBackChannelLogoutHandler handler =
+          new ReactiveOidcBackChannelLogoutHandler(sessionRepository, jwtDecoder);
+      handler.setExpectedIssuer(issuerUri);
+      handler.setExpectedAudience(clientId);
+      return handler;
     }
 
     @Bean
