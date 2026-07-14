@@ -49,4 +49,40 @@ public class KeycloakRoleMappingProperties {
      * {@code <clientRolePrefix><정규화된 clientId>_<역할명>} 형태입니다.
      */
     private String clientRolePrefix = "ROLE_CLIENT_";
+
+    /**
+     * 오설정으로 인한 Advisory 7(CWE-863) 재현을 막기 위한 기동 시 검증입니다.
+     *
+     * <p>{@link RoleMappingMode#SEPARATE_NAMESPACE}(기본값)에서 {@code realmRolePrefix}와
+     * {@code clientRolePrefix}가 공백이거나 서로 동일하면 realm 역할과 client 역할이 결국 같은
+     * 접두사로 귀결되어 이 클래스가 존재하는 이유(네임스페이스 분리)가 무력화됩니다. client 권한은
+     * 통상 clientId 세그먼트가 추가로 붙어 대부분의 경우 우연히 구분되지만, "동일 접두사 + 겹치는
+     * 역할명" 조합에서는 여전히 충돌할 수 있으므로 이를 조용히 허용하지 않고 기동 실패로 즉시
+     * 드러냅니다.</p>
+     *
+     * @throws IllegalStateException 접두사가 공백이거나 서로 동일한 경우
+     */
+    public void validate() {
+        if (mode != RoleMappingMode.SEPARATE_NAMESPACE) {
+            return;
+        }
+
+        boolean realmBlank = realmRolePrefix == null || realmRolePrefix.isBlank();
+        boolean clientBlank = clientRolePrefix == null || clientRolePrefix.isBlank();
+        if (realmBlank || clientBlank) {
+            throw new IllegalStateException(
+                "keycloak.security.role-mapping: mode=SEPARATE_NAMESPACE에서는 realm-role-prefix/"
+                    + "client-role-prefix를 공백으로 둘 수 없습니다 (realmRolePrefix=" + realmRolePrefix
+                    + ", clientRolePrefix=" + clientRolePrefix + "). 접두사가 없으면 realm 역할과 "
+                    + "client 역할의 네임스페이스가 분리되지 않아 Advisory 7(CWE-863)이 재현됩니다.");
+        }
+
+        if (realmRolePrefix.equals(clientRolePrefix)) {
+            throw new IllegalStateException(
+                "keycloak.security.role-mapping: mode=SEPARATE_NAMESPACE에서 realm-role-prefix와 "
+                    + "client-role-prefix가 동일합니다 (\"" + realmRolePrefix + "\"). 동일 접두사와 "
+                    + "겹치는 역할명 조합에서 realm 역할과 client 역할을 구분할 수 없게 되어 "
+                    + "Advisory 7(CWE-863)이 재현될 수 있으므로 서로 다른 접두사를 설정하세요.");
+        }
+    }
 }

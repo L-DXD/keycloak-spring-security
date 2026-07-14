@@ -1,25 +1,6 @@
 {
   "properties": [
     {
-      "name": "keycloak.security.auto-filter-chain",
-      "type": "java.lang.Boolean",
-      "description": "Keycloak 기본 SecurityFilterChain 자동 등록 여부입니다. false로 설정하면 Keycloak 기본 체인이 등록되지 않으며, 사용자가 전체 SecurityFilterChain 구성을 직접 책임집니다.",
-      "sourceType": "com.ids.keycloak.security.config.KeycloakSecurityProperties",
-      "defaultValue": true
-    },
-    {
-      "name": "keycloak.security.matcher.include",
-      "type": "java.util.List<java.lang.String>",
-      "description": "Keycloak SecurityFilterChain이 담당할 포함 경로(Ant 패턴)입니다. 기본값은 전체 경로(/**)이며, 사용자가 더 구체적인 matcher를 가진 체인을 등록하면 그 경로는 사용자 체인이 담당합니다.",
-      "sourceType": "com.ids.keycloak.security.config.KeycloakMatcherProperties"
-    },
-    {
-      "name": "keycloak.security.matcher.exclude",
-      "type": "java.util.List<java.lang.String>",
-      "description": "Keycloak SecurityFilterChain에서 제외할 경로(Ant 패턴)입니다. 제외된 경로는 사용자가 등록한 다른 SecurityFilterChain이 담당합니다.",
-      "sourceType": "com.ids.keycloak.security.config.KeycloakMatcherProperties"
-    },
-    {
       "name": "keycloak.security.role-mapping.mode",
       "type": "com.ids.keycloak.security.config.RoleMappingMode",
       "description": "Realm/Client 역할 추출·네임스페이스 전략입니다. 기본값 SEPARATE_NAMESPACE는 realm 역할과 client 역할을 서로 다른 접두사로 분리해 CWE-863(잘못된 인가)을 방지합니다(보안 Advisory 7).",
