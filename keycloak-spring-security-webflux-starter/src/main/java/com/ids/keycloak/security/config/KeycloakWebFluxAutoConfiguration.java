@@ -51,7 +51,6 @@ import org.springframework.security.oauth2.jwt.JwtClaimValidator;
 import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusReactiveJwtDecoder;
 import org.springframework.security.oauth2.jwt.ReactiveJwtDecoder;
-import org.springframework.security.oauth2.jwt.ReactiveJwtDecoders;
 import org.springframework.security.oauth2.client.InMemoryReactiveOAuth2AuthorizedClientService;
 import org.springframework.security.oauth2.client.ReactiveOAuth2AuthorizedClientService;
 import org.springframework.security.oauth2.client.registration.ReactiveClientRegistrationRepository;
@@ -419,7 +418,7 @@ public class KeycloakWebFluxAutoConfiguration {
     /**
      * Back-Channel logout_token 서명·aud·iss 검증용 {@link ReactiveJwtDecoder}를 등록합니다.
      *
-     * <p><b>C-1 aud 검증 추가:</b> {@code ReactiveJwtDecoders.fromIssuerLocation}은 iss·exp·nbf만 검증합니다.
+     * <p><b>C-1 aud 검증 추가:</b> issuer 검증만으로는 iss·exp·nbf만 검증됩니다.
      * audience 미검증 시 같은 Realm의 다른 클라이언트용 logout_token을 수용할 수 있으므로
      * {@link JwtClaimValidator}로 {@code aud} 클레임에 우리 client-id 포함 여부를 추가 검증합니다.
      * {@link DelegatingOAuth2TokenValidator}로 기존 issuer 검증과 결합합니다.</p>
@@ -436,6 +435,18 @@ public class KeycloakWebFluxAutoConfiguration {
      * {@code iat}/{@code exp} 클레임이 아예 없는 logout_token도 거부합니다
      * ({@link org.springframework.security.oauth2.jwt.JwtTimestampValidator}는 두 클레임이
      * "존재할 때만" 만료 여부를 검사하므로, 클레임 부재 자체는 별도로 강제해야 합니다).</p>
+     *
+     * <p><b>code-review Medium 1 대응 (기동 블로킹 discovery 비대칭 해소):</b> 과거에는
+     * {@code ReactiveJwtDecoders.fromIssuerLocation(issuerUri)}로 decoder를 생성했는데, 이는
+     * 애플리케이션 기동 시점에 OIDC discovery 문서({@code .well-known/openid-configuration})를
+     * <b>블로킹으로</b> 조회합니다 — 같은 클래스의 OIDC decoder({@code keycloakOidcReactiveJwtDecoder},
+     * {@code withJwkSetUri} 기반 지연 로딩)와 달리 Keycloak이 기동 시점에 일시적으로 응답 불가면 이
+     * 애플리케이션 자체의 기동이 실패하는 비대칭이 있었다. 이제 OIDC decoder와 동일하게
+     * {@link KeycloakIssuerUriResolver#resolveJwkSetUri(String)}로 JWKS URI를 계산해
+     * {@code NimbusReactiveJwtDecoder.withJwkSetUri(...)}로 생성한다 — JWKS는 최초
+     * {@code decode()} 호출 시점에 지연 조회되므로 기동이 Keycloak 도달성에 결합되지 않는다.
+     * iss/aud/iat/exp 검증은 아래에서 명시적으로 {@code setJwtValidator}로 재구성하므로 이 전환은
+     * 검증 강도에 영향을 주지 않는다.</p>
      *
      * @param issuerUri  OIDC issuer URI (JWKS 엔드포인트 자동 검색)
      * @param clientId   audience 검증에 사용할 우리 client-id (필수 — 비어있으면 기동 실패)
@@ -468,9 +479,11 @@ public class KeycloakWebFluxAutoConfiguration {
                 + "강제 로그아웃될 수 있어 기동을 허용하지 않습니다)");
       }
 
-      // NimbusReactiveJwtDecoder로 래핑하여 커스텀 validator 조합 가능하게 함
-      NimbusReactiveJwtDecoder decoder =
-          (NimbusReactiveJwtDecoder) ReactiveJwtDecoders.fromIssuerLocation(issuerUri);
+      // code-review Medium 1: withJwkSetUri로 지연 로딩(JWKS는 최초 decode() 호출 시점에 조회) —
+      // OIDC decoder(keycloakOidcReactiveJwtDecoder)와 동일한 방식으로 통일해 기동 시 블로킹 discovery
+      // 비대칭을 해소한다. issuer/aud 검증은 아래에서 명시적으로 결합하므로 회귀 없음.
+      String jwkSetUri = KeycloakIssuerUriResolver.resolveJwkSetUri(issuerUri);
+      NimbusReactiveJwtDecoder decoder = NimbusReactiveJwtDecoder.withJwkSetUri(jwkSetUri).build();
 
       // issuer 기본 validator + audience validator 결합 (C-1 aud 검증)
       OAuth2TokenValidator<Jwt> issuerValidator = JwtValidators.createDefaultWithIssuer(issuerUri);
@@ -513,7 +526,6 @@ public class KeycloakWebFluxAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(ReactiveOidcBackChannelLogoutHandler.class)
-    @SuppressWarnings("unchecked")
     public ReactiveOidcBackChannelLogoutHandler reactiveOidcBackChannelLogoutHandler(
         ReactiveFindByIndexNameSessionRepository<?> sessionRepository,
         @Qualifier("keycloakBackChannelJwtDecoder") ReactiveJwtDecoder jwtDecoder,

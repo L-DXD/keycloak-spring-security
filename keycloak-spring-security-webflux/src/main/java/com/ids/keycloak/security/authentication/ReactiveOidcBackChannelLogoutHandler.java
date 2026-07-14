@@ -3,9 +3,9 @@ package com.ids.keycloak.security.authentication;
 import com.ids.keycloak.security.model.KeycloakLogoutToken;
 import com.ids.keycloak.security.session.ReactiveSessionManager;
 import com.ids.keycloak.security.util.LogMaskingUtil;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
@@ -79,6 +79,14 @@ public class ReactiveOidcBackChannelLogoutHandler implements ServerLogoutHandler
    */
   private volatile String expectedIssuer;
   private volatile String expectedAudience;
+
+  /**
+   * code-review Low 1: 수동 배선 시 {@link #expectedIssuer}/{@link #expectedAudience}가 설정되지
+   * 않아 심층 방어가 조용히 비활성 상태로 동작하는 것을 운영자가 인지할 수 있도록, 첫 logout 처리
+   * 시점에 1회만 WARN을 남기기 위한 플래그입니다(자동 배선 시에는 두 값이 항상 주입되므로 로깅되지
+   * 않습니다).
+   */
+  private final AtomicBoolean deepDefenseInactiveWarningLogged = new AtomicBoolean(false);
 
   /**
    * 서명 검증용 {@link ReactiveJwtDecoder}를 주입받는 생성자입니다.
@@ -178,6 +186,9 @@ public class ReactiveOidcBackChannelLogoutHandler implements ServerLogoutHandler
     // 보안 Advisory 8: 주입된 jwtDecoder가 (재정의 등으로) iss/aud를 검증하지 않더라도,
     // 이 핸들러가 독립적으로 예상 issuer/audience를 다시 강제한다 (심층 방어, C-1과는 별개 계층).
     String expIssuer = this.expectedIssuer;
+    String expAudience = this.expectedAudience;
+    warnIfDeepDefenseInactive(expIssuer, expAudience);
+
     if (expIssuer != null && !expIssuer.isBlank()) {
       String tokenIssuer = jwt.getClaimAsString("iss");
       if (!expIssuer.equals(tokenIssuer)) {
@@ -186,7 +197,6 @@ public class ReactiveOidcBackChannelLogoutHandler implements ServerLogoutHandler
       }
     }
 
-    String expAudience = this.expectedAudience;
     if (expAudience != null && !expAudience.isBlank()) {
       List<String> audience = jwt.getAudience();
       if (audience == null || !audience.contains(expAudience)) {
@@ -230,6 +240,25 @@ public class ReactiveOidcBackChannelLogoutHandler implements ServerLogoutHandler
           log.error("[BackChannelLogoutHandler] 세션 무효화 중 오류: {}", e.getMessage(), e);
           return respondBadRequest(exchange, "Session revocation failed");
         });
+  }
+
+  /**
+   * code-review Low 1: {@code expectedIssuer}/{@code expectedAudience}가 (하나라도) 설정되지 않아
+   * 심층 방어 재검증이 부분적으로 또는 전부 비활성 상태로 동작할 때, 최초 logout 처리 1회에 한해
+   * WARN을 남깁니다. 자동 배선(오토컨피규레이션) 시에는 두 값이 항상 함께 주입되므로 호출되지 않고,
+   * 수동 배선 시 setter를 호출하지 않은 경우에만 관측됩니다.
+   */
+  private void warnIfDeepDefenseInactive(String expIssuer, String expAudience) {
+    boolean issuerInactive = expIssuer == null || expIssuer.isBlank();
+    boolean audienceInactive = expAudience == null || expAudience.isBlank();
+    if ((issuerInactive || audienceInactive)
+        && deepDefenseInactiveWarningLogged.compareAndSet(false, true)) {
+      log.warn("[BackChannelLogoutHandler] 심층방어 재검증이 비활성 상태입니다 "
+              + "(issuer 재검증={}, audience 재검증={}). 수동 배선 시 setExpectedIssuer()/"
+              + "setExpectedAudience() 호출을 권장합니다. (jwtDecoder 자체의 iss/aud 검증은 "
+              + "이 설정과 무관하게 정상 동작합니다)",
+          issuerInactive ? "비활성" : "활성", audienceInactive ? "비활성" : "활성");
+    }
   }
 
   /**
