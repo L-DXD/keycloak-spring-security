@@ -115,6 +115,7 @@ MdcRequestFilter (traceId 등 MDC)
 | `authentication.authorization-request.acr-values` | (없음) | OIDC authorize 요청의 `acr_values` (LoA step-up). 예: `loa2` |
 | `authentication.authorization-request.max-age` | (없음) | `max_age`(초). 마지막 인증 후 경과 시 재인증. 예: `1800` |
 | `authentication.authorization-request.prompt` | (없음) | `prompt`. `login`(강제 재인증)/`consent`/`none`/`select_account` |
+| `authentication.issuer-uri` | (없음) | OIDC ID/Access Token 서명 검증용 issuer(`iss`) 명시 지정. 미설정 시 표준 Spring Boot `spring.security.oauth2.resourceserver.jwt.issuer-uri`/`...client.provider.keycloak.issuer-uri` → `base-url` 파생 순으로 해석(보안 Advisory 1) |
 
 ### 3.2 인가 (`authorization`)
 | 키 | 기본값 | 설명 |
@@ -126,6 +127,8 @@ MdcRequestFilter (traceId 등 MDC)
 |----|--------|------|
 | `session.store-type` | `MEMORY` | `MEMORY` 또는 `REDIS` |
 | `session.timeout` | `30m` | 세션 만료 시간 |
+| `session.max-sessions` | `10000` | (`MEMORY` 전용) 동시 보유 가능한 최대 세션 수. 상한 도달 시 신규 세션은 fail-closed(생성 거부), 기존 세션은 영향 없음(보안 Advisory 6) |
+| `session.cleanup-interval` | `5m` | (`MEMORY` 전용) 만료 세션을 스캔해 제거하는 정리 스케줄 주기(전용 데몬 스레드) |
 
 ### 3.4 쿠키 (`cookie`)
 | 키 | 기본값 | 설명 |
@@ -171,6 +174,7 @@ MdcRequestFilter (traceId 등 MDC)
 | `rate-limit.block-duration-seconds` | `300` | 차단 지속(초) |
 | `rate-limit.key-strategy` | `IP_AND_USERNAME` | `IP`/`USERNAME`/`IP_AND_USERNAME` |
 | `rate-limit.include-basic-auth` | `true` | Basic Auth에도 적용 |
+| `rate-limit.max-tracked-keys` | `100000` | 인메모리 rate limiter가 동시에 추적할 최대 키(IP/username) 수. 상한 도달 시 신규 키는 fail-closed(즉시 차단)로 메모리 상한 보장(보안 Advisory 2) |
 
 ### 3.10 로깅/MDC (`logging`) — v1.6.0/1.7.0
 | 키 | 기본값 | 설명 |
@@ -195,6 +199,17 @@ MdcRequestFilter (traceId 등 MDC)
 | `matcher.include` | `[/**]` | Keycloak 체인 담당 경로 |
 | `matcher.exclude` | `[]` | 제외 경로(다른 체인이 담당) |
 
+### 3.12 Role 매핑 (`role-mapping`) — 보안 Advisory 7
+Keycloak Realm/Client 역할을 Spring `GrantedAuthority`로 매핑하는 방식입니다.
+
+| 키 | 기본값 | 설명 |
+|----|--------|------|
+| `role-mapping.mode` | `SEPARATE_NAMESPACE` | `REALM_ONLY` / `CLIENT_ONLY` / `SEPARATE_NAMESPACE` / `LEGACY_MERGED` |
+| `role-mapping.realm-role-prefix` | `ROLE_REALM_` | `SEPARATE_NAMESPACE`일 때 Realm 역할 접두사 |
+| `role-mapping.client-role-prefix` | `ROLE_CLIENT_` | `SEPARATE_NAMESPACE`일 때 Client 역할 접두사. 실제 권한은 `<접두사><정규화된 clientId>_<역할명>` |
+
+`SEPARATE_NAMESPACE`(기본값)에서 `realm-role-prefix`/`client-role-prefix`가 공백이거나 서로 같으면 기동이 실패합니다(Advisory 7 재현 방지 가드). 자세한 마이그레이션은 [4.10](#410-role-매핑-realmclient-역할-네임스페이스-분리)을 참고하세요.
+
 ---
 
 ## 4. 기능별 가이드
@@ -209,8 +224,10 @@ keycloak:
     session:
       store-type: redis      # 기본 memory. redis 시 위 의존성 추가 필요
       timeout: 30m
+      max-sessions: 10000       # memory 전용, 보안 Advisory 6
+      cleanup-interval: 5m      # memory 전용, 보안 Advisory 6
 ```
-`memory`는 단일 인스턴스 전제. 다중 인스턴스(HA)는 `redis` 권장.
+`memory`는 단일 인스턴스 전제. 다중 인스턴스(HA)는 `redis` 권장. `memory` 저장소는 `max-sessions` 상한과 `cleanup-interval` 만료 정리 스케줄로 무한정 세션 누적(메모리 고갈)을 방지합니다(보안 Advisory 6) — 인터넷에 노출되는 운영 환경에서는 `redis` 전환 + OIDC 로그인 개시 엔드포인트 rate limit을 함께 권장합니다.
 
 ### 4.3 Bearer Token (API)
 ```yaml
@@ -247,6 +264,8 @@ keycloak:
 
 ### 4.7 MDC 로깅 + PII 마스킹 (v1.6.0/1.7.0)
 모든 요청에 `traceId` 등이 MDC로 자동 주입되고 응답 `X-Request-Id`로 회신됩니다. query/userAgent는 **PII 마스킹**(이메일/폰/주민/카드/Bearer)이 기본 적용됩니다. 마스킹 교체/해제는 [5. 확장점](#5-확장점) 참고. 자세한 내용은 [13](13-MDC-로깅-사내표준-위임.md)/[14](14-MDC-로깅-응답메트릭-제외경로.md).
+
+Back-Channel 로그아웃 처리 로그는 `logout_token` 원문을 기록하지 않으며 `sub`/`sid`/`jti` 등 식별자는 모든 로그 레벨에서 마스킹됩니다(보안 Advisory 5). 처리 실패 시 HTTP 응답에도 상세 예외 대신 고정 메시지만 반환되고, 상세는 로그로만 확인할 수 있습니다.
 
 ### 4.8 SecurityFilterChain 공존
 `/actuator` 등 별도 체인을 추가해도 Keycloak 체인이 함께 동작합니다. 경로를 나누려면:
@@ -294,6 +313,31 @@ OAuth2AuthorizationRequestResolver authorizationRequestResolver(ClientRegistrati
 > ⚠️ 커스텀 빈을 등록할 때 baseUri는 `/oauth2/authorization`을 유지해야 로그인 진입 경로가 깨지지 않습니다.
 > ⚠️ `prompt=none` + `max_age`를 함께 쓰고 재인증이 필요하면 Keycloak이 `login_required` 에러를 반환합니다(정상 동작).
 
+### 4.10 Role 매핑 (Realm/Client 역할 네임스페이스 분리)
+
+**보안 Advisory 7(CWE-863) — breaking change.** 과거에는 `realm_access.roles`와 `resource_access.{clientId}.roles`가 모두 동일한 `ROLE_<역할명>`으로 변환되어, 동명의 realm 역할과 client 역할을 구분할 수 없었습니다(realm 역할 보유자가 client 전용 `hasRole(...)` 검사를 의도치 않게 통과할 수 있었음). 기본값이 아래처럼 네임스페이스를 분리하는 `SEPARATE_NAMESPACE`로 바뀌었습니다.
+
+```yaml
+# 예: client-id = target-client
+# realm_access.roles: ["ADMIN"]                   -> ROLE_REALM_ADMIN
+# resource_access.target-client.roles: ["ADMIN"]  -> ROLE_CLIENT_TARGET_CLIENT_ADMIN
+```
+
+**마이그레이션 체크리스트:**
+1. 코드에서 `hasRole("ADMIN")` / `hasAuthority("ROLE_ADMIN")` 등 역할 문자열을 참조하는 모든 지점을 찾는다(`@PreAuthorize`, `SecurityFilterChain`의 `authorizeHttpRequests`/`authorizeExchange`, `ReactiveAuthorizationManager` 구현 등).
+2. 그 역할이 **realm 역할**이면 `ROLE_REALM_ADMIN`으로, **client 역할**이면 `ROLE_CLIENT_<정규화된 CLIENT-ID>_ADMIN`으로 참조를 갱신한다(clientId는 영숫자가 아닌 문자가 `_`로 치환된 뒤 대문자화됨. 예: `target-client` → `TARGET_CLIENT`).
+3. 즉시 갱신이 어려우면 과도기적으로 아래처럼 과거 동작을 명시 적용할 수 있습니다(비권장, 마이그레이션 기간 한정 — CWE-863에 다시 노출됨):
+   ```yaml
+   keycloak:
+     security:
+       role-mapping:
+         mode: LEGACY_MERGED   # realm/client 역할 모두 ROLE_<역할명>으로 병합 (구분 불가)
+   ```
+4. `mode: SEPARATE_NAMESPACE`(기본값)를 유지하면서 접두사만 바꾸고 싶다면 `role-mapping.realm-role-prefix`/`client-role-prefix`를 설정합니다. 단, 두 값은 공백이거나 서로 같을 수 없습니다(기동 시 검증 실패).
+5. 단일 소스만 쓰는 경우 `REALM_ONLY`/`CLIENT_ONLY`로 전환하면 접두사 없이 기존 `ROLE_<역할명>` 형태를 그대로 유지할 수 있습니다(이름 충돌 자체가 없는 경우에만 안전).
+
+자세한 설정 항목은 [3.12](#312-role-매핑-role-mapping--보안-advisory-7) 참고.
+
 ---
 
 ## 5. 확장점
@@ -322,6 +366,7 @@ LoggingValueSanitizer loggingValueSanitizer() {
 
 | 버전 | 변경 | 주의 |
 |------|------|------|
+| **Unreleased** ⚠️ | **보안 강화 8건** — OIDC ID/Access Token 결합 검증(Advisory 1), 로그인 세션 고정 방지(Advisory 2), Rate Limit IP 판정 일원화(Advisory 2), Basic Auth CSRF 전면 면제 제거(Advisory 3), 백채널 로그아웃 로그 마스킹(Advisory 5), 인메모리 세션 저장소 용량 상한(Advisory 6), Realm/Client Role 네임스페이스 분리(Advisory 7), WebFlux 백채널 decoder 검증 강화(Advisory 8) | **Breaking 3건** — 아래 [마이그레이션](#마이그레이션-unreleased--보안-강화-8건-breaking) |
 | **1.10.2** | (버그픽스 #54) webflux 토큰 무효화(백채널 로그아웃 등) 후 보호 경로 접근 시 refresh 재발급 실패가 500 나던 문제 → 미인증 처리로 EntryPoint(로그인 리다이렉트/401) 경유 | breaking 없음 |
 | **1.10.1** | (버그픽스 #52) webflux/servlet AJAX 판정 통일 — 브라우저 `Accept: */*`를 JSON으로 오판하던 문제 수정(`ajax-returns-json=true` 시 브라우저 리다이렉트 정상화) | breaking 없음 |
 | **1.10.0** ⚠️ | **보안 강화** (보안검토 13건) — reactive 백채널 JWKS 서명+aud 검증, 쿠키 secure 기본 true, XFF 신뢰 프록시, servlet SameSite/토큰 no-store, PII 마스킹 확장(JWT/OAuth2), 인가 캐시·require-user-info 토글, Redis JSON 직렬화 | **Breaking 3건** — 아래 [마이그레이션](#마이그레이션-v190--v1100-breaking) |
@@ -333,6 +378,17 @@ LoggingValueSanitizer loggingValueSanitizer() {
 | **1.4.x** | Bearer/Basic 인가 지원, stateless 세션 분리 | — |
 
 상세: `docs/12`, `docs/13`, `docs/14`
+
+### 마이그레이션 (Unreleased — 보안 강화 8건, breaking)
+보안 검토(Advisory 1/2/3/5/6/7/8) 반영으로 **기본 동작 2가지가 변경**되고, **수동 배선(auto-filter-chain 미사용) 사용자에 한해** API 변경이 하나 있습니다.
+
+| # | 변경 | 영향 | 해제/대응 |
+|---|------|------|-----------|
+| 1 | Basic Auth `Authorization: Basic` 헤더 보유만으로 CSRF가 자동 면제되던 로직 제거 (Advisory 3, CWE-352) | `basic-auth.enabled=true` 상태에서 CSRF 면제에 의존하던 상태 변경 요청(POST/PUT/PATCH/DELETE)이 `403` | 해당 경로를 `keycloak.security.csrf.ignore-paths`에 명시 등록. 자세히는 [4.6](#46-csrf) |
+| 2 | Realm/Client Role 매핑 기본값이 `SEPARATE_NAMESPACE`로 변경 (Advisory 7, CWE-863) | `hasRole(...)`/`hasAuthority(...)`로 realm/client 역할을 구분 없이 검사하던 코드가 전부 거부됨(권한 문자열이 `ROLE_REALM_*`/`ROLE_CLIENT_<CLIENT>_*`로 분리) | 참조 갱신, 또는 과도기적으로 `keycloak.security.role-mapping.mode=LEGACY_MERGED`(비권장). 자세히는 [4.10](#410-role-매핑-realmclient-역할-네임스페이스-분리) |
+| 3 (수동 배선만 해당) | `KeycloakAuthenticationProvider`(servlet)/`KeycloakReactiveAuthenticationManager`(webflux) 생성자에 `JwtDecoder`/`ReactiveJwtDecoder` 파라미터 추가, reactive `createAuthenticatedToken` 반환 타입이 `Authentication`→`Mono<Authentication>`으로 변경 (Advisory 1) | `auto-filter-chain: false`로 컴포넌트를 직접 조립하던 코드가 컴파일 실패 | JwtDecoder 빈을 직접 구성해 생성자에 전달 → [WebFlux 수동 배선 가이드](15-WebFlux-수동배선-가이드.md) §2 예시 갱신본 참고. **Starter 자동 구성만 쓰는 경우 영향 없음** |
+
+그 외(회귀 없음, 기본값 변경 없이 강화됨): 로그인 세션 고정 방지(Advisory 2), Rate Limit IP 판정 `ClientIpResolver` 일원화 + `max-tracked-keys` 상한(Advisory 2), 백채널 로그아웃 로그 마스킹(Advisory 5), 인메모리 세션 저장소 `max-sessions`/`cleanup-interval` 상한(Advisory 6, 기본값 자체가 새로 생겼으나 충분히 크게 잡혀 있어 일반적인 트래픽에서는 영향 없음), WebFlux 백채널 decoder aud/iat/exp 검증 강화(Advisory 8).
 
 ### 마이그레이션 (v1.9.0 → v1.10.0) (breaking)
 보안 강화로 **기본 동작 3가지가 변경**됩니다. 기존 배포는 업그레이드 시 아래를 확인하세요.
@@ -360,6 +416,8 @@ LoggingValueSanitizer loggingValueSanitizer() {
 | 쿠키 설정 후 응답 500 (`No enum constant ...SameSite.lax`) | `cookie.same-site` 값을 대문자로 — `Lax`/`Strict`/`None` |
 | 인증은 성공하는데 역할 기반 인가가 전부 거부 | 권한이 **UserInfo**에서 추출됨 — Keycloak 역할(`realm_access`/`resource_access`)은 access token에만 있을 수 있음. role 매퍼 "Add to userinfo" 활성화 또는 access token 직접 파싱 → [수동 배선 가이드 함정 2](15-WebFlux-수동배선-가이드.md) |
 | (수동 배선) 로그인 성공 후 `AuthorizedClient를 찾을 수 없음` | `AuthenticatedPrincipalServerOAuth2AuthorizedClientRepository` 빈 등록 → [수동 배선 가이드 함정 4](15-WebFlux-수동배선-가이드.md) |
+| 업그레이드 후 `hasRole(...)`/`hasAuthority(...)` 인가가 갑자기 전부 거부 | Role 매핑 기본값이 `SEPARATE_NAMESPACE`로 변경(Advisory 7) — 권한이 `ROLE_REALM_*`/`ROLE_CLIENT_<CLIENT>_*`로 분리됨 → [4.10 마이그레이션](#410-role-매핑-realmclient-역할-네임스페이스-분리) |
+| (수동 배선) `new KeycloakReactiveAuthenticationManager(client, clientId)` 컴파일 에러 | 생성자에 `ReactiveJwtDecoder` 파라미터 추가(Advisory 1) → [수동 배선 가이드 §2](15-WebFlux-수동배선-가이드.md) |
 
 ---
 
