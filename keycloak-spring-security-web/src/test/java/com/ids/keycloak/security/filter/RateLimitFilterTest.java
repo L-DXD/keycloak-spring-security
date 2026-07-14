@@ -212,6 +212,68 @@ class RateLimitFilterTest {
         }
 
         @Test
+        void TOKEN_API_요청에서_400_invalid_grant_응답시_실패를_기록한다() throws Exception {
+            // Keycloak 토큰 엔드포인트는 invalid_grant(잘못된 자격증명)를 OAuth2 표준에 따라
+            // 400으로 응답한다. 이를 기록하지 않으면 /auth/token 브루트포스가 Rate Limit을
+            // 완전히 우회한다(Advisory 2 리뷰 신규 로직).
+            request.setRequestURI("/auth/token");
+            request.setRemoteAddr("192.168.1.1");
+            when(rateLimiter.isBlocked(anyString())).thenReturn(false);
+
+            doAnswer(invocation -> {
+                response.setStatus(400);
+                return null;
+            }).when(filterChain).doFilter(request, response);
+
+            filter.doFilterInternal(request, response, filterChain);
+
+            verify(rateLimiter).recordFailure("ip:192.168.1.1");
+        }
+
+        @Test
+        void trustedProxyCount가_1인_상태에서_TOKEN_API_400_응답시_ClientIpResolver로_해석된_IP로_실패를_기록한다()
+            throws Exception {
+            // 공격자가 통제 가능한 XFF 첫 값("10.0.0.5")이 아니라, 신뢰 프록시가 append한
+            // "172.16.0.1"(ClientIpResolver가 해석한 IP)로 실패가 기록되어야 한다.
+            filter.setTrustedProxyCount(1);
+            request.setRequestURI("/auth/token");
+            request.addHeader("X-Forwarded-For", "10.0.0.5, 172.16.0.1");
+            request.setRemoteAddr("172.16.0.1");
+            when(rateLimiter.isBlocked(anyString())).thenReturn(false);
+
+            doAnswer(invocation -> {
+                response.setStatus(400);
+                return null;
+            }).when(filterChain).doFilter(request, response);
+
+            filter.doFilterInternal(request, response, filterChain);
+
+            verify(rateLimiter).recordFailure("ip:172.16.0.1");
+            verify(rateLimiter, never()).recordFailure("ip:10.0.0.5");
+        }
+
+        @Test
+        void Basic_Auth_요청에서_400_응답은_실패로_기록하지_않는다() throws Exception {
+            // Basic Auth 경로의 400은 TOKEN_API 전용 예외 규칙 대상이 아니므로,
+            // 과다 카운트(false positive)를 방지하기 위해 기록되지 않아야 한다.
+            request.setRequestURI("/api/data");
+            request.setRemoteAddr("192.168.1.1");
+            String credentials = Base64.getEncoder()
+                .encodeToString("admin:pass".getBytes(StandardCharsets.UTF_8));
+            request.addHeader("Authorization", "Basic " + credentials);
+            when(rateLimiter.isBlocked(anyString())).thenReturn(false);
+
+            doAnswer(invocation -> {
+                response.setStatus(400);
+                return null;
+            }).when(filterChain).doFilter(request, response);
+
+            filter.doFilterInternal(request, response, filterChain);
+
+            verify(rateLimiter, never()).recordFailure(anyString());
+        }
+
+        @Test
         void IP_AND_USERNAME_전략에서_실패시_두_키_모두_기록한다() throws Exception {
             properties.setKeyStrategy(RateLimitKeyStrategy.IP_AND_USERNAME);
             filter = new RateLimitFilter(rateLimiter, properties, List.of("/auth/token"));
