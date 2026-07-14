@@ -85,6 +85,19 @@ class ReactiveOidcBackChannelLogoutHandlerTest {
   }
 
   /**
+   * 응답 상태 코드를 직접 검사해야 하는 테스트를 위해, 노출된 {@link MockServerWebExchange}를 생성합니다.
+   */
+  private MockServerWebExchange buildExchange() {
+    MockServerHttpRequest request = MockServerHttpRequest
+        .post("/logout/connect/back-channel/keycloak").build();
+    return MockServerWebExchange.from(request);
+  }
+
+  private WebFilterExchange webFilterExchange(MockServerWebExchange exchange) {
+    return new WebFilterExchange(exchange, chain -> Mono.empty());
+  }
+
+  /**
    * 유효한 back-channel logout JWT 클레임 맵을 생성합니다.
    */
   private Map<String, Object> buildLogoutTokenClaims(String sub, String sid) {
@@ -175,6 +188,23 @@ class ReactiveOidcBackChannelLogoutHandlerTest {
           .verifyComplete();
 
       verify(sessionRepository, never()).findByPrincipalName(anyString());
+    }
+
+    @Test
+    void aud_불일치_토큰은_검증_실패로_세션_삭제_없이_BadRequest_반환() {
+      // Given: audience 불일치 — 다른 클라이언트용 logout_token (decoder가 aud 검증에서 거부)
+      when(jwtDecoder.decode(LOGOUT_TOKEN_JWT))
+          .thenReturn(Mono.error(new JwtException("The aud claim is not valid")));
+
+      BackChannelLogoutAuthentication auth = new BackChannelLogoutAuthentication(LOGOUT_TOKEN_JWT);
+
+      MockServerWebExchange exchange = buildExchange();
+      // When & Then
+      StepVerifier.create(handler.logout(webFilterExchange(exchange), auth))
+          .verifyComplete();
+
+      verify(sessionRepository, never()).findByPrincipalName(anyString());
+      assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
     @Test
@@ -318,6 +348,25 @@ class ReactiveOidcBackChannelLogoutHandlerTest {
           .verifyComplete();
 
       verify(sessionRepository, never()).findByPrincipalName(anyString());
+    }
+
+    @Test
+    void sub와_sid_모두_없으면_세션_삭제_없이_BadRequest_응답() {
+      // events 클레임은 있으나 sub/sid가 모두 없는 토큰 (서명은 통과)
+      Map<String, Object> claims = buildLogoutTokenClaims(null, null);
+
+      Jwt jwtWithoutSubAndSid = buildJwt(claims);
+      when(jwtDecoder.decode(LOGOUT_TOKEN_JWT)).thenReturn(Mono.just(jwtWithoutSubAndSid));
+
+      BackChannelLogoutAuthentication auth = new BackChannelLogoutAuthentication(LOGOUT_TOKEN_JWT);
+
+      MockServerWebExchange exchange = buildExchange();
+      StepVerifier.create(handler.logout(webFilterExchange(exchange), auth))
+          .verifyComplete();
+
+      verify(sessionRepository, never()).findByPrincipalName(anyString());
+      verify(sessionRepository, never()).deleteById(anyString());
+      assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
     }
   }
 
@@ -496,6 +545,206 @@ class ReactiveOidcBackChannelLogoutHandlerTest {
       List<String> messages = formattedMessages();
       assertThat(messages).noneMatch(m -> m.contains(LOGOUT_TOKEN_JWT));
       assertThat(messages).noneMatch(m -> m.contains(SUBJECT));
+    }
+  }
+
+  // ==========================================================================
+  // 보안 Advisory 8: 핸들러 독립 iss/aud 재검증 (심층 방어)
+  // ==========================================================================
+
+  /**
+   * 보안 Advisory 8 대응 검증: 주입된 {@link ReactiveJwtDecoder}가 (이름 기반 override 등으로)
+   * 실제로는 iss/aud를 검증하지 않더라도, 핸들러 자신이 {@code expectedIssuer}/{@code expectedAudience}로
+   * 독립적으로 재검증한다. 이 시나리오를 흉내내기 위해 jwtDecoder mock은 항상 성공(서명 검증 통과)을
+   * 반환하고, JWT의 iss/aud 클레임만 조작한다.
+   */
+  @Nested
+  class Advisory8_핸들러_독립_재검증 {
+
+    private static final String EXPECTED_ISSUER = "http://keycloak/realms/expected";
+    private static final String EXPECTED_AUDIENCE = "expected-client-id";
+
+    /**
+     * events/sub/sid는 유효하되 iss/aud만 파라미터로 지정하는 JWT를 생성합니다.
+     */
+    private Jwt buildJwtWithIssuerAndAudience(String issuer, String audience) {
+      Map<String, Object> claims = new HashMap<>();
+      claims.put("iss", issuer);
+      if (audience != null) {
+        claims.put("aud", List.of(audience));
+      }
+      claims.put("sub", SUBJECT);
+      claims.put("sid", KEYCLOAK_SID);
+      Map<String, Object> events = new HashMap<>();
+      events.put("http://schemas.openid.net/event/backchannel-logout", new HashMap<>());
+      claims.put("events", events);
+      return buildJwt(claims);
+    }
+
+    @Test
+    void expectedIssuer_불일치시_decoder가_통과시켜도_세션삭제없이_BadRequest_반환() {
+      handler.setExpectedIssuer(EXPECTED_ISSUER);
+      handler.setExpectedAudience(EXPECTED_AUDIENCE);
+
+      // decoder 자체는 서명 검증만 통과(iss 불일치를 걸러내지 않는다고 가정)
+      Jwt jwtWithWrongIssuer = buildJwtWithIssuerAndAudience(
+          "http://attacker.example/realms/evil", EXPECTED_AUDIENCE);
+      when(jwtDecoder.decode(LOGOUT_TOKEN_JWT)).thenReturn(Mono.just(jwtWithWrongIssuer));
+
+      BackChannelLogoutAuthentication auth = new BackChannelLogoutAuthentication(LOGOUT_TOKEN_JWT);
+      MockServerWebExchange exchange = buildExchange();
+
+      StepVerifier.create(handler.logout(webFilterExchange(exchange), auth))
+          .verifyComplete();
+
+      verify(sessionRepository, never()).findByPrincipalName(anyString());
+      assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void expectedAudience_불일치시_decoder가_통과시켜도_세션삭제없이_BadRequest_반환() {
+      handler.setExpectedIssuer(EXPECTED_ISSUER);
+      handler.setExpectedAudience(EXPECTED_AUDIENCE);
+
+      // decoder 자체는 서명 검증만 통과(aud 불일치를 걸러내지 않는다고 가정)
+      Jwt jwtWithWrongAudience = buildJwtWithIssuerAndAudience(EXPECTED_ISSUER, "other-client-id");
+      when(jwtDecoder.decode(LOGOUT_TOKEN_JWT)).thenReturn(Mono.just(jwtWithWrongAudience));
+
+      BackChannelLogoutAuthentication auth = new BackChannelLogoutAuthentication(LOGOUT_TOKEN_JWT);
+      MockServerWebExchange exchange = buildExchange();
+
+      StepVerifier.create(handler.logout(webFilterExchange(exchange), auth))
+          .verifyComplete();
+
+      verify(sessionRepository, never()).findByPrincipalName(anyString());
+      assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void expectedIssuer_expectedAudience_모두_일치하면_정상_세션삭제_수행() {
+      handler.setExpectedIssuer(EXPECTED_ISSUER);
+      handler.setExpectedAudience(EXPECTED_AUDIENCE);
+
+      Jwt validJwt = buildJwtWithIssuerAndAudience(EXPECTED_ISSUER, EXPECTED_AUDIENCE);
+      when(jwtDecoder.decode(LOGOUT_TOKEN_JWT)).thenReturn(Mono.just(validJwt));
+
+      Session session = mockSessionWithSid(KEYCLOAK_SID);
+      Map<String, Session> sessions = Map.of(SPRING_SESSION_ID, session);
+      when(sessionRepository.findByPrincipalName(SUBJECT)).thenReturn(Mono.just(sessions));
+      when(sessionRepository.deleteById(SPRING_SESSION_ID)).thenReturn(Mono.empty());
+
+      BackChannelLogoutAuthentication auth = new BackChannelLogoutAuthentication(LOGOUT_TOKEN_JWT);
+      MockServerWebExchange exchange = buildExchange();
+
+      StepVerifier.create(handler.logout(webFilterExchange(exchange), auth))
+          .verifyComplete();
+
+      verify(sessionRepository).findByPrincipalName(SUBJECT);
+      verify(sessionRepository).deleteById(SPRING_SESSION_ID);
+      assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+  }
+
+  // ==========================================================================
+  // 보안 Advisory 8(code-review Low 1): 심층방어 비활성 WARN 1회 로깅
+  // ==========================================================================
+
+  /**
+   * {@code expectedIssuer}/{@code expectedAudience}를 설정하지 않은(수동 배선) 상태에서, 최초
+   * logout 처리 시점에만 심층방어 비활성 WARN이 1회 로깅되고 이후에는 재로깅되지 않음을 검증합니다.
+   */
+  @Nested
+  class Advisory8_심층방어_WARN_1회 {
+
+    private Logger handlerLogger;
+    private ListAppender<ILoggingEvent> logAppender;
+
+    private static final String DEEP_DEFENSE_WARNING_MARKER = "심층방어 재검증이 비활성 상태입니다";
+
+    @BeforeEach
+    void setUpLogCapture() {
+      handlerLogger = (Logger) LoggerFactory.getLogger(ReactiveOidcBackChannelLogoutHandler.class);
+      logAppender = new ListAppender<>();
+      logAppender.start();
+      handlerLogger.addAppender(logAppender);
+      handlerLogger.setLevel(Level.ALL);
+    }
+
+    @AfterEach
+    void tearDownLogCapture() {
+      handlerLogger.detachAppender(logAppender);
+      logAppender.stop();
+    }
+
+    private long deepDefenseWarningCount() {
+      return logAppender.list.stream()
+          .map(ILoggingEvent::getFormattedMessage)
+          .filter(m -> m.contains(DEEP_DEFENSE_WARNING_MARKER))
+          .count();
+    }
+
+    private void stubValidLogout() {
+      stubValidLogout(null);
+    }
+
+    /**
+     * @param audience non-null이면 claims에 aud 클레임을 추가한다
+     *                 (expectedAudience 설정 테스트에서 재검증을 통과시키기 위함)
+     */
+    private void stubValidLogout(String audience) {
+      Map<String, Object> claims = buildLogoutTokenClaims(SUBJECT, KEYCLOAK_SID);
+      if (audience != null) {
+        claims.put("aud", List.of(audience));
+      }
+      Jwt validJwt = buildJwt(claims);
+      when(jwtDecoder.decode(LOGOUT_TOKEN_JWT)).thenReturn(Mono.just(validJwt));
+
+      Session session = mockSessionWithSid(KEYCLOAK_SID);
+      Map<String, Session> sessions = Map.of(SPRING_SESSION_ID, session);
+      lenient().when(sessionRepository.findByPrincipalName(SUBJECT)).thenReturn(Mono.just(sessions));
+      lenient().when(sessionRepository.deleteById(SPRING_SESSION_ID)).thenReturn(Mono.empty());
+    }
+
+    @Test
+    void expectedIssuer_expectedAudience_미설정시_첫_처리에서만_WARN_1회_로깅() {
+      // handler는 @BeforeEach에서 expectedIssuer/expectedAudience 없이(수동 배선 기본값) 생성됨
+      stubValidLogout();
+      BackChannelLogoutAuthentication auth = new BackChannelLogoutAuthentication(LOGOUT_TOKEN_JWT);
+
+      // 1차 처리
+      StepVerifier.create(handler.logout(mockWebFilterExchange(), auth))
+          .verifyComplete();
+      assertThat(deepDefenseWarningCount())
+          .as("첫 logout 처리에서 심층방어 비활성 WARN이 1회 로깅되어야 한다")
+          .isEqualTo(1);
+
+      // 2차 처리 — 동일 handler 인스턴스로 재호출해도 WARN이 추가로 찍히지 않아야 한다
+      StepVerifier.create(handler.logout(mockWebFilterExchange(), auth))
+          .verifyComplete();
+      assertThat(deepDefenseWarningCount())
+          .as("두 번째 처리에서는 WARN이 추가로 로깅되지 않아야 한다(1회성)")
+          .isEqualTo(1);
+
+      // positive control: 세션 삭제 자체는 두 번 다 정상 수행됨(WARN과 무관)
+      verify(sessionRepository, org.mockito.Mockito.times(2)).findByPrincipalName(SUBJECT);
+    }
+
+    @Test
+    void expectedIssuer_expectedAudience_설정시에는_WARN이_로깅되지_않는다() {
+      handler.setExpectedIssuer("http://keycloak/realms/test");
+      handler.setExpectedAudience("expected-client-id");
+      stubValidLogout("expected-client-id");
+      BackChannelLogoutAuthentication auth = new BackChannelLogoutAuthentication(LOGOUT_TOKEN_JWT);
+
+      MockServerWebExchange exchange = buildExchange();
+      StepVerifier.create(handler.logout(webFilterExchange(exchange), auth))
+          .verifyComplete();
+
+      assertThat(deepDefenseWarningCount())
+          .as("자동 배선(오토컨피규레이션)과 동일하게 두 값이 모두 설정되면 WARN이 로깅되지 않아야 한다")
+          .isEqualTo(0);
+      // positive control: 재검증 자체는 통과하여 정상 처리된다
+      assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.OK);
     }
   }
 }
