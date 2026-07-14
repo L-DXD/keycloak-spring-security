@@ -8,6 +8,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -29,6 +30,9 @@ public class InMemoryRateLimiter implements RateLimiter {
   /** {@code maxTrackedKeys}를 지정하지 않는 하위 호환 생성자의 기본 상한. */
   private static final int DEFAULT_MAX_TRACKED_KEYS = 100_000;
 
+  /** 용량 상한 도달 경고 로그를 요약해서 남기는 주기(밀리초). 로그 폭주(2차 DoS) 방지용. */
+  private static final long CAPACITY_WARN_LOG_INTERVAL_MS = 60_000L;
+
   private final int maxRequests;
   private final long windowSeconds;
   private final long blockDurationSeconds;
@@ -36,6 +40,13 @@ public class InMemoryRateLimiter implements RateLimiter {
 
   private final Map<String, SlidingWindowCounter> counters = new ConcurrentHashMap<>();
   private final ScheduledExecutorService cleanupExecutor;
+
+  /** 용량 상한으로 인한 누적 차단(신규 키 거부) 횟수. 외부 메트릭 수집용으로 노출. */
+  private final AtomicLong capacityRejectionCount = new AtomicLong(0);
+  /** 마지막 요약 로그 이후 발생한 용량 상한 차단 횟수. */
+  private final AtomicLong intervalRejectionCount = new AtomicLong(0);
+  /** 마지막으로 용량 상한 경고 로그를 남긴 시각(epoch millis). */
+  private final AtomicLong lastCapacityWarnLogEpochMs = new AtomicLong(0);
 
   public InMemoryRateLimiter(int maxRequests, long windowSeconds, long blockDurationSeconds) {
     this(maxRequests, windowSeconds, blockDurationSeconds, DEFAULT_MAX_TRACKED_KEYS);
@@ -62,7 +73,7 @@ public class InMemoryRateLimiter implements RateLimiter {
     if (counter == null) {
       // 아직 추적되지 않은 키. 용량이 이미 상한이면 fail-closed로 차단.
       if (counters.size() >= maxTrackedKeys) {
-        log.warn("[RateLimiter] 카운터 맵 용량 상한({})에 도달하여 새 키를 차단 처리합니다.", maxTrackedKeys);
+        recordCapacitySaturated();
         return true;
       }
       return false;
@@ -78,8 +89,7 @@ public class InMemoryRateLimiter implements RateLimiter {
         return existing;
       }
       if (counters.size() >= maxTrackedKeys) {
-        log.warn("[RateLimiter] 카운터 맵 용량 상한({})에 도달하여 새 키({})를 추적하지 않습니다.",
-            maxTrackedKeys, k);
+        recordCapacitySaturated();
         return null;
       }
       return new SlidingWindowCounter(now);
@@ -87,6 +97,36 @@ public class InMemoryRateLimiter implements RateLimiter {
     if (counter != null) {
       counter.recordFailure(now);
     }
+  }
+
+  /**
+   * 용량 상한 도달로 인한 fail-closed 차단 발생을 기록합니다.
+   *
+   * <p>공격 볼륨만큼 매 요청마다 {@code warn} 로그가 찍히면 로그 자체가 2차 DoS 벡터가 되므로,
+   * 최초 발생 시 즉시 로그를 남기고 이후에는 {@link #CAPACITY_WARN_LOG_INTERVAL_MS} 주기로
+   * 요약만 기록합니다. 누적 발생 횟수는 {@link #getCapacityRejectionCount()}로 외부 메트릭
+   * 수집기에 노출할 수 있습니다.</p>
+   */
+  private void recordCapacitySaturated() {
+    capacityRejectionCount.incrementAndGet();
+    intervalRejectionCount.incrementAndGet();
+    long now = System.currentTimeMillis();
+    long last = lastCapacityWarnLogEpochMs.get();
+    if (now - last >= CAPACITY_WARN_LOG_INTERVAL_MS
+        && lastCapacityWarnLogEpochMs.compareAndSet(last, now)) {
+      long summarized = intervalRejectionCount.getAndSet(0);
+      log.warn("[RateLimiter] 카운터 맵 용량 상한({})에 도달하여 최근 {}초간 신규 키 {}회를 "
+              + "차단 처리했습니다(누적 {}회). 로그 폭주 방지를 위해 주기 요약만 기록합니다.",
+          maxTrackedKeys, CAPACITY_WARN_LOG_INTERVAL_MS / 1000, summarized,
+          capacityRejectionCount.get());
+    }
+  }
+
+  /**
+   * 용량 상한으로 인해 fail-closed 처리된 누적 횟수를 반환합니다(외부 메트릭 연동용).
+   */
+  public long getCapacityRejectionCount() {
+    return capacityRejectionCount.get();
   }
 
   @Override

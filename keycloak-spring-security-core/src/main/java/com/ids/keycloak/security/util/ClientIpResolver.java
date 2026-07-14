@@ -11,14 +11,19 @@ import lombok.extern.slf4j.Slf4j;
  * 배포 환경의 신뢰 프록시 수를 정확히 지정해야 합니다.
  * {@code trustedProxyCount=0}이면 XFF를 무시하고 TCP 연결 원격 주소를 사용합니다.</p>
  *
- * <h3>동작 방식</h3>
+ * <h3>동작 방식 (append 방식 XFF 기준, 예: nginx {@code $proxy_add_x_forwarded_for})</h3>
  * <pre>
  * X-Forwarded-For: client, proxy1, proxy2
- * 인덱스:                0       1       2  (좌 → 우)
- * 우측에서:              2       1       0  (우 → 좌, 가장 신뢰)
+ * 인덱스:                0       1       2
  *
- * trustedProxyCount=1 → 우측에서 1번째(proxy2가 직접 연결 프록시) → client IP = proxy1 위치의 값 → "proxy1"
- * trustedProxyCount=2 → 우측에서 2번째 제외 → "client"
+ * 각 신뢰 프록시는 자신이 요청을 받은 IP를 헤더 우측에 append한다.
+ * 따라서 trustedProxyCount개의 신뢰 프록시가 append한 항목은 배열의 가장 우측
+ * trustedProxyCount개이며, 그 바로 앞(= parts.length - trustedProxyCount 위치)이
+ * 마지막 신뢰 프록시가 실제로 관찰한 클라이언트 IP다.
+ *
+ * trustedProxyCount=1, parts=[client, proxy1] → targetIndex = 2 - 1 = 1 → "proxy1"(클라이언트가 직접 연결한 프록시가 관찰한 IP)
+ * trustedProxyCount=2, parts=[client, proxy1, proxy2] → targetIndex = 3 - 2 = 1 → "proxy1"
+ * trustedProxyCount가 parts.length보다 크면(설정 과대/헤더 절단) targetIndex&lt;0 → remoteAddr로 폴백
  * trustedProxyCount=-1(레거시) → XFF 첫 번째 무조건 신뢰 (비권장)
  * </pre>
  */
@@ -37,7 +42,8 @@ public class ClientIpResolver {
      * @param trustedProxyCount  신뢰 프록시 홉 수.
      *                           {@code 0}: remoteAddr 사용,
      *                           {@code -1}: XFF 첫 번째 무조건 신뢰(레거시, 비권장),
-     *                           {@code N>0}: XFF 우측에서 N번째 건너뛴 IP 사용
+     *                           {@code N>0}: XFF에서 우측 N개(신뢰 프록시가 append한 구간) 바로 앞의 IP 사용,
+     *                           단 N이 XFF 엔트리 수보다 크면 remoteAddr로 폴백
      * @return 클라이언트 IP 문자열
      */
     public static String resolve(String xffHeader, String remoteAddr, int trustedProxyCount) {
@@ -60,15 +66,17 @@ public class ClientIpResolver {
             return sanitize(parts[0].trim());
         }
 
-        // trustedProxyCount > 0: 우측에서 trustedProxyCount번째 이전 인덱스를 클라이언트 IP로
-        // 예) parts=[client, proxy1, proxy2], trustedProxyCount=2 → targetIndex = 3 - 2 - 1 = 0 → "client"
-        int targetIndex = parts.length - trustedProxyCount - 1;
+        // trustedProxyCount > 0: 신뢰 프록시가 append한 우측 trustedProxyCount개 항목의
+        // 바로 앞 위치가 마지막 신뢰 프록시가 관찰한 실제 클라이언트 IP
+        // 예) parts=[client, proxy1, proxy2], trustedProxyCount=2 → targetIndex = 3 - 2 = 1 → "proxy1"
+        int targetIndex = parts.length - trustedProxyCount;
         if (targetIndex < 0) {
-            // 프록시 홉 수가 XFF 엔트리 수보다 많으면 첫 번째 항목 사용 (최선의 추정)
+            // 프록시 홉 수가 XFF 엔트리 수보다 많음(설정 과대 또는 헤더 절단/조작 의심).
+            // parts[0]은 공격자가 통제 가능한 구간이므로 스푸핑 방지를 위해 remoteAddr로 폴백한다.
             log.warn("[ClientIpResolver] trusted-proxy-count({})가 XFF 엔트리 수({})보다 많습니다. "
-                    + "첫 번째 IP를 사용합니다. 설정값을 확인하세요.",
+                    + "스푸핑 방지를 위해 remoteAddr로 폴백합니다. 설정값을 확인하세요.",
                 trustedProxyCount, parts.length);
-            return sanitize(parts[0].trim());
+            return sanitize(remoteAddr);
         }
 
         return sanitize(parts[targetIndex].trim());
