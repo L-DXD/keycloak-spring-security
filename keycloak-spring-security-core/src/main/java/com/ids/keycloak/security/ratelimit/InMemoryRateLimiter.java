@@ -14,6 +14,7 @@ import lombok.extern.slf4j.Slf4j;
 /**
  * {@link ConcurrentHashMap} 기반 인메모리 Rate Limiter 구현체입니다.
  * <p>
+ * servlet 모듈과 webflux 모듈이 공용으로 사용하는 core 구현체입니다.
  * Sliding Window Counter 알고리즘을 사용하여 인증 실패를 제한합니다.
  * 윈도우 시간 내에 {@code maxRequests}를 초과하면 {@code blockDurationSeconds} 동안 차단합니다.
  * </p>

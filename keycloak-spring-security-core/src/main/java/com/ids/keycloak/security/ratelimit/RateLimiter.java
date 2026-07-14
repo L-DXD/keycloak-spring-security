@@ -3,6 +3,7 @@ package com.ids.keycloak.security.ratelimit;
 /**
  * Rate Limiting 판단을 수행하는 인터페이스입니다.
  * <p>
+ * servlet 모듈과 webflux 모듈이 공용으로 사용하는 core 계약(contract)입니다.
  * 기본 구현체로 {@link InMemoryRateLimiter}가 제공되며,
  * 분산 환경에서는 Redis 기반 등 커스텀 구현체를 빈으로 등록하여 교체할 수 있습니다.
  * </p>
