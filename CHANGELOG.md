@@ -8,6 +8,10 @@
 > 권장 버전 및 지원 정책은 [SECURITY.md](SECURITY.md)를 참고하세요.
 
 ## [Unreleased]
+### Security
+- **Basic Auth 전면 CSRF 면제 제거 (Advisory 3, CWE-352)**: `Authorization: Basic` 헤더 보유만으로 모든 경로의 CSRF 검증을 면제하던 로직을 제거. 브라우저가 캐시한 Basic 자격증명이 cross-origin 폼 제출에 자동 재전송되어 CSRF 검증을 우회할 수 있었음(servlet `KeycloakHttpConfigurer`, reactive `KeycloakWebFluxSecurityConfigurer` 동일 수정). Basic Auth를 사용하는 머신 전용 API에서 CSRF 면제가 필요하면 `keycloak.security.csrf.ignore-paths`에 해당 경로를 명시적으로 등록해야 함(전면 면제 → 명시 allowlist로 전환).
+### Changed (Breaking)
+- `basic-auth.enabled=true`이면서 기존 자동 CSRF 면제에 의존하던 상태 변경 요청(POST/PUT/PATCH/DELETE)은 CSRF 토큰 없이 호출 시 `403`을 받게 됨. 영향받는 머신 클라이언트 경로를 `csrf.ignore-paths`에 추가하거나, 해당 API를 CSRF 보호 대상에서 제외할 별도 stateless 체인으로 분리할 것.
 
 ## [1.10.2] - 2026-06-24
 ### Fixed

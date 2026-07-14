@@ -27,6 +27,15 @@ import lombok.Setter;
  * {@code ignore-paths}는 기존 하드코딩된 면제 경로(로그아웃, 토큰 발급 등)에 추가로 적용됩니다.
  * Ant 패턴을 지원합니다 (예: {@code /api/**}).
  * </p>
+ * <p>
+ * <b>보안 경고 (Basic Auth와 CSRF):</b> {@code basic-auth.enabled=true}인 경우에도
+ * {@code Authorization: Basic} 헤더 보유 여부만으로 CSRF가 자동 면제되지 않습니다.
+ * HTTP Basic 자격증명은 브라우저가 origin 단위로 캐시하여 이후 요청(cross-origin 폼 제출 포함)에
+ * 자동 재전송할 수 있는 ambient credential이므로, Authorization 헤더 존재는 "비-브라우저 요청"의
+ * 증거로 사용할 수 없습니다(CWE-352). Basic Auth를 사용하는 머신 전용 API 경로에서 CSRF 면제가
+ * 필요하다면 반드시 {@code ignore-paths}에 해당 경로를 명시적으로 등록하세요. 브라우저에서 접근
+ * 가능한 경로는 Basic Auth 사용 여부와 무관하게 CSRF 보호를 유지해야 합니다.
+ * </p>
  */
 @Getter
 @Setter

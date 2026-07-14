@@ -203,8 +203,8 @@ keycloak:
 - `/logout/connect/back-channel/**` (Back-Channel 로그아웃)
 - Bearer Token 활성화 시: `/auth/token`, `/auth/refresh`, `/auth/logout`
 
-**Basic Auth 연동:**
-`basic-auth.enabled: true` 설정 시, `Authorization: Basic` 헤더가 포함된 요청은 자동으로 CSRF 면제됩니다. Basic Auth는 헤더 기반 API 클라이언트용이므로 CSRF 토큰을 전달할 수 없기 때문입니다.
+**Basic Auth와 CSRF (보안 경고):**
+`basic-auth.enabled: true`로 설정해도 `Authorization: Basic` 헤더 보유만으로 CSRF가 자동 면제되지 **않습니다**. HTTP Basic 자격증명은 브라우저가 origin 단위로 캐시해 이후 요청(공격자의 cross-origin 폼 제출 포함)에 자동 재전송할 수 있는 ambient credential이라, 헤더 존재를 "비-브라우저 요청"의 증거로 삼을 수 없기 때문입니다(CWE-352). Basic Auth는 브라우저가 개입하지 않는 머신 클라이언트(curl, 서버-to-서버 호출 등) 전용으로 사용하고, CSRF 면제가 필요한 경로는 반드시 `ignore-paths`에 명시적으로 등록하세요.
 
 ### 🔹 Basic Authentication
 

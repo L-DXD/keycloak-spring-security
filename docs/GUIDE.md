@@ -231,7 +231,7 @@ keycloak:
     basic-auth:
       enabled: true
 ```
-`Authorization: Basic` 요청은 Keycloak Direct Access Grants로 인증되고 CSRF 자동 면제.
+`Authorization: Basic` 요청은 Keycloak Direct Access Grants로 인증됩니다. **CSRF는 자동 면제되지 않습니다** — Basic 자격증명은 브라우저가 캐시해 cross-origin 폼 제출에도 자동 재전송될 수 있어(CWE-352), 헤더 보유만으로 비-브라우저 요청을 단정할 수 없기 때문입니다. 머신 전용 API는 `csrf.ignore-paths`에 명시적으로 등록하세요.
 
 ### 4.5 인가 (Authorization Services)
 ```yaml
@@ -243,7 +243,7 @@ keycloak:
 켜면 모든 요청을 Keycloak Authorization Services로 인가 검증. OIDC/Bearer/Basic 모든 인증 타입 지원(v1.4.0+). 메서드 보안은 `@EnableMethodSecurity`가 기본 활성이라 `@PreAuthorize` 등 사용 가능.
 
 ### 4.6 CSRF
-기본 활성. 로그아웃·Bearer 토큰 엔드포인트·Basic Auth 요청은 자동 면제. 추가 면제는 `csrf.ignore-paths`.
+기본 활성. 로그아웃·Bearer 토큰 엔드포인트는 자동 면제. **Basic Auth 요청은 더 이상 자동 면제되지 않습니다**(보안 Advisory 3, CWE-352 — Authorization: Basic 헤더 보유를 "비-브라우저 요청" 증거로 사용하지 않음). 면제가 필요한 경로는 `csrf.ignore-paths`에 명시적으로 등록하세요.
 
 ### 4.7 MDC 로깅 + PII 마스킹 (v1.6.0/1.7.0)
 모든 요청에 `traceId` 등이 MDC로 자동 주입되고 응답 `X-Request-Id`로 회신됩니다. query/userAgent는 **PII 마스킹**(이메일/폰/주민/카드/Bearer)이 기본 적용됩니다. 마스킹 교체/해제는 [5. 확장점](#5-확장점) 참고. 자세한 내용은 [13](13-MDC-로깅-사내표준-위임.md)/[14](14-MDC-로깅-응답메트릭-제외경로.md).

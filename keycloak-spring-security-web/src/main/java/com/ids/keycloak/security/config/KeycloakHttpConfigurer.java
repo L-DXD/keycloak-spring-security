@@ -229,13 +229,12 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
               ignoreMatchers.add(new AntPathRequestMatcher(path));
           }
 
-          // Basic Auth 요청 면제 (Authorization: Basic 헤더 기반 API 클라이언트)
-          if (securityProperties.getBasicAuth().isEnabled()) {
-              ignoreMatchers.add(request -> {
-                  String auth = request.getHeader("Authorization");
-                  return auth != null && auth.startsWith("Basic ");
-              });
-          }
+          // 보안 Advisory 3: Authorization: Basic 헤더 보유 여부만으로 CSRF를 전면 면제하지 않는다.
+          // 브라우저가 HTTP Basic 자격증명을 캐시해 자동 재전송하면(ambient credential),
+          // cross-origin 폼 제출이 캐시된 Basic 자격증명을 실은 채 CSRF 검증을 우회할 수 있다
+          // (CWE-352). Authorization 헤더 존재는 "비-브라우저 요청"의 증거가 될 수 없다.
+          // 머신 전용 API 등 CSRF 면제가 필요한 경로는 위 csrfProperties.ignorePaths에
+          // 명시적으로 등록해야 한다(전면 면제 금지, 명시 allowlist만 허용).
 
           http.csrf(csrf -> csrf
               .ignoringRequestMatchers(ignoreMatchers.toArray(new RequestMatcher[0]))

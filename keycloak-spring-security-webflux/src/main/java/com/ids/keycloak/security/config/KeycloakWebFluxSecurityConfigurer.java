@@ -234,9 +234,15 @@ public final class KeycloakWebFluxSecurityConfigurer {
    *   <li>Back-Channel 로그아웃 경로 — POST+exact 경로 한정 (M-2 보강)</li>
    *   <li>Bearer Token 엔드포인트 경로</li>
    *   <li>사용자 지정 ignorePaths</li>
-   *   <li>Basic Auth 활성화 시 {@code Authorization: Basic} 헤더 보유 요청</li>
    * </ul>
    * </p>
+   *
+   * <p><b>보안 Advisory 3:</b> {@code Authorization: Basic} 헤더 보유 여부만으로 CSRF를 전면
+   * 면제하지 않는다. 브라우저가 HTTP Basic 자격증명을 캐시해 자동 재전송하면(ambient credential),
+   * cross-origin 폼 제출이 캐시된 Basic 자격증명을 실은 채 CSRF 검증을 우회할 수 있다(CWE-352).
+   * Authorization 헤더 존재는 "비-브라우저 요청"의 증거가 될 수 없다. 머신 전용 API 등 CSRF
+   * 면제가 필요한 경로는 {@code csrfProperties.ignorePaths}에 명시적으로 등록해야 한다
+   * (전면 면제 금지, 명시 allowlist만 허용).</p>
    */
   private static void configureCsrf(
       ServerHttpSecurity http, KeycloakSecurityProperties securityProperties) {
@@ -279,17 +285,8 @@ public final class KeycloakWebFluxSecurityConfigurer {
     exemptMatchers.add(new PathPatternParserServerWebExchangeMatcher(
         ReactiveBackChannelLogoutEndpointFilter.BACK_CHANNEL_LOGOUT_PATH, HttpMethod.POST));
 
-    if (securityProperties.getBasicAuth().isEnabled()) {
-      ServerWebExchangeMatcher basicAuthMatcher =
-          exchange -> {
-            String auth = exchange.getRequest().getHeaders().getFirst("Authorization");
-            if (auth != null && auth.startsWith("Basic ")) {
-              return ServerWebExchangeMatcher.MatchResult.match();
-            }
-            return ServerWebExchangeMatcher.MatchResult.notMatch();
-          };
-      exemptMatchers.add(basicAuthMatcher);
-    }
+    // 보안 Advisory 3: Authorization: Basic 헤더 보유 요청을 CSRF에서 전면 면제하던 로직 제거.
+    // 머신 전용 API를 면제하려면 csrfProperties.ignorePaths에 해당 경로를 명시적으로 등록한다.
 
     ServerWebExchangeMatcher exemptMatcher = new OrServerWebExchangeMatcher(exemptMatchers);
     ServerWebExchangeMatcher csrfMatcher = new NegatedServerWebExchangeMatcher(exemptMatcher);
