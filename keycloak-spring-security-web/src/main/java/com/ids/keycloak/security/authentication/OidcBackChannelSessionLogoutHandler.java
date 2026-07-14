@@ -60,7 +60,9 @@ public class OidcBackChannelSessionLogoutHandler implements LogoutHandler {
             log.warn("[BackChannelLogoutHandler] OidcLogoutToken을 추출할 수 없음");
             return;
         }
-        log.debug("[BackChannelLogoutHandler] oidcLogoutToken = {}", logoutToken.getTokenValue());
+        // 보안: Logout Token(JWT) 원문은 sub/sid 등 보안 클레임을 포함하므로 어떤 로그 레벨에서도 기록하지 않는다.
+        // 추적이 필요한 경우 jti(JWT ID)를 비가역적으로 일부만 마스킹하여 남긴다.
+        log.debug("[BackChannelLogoutHandler] logout_token 수신 (jti={})", maskIdentifier(logoutToken.getId()));
 
         String subject = logoutToken.getSubject();
         String keycloakSessionId = logoutToken.getSessionId(); // sid 클레임
@@ -145,5 +147,19 @@ public class OidcBackChannelSessionLogoutHandler implements LogoutHandler {
         log.info("[BackChannelLogoutHandler] 사용자 '{}'의 모든 세션 {} 개 폐기 완료", subject, sessions.size());
     }
 
+    /**
+     * 추적용 식별자(jti 등)를 비가역적으로 일부만 마스킹합니다.
+     * <p>
+     * 원문 전체를 로그에 남기지 않기 위한 용도이며, 마스킹 라이브러리(PII sanitizer)에
+     * 의존하지 않고 호출부에서 직접 마스킹된 값만 로그 인자로 전달합니다.
+     * </p>
+     */
+    private static String maskIdentifier(String value) {
+        if (value == null || value.isBlank()) {
+            return "(none)";
+        }
+        int visibleLength = Math.min(4, value.length());
+        return "***" + value.substring(value.length() - visibleLength);
+    }
 
 }
