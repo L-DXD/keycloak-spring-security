@@ -1,5 +1,7 @@
 package com.ids.keycloak.security.config;
 
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
@@ -9,15 +11,22 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
 import com.fasterxml.jackson.databind.module.SimpleModule;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.ids.keycloak.security.authentication.KeycloakAuthentication;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
@@ -111,6 +120,12 @@ public class RedisSessionConfiguration {
    *
    * <p>커스텀 직렬화기를 사용하려면 {@code springSessionDefaultRedisSerializer} 이름으로
    * 직접 {@link RedisSerializer} 빈을 등록하세요(이 빈이 생략됩니다).</p>
+   *
+   * <p><b>code-review High #2 (2.0.2):</b> {@link JavaTimeModule}을 명시적으로 등록합니다.
+   * {@code SecurityJackson2Modules}는 {@code jackson-datatype-jsr310}이 클래스패스에 있을 때만
+   * 조건부로 등록하므로, 이 라이브러리 자체의 보장으로는 부족합니다. 명시 등록으로 {@code Instant}
+   * 등 {@code java.time.*} 값의 직렬화 형태(초 단위 소수 타임스탬프)를 안정적으로 고정합니다.
+   * {@link PlainClaimsMapDeserializer}는 이 형태를 전제로 {@code Instant}를 복원합니다.</p>
    */
   @Bean("springSessionDefaultRedisSerializer")
   @ConditionalOnMissingBean(name = "springSessionDefaultRedisSerializer")
@@ -120,6 +135,10 @@ public class RedisSessionConfiguration {
     // 1. Spring Security 도메인 객체 직렬화 지원 + default typing 활성화
     //    (OAuth2ClientJackson2Module이 OidcIdToken mixin을 등록)
     mapper.registerModules(SecurityJackson2Modules.getModules(this.getClass().getClassLoader()));
+
+    // 1-1. code-review High #2: java.time.* 직렬화 형태를 명시적으로 고정
+    //      (SecurityJackson2Modules의 조건부 등록에 의존하지 않음)
+    mapper.registerModule(new JavaTimeModule());
 
     // 2. N-3: KeycloakSecurityJackson2Module을 마지막에 등록.
     //    - OidcIdToken/OidcUserInfo: 커스텀 Deserializer로 claims Long 문제 해결
@@ -173,14 +192,45 @@ public class RedisSessionConfiguration {
   // allowlist mixin — 커스텀 Keycloak 도메인 클래스
   // ---------------------------------------------------------------------------
 
-  /** allowlist mixin — {@link KeycloakPrincipal} */
+  /**
+   * allowlist mixin — {@link KeycloakPrincipal}.
+   *
+   * <p><b>2.0.2 패치(치명적 회귀):</b> {@code fieldVisibility=ANY, getterVisibility=NONE}로
+   * 필드 기반 introspection을 강제합니다. {@code KeycloakPrincipal}은 {@link
+   * org.springframework.security.oauth2.core.oidc.IdTokenClaimAccessor}를 구현하므로
+   * {@code getAudience()}(aud 클레임, {@code List<String>})·{@code getAuthenticationMethods()}(amr
+   * 클레임)처럼 setter 없는 파생 컬렉션 getter를 다수 상속합니다. 기본(getter 기반) introspection에서는
+   * default typing이 활성화된 상태에서 이 getter들도 직렬화 대상 프로퍼티로 잡히고, 역직렬화 시
+   * Jackson이 {@code SetterlessProperty}로 처리하려다
+   * {@code InvalidDefinitionException: Problem deserializing 'setterless' property ("audience"):
+   * no way to handle typed deser with setterless yet}를 던집니다. {@code aud} 클레임은 OIDC 필수
+   * 클레임이므로 실제 운영 ID Token에는 항상 존재해 <b>모든 인증 요청에서 세션 역직렬화가 실패</b>합니다
+   * (Spring 공식 {@code DefaultOidcUserMixin}/{@code OidcIdTokenMixin}과 동일한 필드 기반 패턴 적용).
+   * 필드 기반으로 전환하면 실제 생성자 파라미터(name/authorities/idToken/userInfo)만 프로퍼티로 잡혀
+   * 파생 getter는 전부 배제됩니다.</p>
+   */
   @JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
+  @JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY,
+      getterVisibility = JsonAutoDetect.Visibility.NONE,
+      isGetterVisibility = JsonAutoDetect.Visibility.NONE)
+  @JsonIgnoreProperties(value = {"attributes", "claims"}, ignoreUnknown = true)
   abstract static class KeycloakPrincipalMixin {
 
   }
 
-  /** allowlist mixin — {@link KeycloakAuthentication} */
+  /**
+   * allowlist mixin — {@link KeycloakAuthentication}.
+   *
+   * <p><b>2.0.2 패치:</b> {@link KeycloakPrincipalMixin}과 동일한 이유로 필드 기반 introspection을
+   * 적용합니다. {@code KeycloakAuthentication}은 {@code AbstractAuthenticationToken}을 상속하며,
+   * 이 슈퍼클래스가 노출하는 setter 없는 파생 getter({@code getName()} 등)를 getter 기반
+   * introspection에서 프로퍼티로 잡을 경우 유사한 역직렬화 실패 위험이 있어 동일하게 방지합니다.</p>
+   */
   @JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
+  @JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY,
+      getterVisibility = JsonAutoDetect.Visibility.NONE,
+      isGetterVisibility = JsonAutoDetect.Visibility.NONE)
+  @JsonIgnoreProperties(ignoreUnknown = true)
   abstract static class KeycloakAuthenticationMixin {
 
   }
@@ -260,16 +310,80 @@ public class RedisSessionConfiguration {
   /**
    * JWT claims {@code Map<String, Object>}를 타입 정보 없이 plain 값으로 역직렬화하는 유틸리티.
    *
-   * <p>{@code SecurityJackson2Modules}의 default typing이 활성화되면, claims 맵 내 값들이
-   * {@code ["java.lang.Long", 1234567890]} 형태의 배열로 직렬화됩니다.
-   * {@code AllowlistTypeIdResolver}는 {@code java.lang.Long}을 거부하므로 역직렬화가 실패합니다.
-   * 이 클래스는 {@link JsonNode}를 직접 파싱하여 plain Java 타입으로 변환하므로,
-   * AllowlistTypeIdResolver를 거치지 않습니다.</p>
+   * <p>{@code SecurityJackson2Modules}의 default typing이 활성화되면, claims 맵처럼 값의 정적
+   * 타입이 {@code Object}(즉, 실행 시점에야 구체 타입을 알 수 있는 위치)인 경우 Jackson이 타입
+   * 정보를 함께 기록합니다. 이 라이브러리가 사용하는
+   * {@link GenericJackson2JsonRedisSerializer}(PROPERTY 방식 default typing)는 실제로 두 가지
+   * 형태를 모두 사용합니다.</p>
+   * <ul>
+   *   <li>스칼라/배열 값 — {@code ["TypeName", value]} 2원소 배열 (예:
+   *   {@code ["java.lang.Long", 1234567890]}, {@code ["java.net.URL", "https://..."]})</li>
+   *   <li>객체(Map) 값 — 값 자체에 {@code "@class"} 속성이 추가됨 (예:
+   *   {@code {"@class":"java.util.LinkedHashMap", "sub":"user-1"}})</li>
+   * </ul>
+   * <p>{@code AllowlistTypeIdResolver}는 이런 타입들 대부분(예: {@code java.lang.Long})을
+   * 거부하므로 표준 역직렬화 경로로는 복원할 수 없습니다. 이 클래스는 {@link JsonNode}를 직접
+   * 순회하여 위 두 형태의 타입 메타데이터를 제거하고 plain Java 타입으로 복원하므로
+   * {@code AllowlistTypeIdResolver}를 거치지 않습니다.</p>
    *
-   * <p>지원 타입: {@code String}, {@code Long}, {@code Integer}, {@code Double},
-   * {@code Boolean}, {@code null}, 중첩 {@code Map}, {@code List}</p>
+   * <p><b>code-review High #1 (2.0.2, silent claim 손상):</b> 이전 구현은 {@code isKnownTypeName()}
+   * allowlist에 없는 타입 이름을 만나면 배열을 <b>그냥 일반 2원소 List로 오인식</b>했습니다. 운영
+   * ID Token의 {@code iss}는 {@code OidcIdTokenDecoderFactory}(내부적으로 실제
+   * {@code NimbusJwtDecoder}를 사용)의 기본 claim 변환기가 항상 {@code java.net.URL}로 변환하는데,
+   * 구버전 allowlist에는 없어 {@code ["java.net.URL", "https://..."]}가
+   * {@code [URL 문자열, 실제 URL 문자열]} 형태의 2원소 List로 조용히 손상되었습니다({@code iss}는
+   * OIDC 필수 클레임이라 항상 발생 — 예외는 없어 발견이 어려움). {@code resource_access}/
+   * {@code realm_access}처럼 중첩된 객체 값도 {@code @class} 속성이 그대로 claim 키로 섞여
+   * 들어가는 별도의 오염이 있었습니다.</p>
+   *
+   * <p>이번 패치는 화이트리스트를 계속 나열하는 대신(whack-a-mole) <b>범용 언랩 휴리스틱</b>을
+   * 적용합니다.</p>
+   * <ol>
+   *   <li>배열 값이 정확히 2개이고 첫 번째 요소가 FQCN 형태의 문자열
+   *   ({@code 패키지.클래스}, 정규식 {@link #FQCN_PATTERN})이면 타입 래퍼로 간주하고 두 번째
+   *   요소(실제 값)를 언랩 대상으로 삼습니다.</li>
+   *   <li>알려진 스칼라(Long/Integer/Short/Byte/Double/Float/Boolean/String/BigDecimal/
+   *   BigInteger)·시간 타입(Instant/Date)·{@code java.net.URL}/{@code URI}는 실제 타입의 값으로
+   *   정확히 복원합니다.</li>
+   *   <li>그 외 타입은, 언랩 대상 값 자체가 JSON 객체/배열이면(= Map/List로 표현 가능한 구조라는
+   *   뜻) 구체 클래스 이름(예: {@code java.util.HashMap}, {@code net.minidev.json.JSONObject},
+   *   {@code com.nimbusds.jose.shaded.gson.internal.LinkedTreeMap} 등 무엇이든)을 몰라도
+   *   Map/List로 안전하게 복원합니다.</li>
+   *   <li>그마저도 아닌, 진짜 미인식 스칼라 타입 래퍼는 <b>warn 로그를 남기고 원본 구조
+   *   ({@code [typeName, value]})를 그대로 보존</b>합니다. silent 손상을 내는 대신 실패를
+   *   드러내어 필요 시 이 클래스에 처리를 추가할 수 있게 합니다.</li>
+   * </ol>
+   *
+   * <p>객체(Map) 값에 섞여 들어오는 {@code "@class"} 속성은 {@link #parseNodeAsMap(JsonNode)}에서
+   * (중첩 여부와 무관하게) 항상 제거합니다.</p>
+   *
+   * <p><b>code-review High #2 (2.0.2):</b> {@code java.time.Instant}는
+   * jackson-datatype-jsr310의 기본 직렬화 형태(초 단위 소수 타임스탬프 숫자, 예:
+   * {@code 1737039434.096212}) 기준으로 복원합니다. 이 형태가 실제로 보장되도록
+   * {@code springSessionDefaultRedisSerializer()}에 {@link JavaTimeModule}을 명시 등록했습니다.
+   * {@code java.util.Date}는 Instant와 달리 <b>초 단위 소수가 아닌 epoch 밀리초(정수)</b>로
+   * 직렬화되므로 별도 분기로 처리합니다(둘을 같은 방식으로 처리하면 약 1000배 오차가 발생).</p>
    */
   static class PlainClaimsMapDeserializer extends StdDeserializer<Map<String, Object>> {
+
+    /** GenericJackson2JsonRedisSerializer(PROPERTY 방식 default typing)가 객체 값에 삽입하는 타입 속성. */
+    private static final String JACKSON_TYPE_PROPERTY = "@class";
+
+    /** {@code패키지.클래스} 형태(점으로 구분된 2개 이상의 세그먼트)를 판별하는 정규식. */
+    private static final Pattern FQCN_PATTERN =
+        Pattern.compile("^[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)+$");
+
+    private static final Set<String> KNOWN_SCALAR_TYPE_NAMES = Set.of(
+        "java.lang.Long",
+        "java.lang.Integer",
+        "java.lang.Short",
+        "java.lang.Byte",
+        "java.lang.Double",
+        "java.lang.Float",
+        "java.lang.Boolean",
+        "java.lang.String",
+        "java.math.BigDecimal",
+        "java.math.BigInteger");
 
     PlainClaimsMapDeserializer() {
       super(Map.class);
@@ -285,15 +399,20 @@ public class RedisSessionConfiguration {
     /**
      * {@link JsonNode}에서 {@code Map<String, Object>}를 파싱합니다 (static 유틸리티).
      *
-     * <p>default typing으로 생성된 {@code ["java.lang.Long", 123]} 배열 값도 올바르게 처리합니다.</p>
+     * <p>{@code "@class"} 속성(default typing이 객체 값에 삽입하는 타입 메타데이터)은 실제
+     * claim이 아니므로 제외합니다.</p>
      */
     static Map<String, Object> parseNodeAsMap(JsonNode node) {
       if (node == null || node.isNull()) {
         return new LinkedHashMap<>();
       }
       Map<String, Object> result = new LinkedHashMap<>();
-      node.fields().forEachRemaining(entry ->
-          result.put(entry.getKey(), parseNodeValue(entry.getValue())));
+      node.fields().forEachRemaining(entry -> {
+        if (JACKSON_TYPE_PROPERTY.equals(entry.getKey())) {
+          return;
+        }
+        result.put(entry.getKey(), parseNodeValue(entry.getValue()));
+      });
       return result;
     }
 
@@ -332,20 +451,19 @@ public class RedisSessionConfiguration {
     /**
      * 배열 노드를 파싱합니다.
      *
-     * <p>배열의 첫 번째 요소가 알려진 타입 이름 문자열이면 default typing 배열로 간주하고
-     * 두 번째 요소(실제 값)를 반환합니다. 그렇지 않으면 일반 List로 파싱합니다.</p>
+     * <p>정확히 2개 요소이고 첫 번째가 FQCN 형태 문자열이면 default typing 타입 래퍼로 간주하고
+     * {@link #unwrapTypedValue(String, JsonNode)}로 위임합니다. 그렇지 않으면 일반 List로
+     * 파싱합니다.</p>
      */
     private static Object parseNodeArray(JsonNode arrayNode) {
       if (arrayNode.isEmpty()) {
         return new ArrayList<>();
       }
-      JsonNode first = arrayNode.get(0);
-      if (first.isTextual() && isKnownTypeName(first.asText())) {
-        // default typing 배열: ["TypeName", value] — 타입 이름을 무시하고 실제 값만 반환
-        if (arrayNode.size() >= 2) {
-          return parseNodeValue(arrayNode.get(1));
+      if (arrayNode.size() == 2 && arrayNode.get(0).isTextual()) {
+        String typeName = arrayNode.get(0).asText();
+        if (FQCN_PATTERN.matcher(typeName).matches()) {
+          return unwrapTypedValue(typeName, arrayNode.get(1));
         }
-        return null;
       }
       // 일반 배열
       List<Object> list = new ArrayList<>();
@@ -354,26 +472,163 @@ public class RedisSessionConfiguration {
     }
 
     /**
-     * default typing에서 사용되는 알려진 Java 타입 이름인지 확인합니다.
+     * {@code ["TypeName", value]} 타입 래퍼를 언랩합니다.
+     *
+     * <p>알려진 타입은 실제 값으로 정확히 복원하고, Map/List로 표현 가능한 구조는 타입 이름에
+     * 상관없이 안전하게 복원합니다. 그 외(미인식 스칼라 타입)는 silent 손상을 피하기 위해 warn
+     * 로그를 남기고 원본 구조({@code [typeName, value]})를 그대로 보존합니다.</p>
      */
-    private static boolean isKnownTypeName(String name) {
-      return name.equals("java.lang.Long")
-          || name.equals("java.lang.Integer")
-          || name.equals("java.lang.Double")
-          || name.equals("java.lang.Float")
-          || name.equals("java.lang.Boolean")
-          || name.equals("java.lang.String")
-          || name.equals("java.lang.Short")
-          || name.equals("java.lang.Byte")
-          || name.equals("java.math.BigDecimal")
-          || name.equals("java.math.BigInteger")
-          || name.startsWith("java.util.ImmutableCollections")
-          || name.startsWith("java.util.Collections$")
-          || name.equals("java.util.ArrayList")
-          || name.equals("java.util.LinkedList")
-          || name.equals("java.util.HashMap")
-          || name.equals("java.util.LinkedHashMap")
-          || name.equals("java.util.TreeMap");
+    private static Object unwrapTypedValue(String typeName, JsonNode valueNode) {
+      if (isTemporalTypeName(typeName)) {
+        return "java.time.Instant".equals(typeName)
+            ? parseTemporalValue(valueNode)
+            : parseDateValue(valueNode);
+      }
+      if (isNetTypeName(typeName)) {
+        return parseNetValue(typeName, valueNode);
+      }
+      if (KNOWN_SCALAR_TYPE_NAMES.contains(typeName)) {
+        return parseScalarValue(typeName, valueNode);
+      }
+      if (valueNode != null && (valueNode.isObject() || valueNode.isArray())) {
+        // Map/List 등 구조적 타입 — 구체 클래스 이름(HashMap/LinkedTreeMap/JSONObject/
+        // ImmutableCollections$... 등 무엇이든)에 관계없이 JSON 형태(object/array) 자체가 구조를
+        // 결정하므로 타입 이름을 몰라도 안전하게 복원 가능
+        return parseNodeValue(valueNode);
+      }
+      // 미인식 타입 래퍼(스칼라인데 알려지지 않은 타입) — 추측 대신 원본 보존 + 경고 로그
+      // (silent 손상 방지: allowlist를 계속 나열하는 대신, 모르는 타입은 있는 그대로 보존한다)
+      log.warn(
+          "Redis 세션 claims 역직렬화: 인식되지 않은 타입 래퍼 '{}' 를 만났습니다. 값을 "
+              + "[typeName, value] 형태로 보존합니다 — PlainClaimsMapDeserializer에 해당 타입 "
+              + "처리 추가를 검토하세요.",
+          typeName);
+      List<Object> preserved = new ArrayList<>(2);
+      preserved.add(typeName);
+      preserved.add(parseNodeValue(valueNode));
+      return preserved;
+    }
+
+    /**
+     * {@code java.time.Instant}로 default typing 래핑된 값을 실제 {@link Instant}로 복원합니다.
+     *
+     * <p>jackson-datatype-jsr310의 기본 직렬화 형태(초 단위 소수 타임스탬프 숫자, 예:
+     * {@code 1737039434.096212}), ISO-8601 문자열, {@code {"epochSecond":..,"nano":..}} 객체
+     * 형태를 모두 지원합니다.</p>
+     */
+    private static Instant parseTemporalValue(JsonNode node) {
+      if (node == null || node.isNull()) {
+        return null;
+      }
+      if (node.isNumber()) {
+        java.math.BigDecimal seconds = node.decimalValue();
+        long epochSecond = seconds.longValue();
+        long nanos = seconds.subtract(java.math.BigDecimal.valueOf(epochSecond))
+            .multiply(java.math.BigDecimal.valueOf(1_000_000_000L))
+            .longValue();
+        return Instant.ofEpochSecond(epochSecond, nanos);
+      }
+      if (node.isTextual()) {
+        return Instant.parse(node.asText());
+      }
+      if (node.isObject()) {
+        long epochSecond = node.has("epochSecond") ? node.get("epochSecond").asLong() : 0;
+        int nano = node.has("nano") ? node.get("nano").asInt() : 0;
+        return Instant.ofEpochSecond(epochSecond, nano);
+      }
+      return null;
+    }
+
+    /**
+     * {@code java.util.Date}로 default typing 래핑된 값을 실제 {@link Date}로 복원합니다.
+     *
+     * <p>Jackson 기본 직렬화 형태는 <b>epoch 밀리초(정수)</b>입니다. {@link Instant}(초 단위
+     * 소수)와 단위가 다르므로 같은 방식으로 처리하면 약 1000배 오차가 발생합니다.</p>
+     */
+    private static Date parseDateValue(JsonNode node) {
+      if (node == null || node.isNull()) {
+        return null;
+      }
+      if (node.isNumber()) {
+        return new Date(node.asLong());
+      }
+      if (node.isTextual()) {
+        return Date.from(Instant.parse(node.asText()));
+      }
+      if (node.isObject() && node.has("epochSecond")) {
+        long epochSecond = node.get("epochSecond").asLong();
+        return new Date(epochSecond * 1000L);
+      }
+      return null;
+    }
+
+    /**
+     * {@code java.net.URL}/{@code java.net.URI}로 default typing 래핑된 값을 실제 객체로
+     * 복원합니다. 복원에 실패하면(형식 오류 등) warn 로그를 남기고 원본 문자열을 반환합니다
+     * (예외를 던져 세션 전체 역직렬화를 실패시키지 않음).
+     */
+    private static Object parseNetValue(String typeName, JsonNode node) {
+      if (node == null || !node.isTextual()) {
+        return null;
+      }
+      String text = node.asText();
+      try {
+        if ("java.net.URL".equals(typeName)) {
+          // java.net.URL(String) 생성자는 Java 20부터 deprecated — URI 경유로 생성
+          return new URI(text).toURL();
+        }
+        return new URI(text);
+      } catch (MalformedURLException | URISyntaxException | IllegalArgumentException ex) {
+        log.warn(
+            "Redis 세션 claims 역직렬화: {} 값 '{}' 복원 실패 - 원본 문자열로 대체합니다.",
+            typeName, text, ex);
+        return text;
+      }
+    }
+
+    /**
+     * 알려진 boxed 스칼라 타입 이름에 맞춰 값을 정확한 타입으로 복원합니다.
+     *
+     * <p>{@link #parseNodeValue(JsonNode)}의 크기 기반 int/long 자동 추론에 맡기지 않고 타입
+     * 이름을 그대로 존중합니다 — 그렇지 않으면 예컨대 {@code java.lang.Long} 값이 {@code int}
+     * 범위 안에 들 때 {@code Integer}로 복원되어 (라운드트립 후) 타입이 바뀌는 손상이 됩니다.</p>
+     */
+    private static Object parseScalarValue(String typeName, JsonNode node) {
+      if (node == null || node.isNull()) {
+        return null;
+      }
+      switch (typeName) {
+        case "java.lang.Long":
+          return node.asLong();
+        case "java.lang.Integer":
+          return node.asInt();
+        case "java.lang.Short":
+          return (short) node.asInt();
+        case "java.lang.Byte":
+          return (byte) node.asInt();
+        case "java.lang.Double":
+          return node.asDouble();
+        case "java.lang.Float":
+          return (float) node.asDouble();
+        case "java.lang.Boolean":
+          return node.asBoolean();
+        case "java.lang.String":
+          return node.asText();
+        case "java.math.BigDecimal":
+          return node.decimalValue();
+        case "java.math.BigInteger":
+          return node.bigIntegerValue();
+        default:
+          return parseNodeValue(node);
+      }
+    }
+
+    private static boolean isTemporalTypeName(String name) {
+      return "java.time.Instant".equals(name) || "java.util.Date".equals(name);
+    }
+
+    private static boolean isNetTypeName(String name) {
+      return "java.net.URL".equals(name) || "java.net.URI".equals(name);
     }
   }
 

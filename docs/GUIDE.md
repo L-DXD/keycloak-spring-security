@@ -3,7 +3,7 @@
 Keycloak을 Spring Security에 통합하는 라이브러리입니다. 의존성 하나와 최소 설정으로 OIDC 로그인·세션·로그아웃·인가가 자동 구성됩니다.
 
 - **지원**: JDK 17+, Spring Boot 3.5.x, Spring Security 6.5.x
-- **현재 버전**: `2.0.1`
+- **현재 버전**: `2.0.2`
 - **스택**: Servlet(Spring MVC) / **Reactive(WebFlux) — v1.8.0부터 servlet과 기능 동등** ([8. Reactive](#8-reactivewebflux))
 - 이 문서는 **도입 개발자용 사용 가이드**입니다. 아키텍처/기여 규칙은 [README](../README.md) 참고.
 
@@ -27,10 +27,10 @@ Keycloak을 Spring Security에 통합하는 라이브러리입니다. 의존성 
 
 ```gradle
 // Servlet (Spring MVC)
-implementation("io.github.l-dxd:keycloak-spring-security-web-starter:2.0.1")
+implementation("io.github.l-dxd:keycloak-spring-security-web-starter:2.0.2")
 
 // 또는 Reactive (WebFlux)
-implementation("io.github.l-dxd:keycloak-spring-security-webflux-starter:2.0.1")
+implementation("io.github.l-dxd:keycloak-spring-security-webflux-starter:2.0.2")
 ```
 > Redis 세션을 쓸 경우에만 추가:
 > ```gradle
@@ -366,6 +366,7 @@ LoggingValueSanitizer loggingValueSanitizer() {
 
 | 버전 | 변경 | 주의 |
 |------|------|------|
+| **2.0.2** | (버그픽스) `session.store-type: redis` 사용 시 세션의 `SecurityContext` 역직렬화가 실패해 인증 요청이 500이 되던 회귀 수정(mixin 필드 기반 introspection 전환, claims의 `Instant` 복원 누락 수정) | breaking 없음. 세션 직렬화 포맷 변경 없음, 앱 코드 변경 불필요 |
 | **2.0.1** ⚠️ | **외부 보안 검토 4건 대응** — OIDC Access Token subject를 ID Token subject와 직접 비교(High #1), WebFlux CSRF 안전 메서드 예외 누락 수정(Medium #3), 브라우저 Front-Channel `/logout` CSRF 우회 차단(Medium #4), Bearer prefix 검증·검증 순서 정렬·로그 정리·subject 마스킹(Low #1~#4) | **Breaking 1건** — 아래 [마이그레이션](#마이그레이션-201--외부-보안-검토-4건-breaking) |
 | **2.0.0** ⚠️ | **보안 강화 8건** — OIDC ID/Access Token 결합 검증(Advisory 1), 로그인 세션 고정 방지(Advisory 2), Rate Limit IP 판정 일원화(Advisory 2), Basic Auth CSRF 전면 면제 제거(Advisory 3), 백채널 로그아웃 로그 마스킹(Advisory 5), 인메모리 세션 저장소 용량 상한(Advisory 6), Realm/Client Role 네임스페이스 분리(Advisory 7), WebFlux 백채널 decoder 검증 강화(Advisory 8) | **Breaking 3건** — 아래 [마이그레이션](#마이그레이션-200--보안-강화-8건-breaking) |
 | **1.10.2** | (버그픽스 #54) webflux 토큰 무효화(백채널 로그아웃 등) 후 보호 경로 접근 시 refresh 재발급 실패가 500 나던 문제 → 미인증 처리로 EntryPoint(로그인 리다이렉트/401) 경유 | breaking 없음 |
