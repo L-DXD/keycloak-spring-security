@@ -42,6 +42,9 @@ dependencies {
     // N-3 round-trip 테스트: Redis 직렬화 검증용 (테스트 전용, production 산출물에 전이되지 않음)
     testImplementation 'org.springframework.boot:spring-boot-starter-data-redis'
     testImplementation 'org.springframework.session:spring-session-data-redis'
+
+    // ApplicationContextRunner (Servlet OIDC JwtDecoder AutoConfiguration 통합 테스트용)
+    testImplementation 'org.springframework.boot:spring-boot-test'
 }
 
 signing {
