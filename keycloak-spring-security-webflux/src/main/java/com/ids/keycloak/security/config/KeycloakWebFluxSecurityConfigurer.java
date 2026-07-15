@@ -239,11 +239,14 @@ public final class KeycloakWebFluxSecurityConfigurer {
    *
    * <p><b>면제 대상:</b>
    * <ul>
-   *   <li>Front-Channel 로그아웃 경로 ({@code /logout})</li>
    *   <li>Back-Channel 로그아웃 경로 — POST+exact 경로 한정 (M-2 보강)</li>
-   *   <li>Bearer Token 엔드포인트 경로</li>
+   *   <li>Bearer Token 엔드포인트 경로 (토큰 발급/갱신, Bearer 전용 로그아웃)</li>
    *   <li>사용자 지정 ignorePaths</li>
    * </ul>
+   * <b>면제 대상 아님(항상 CSRF 보호):</b> 브라우저 Front-Channel 로그아웃 경로
+   * ({@link KeycloakWebFluxConstants#LOGOUT_URL}, 기본 {@code /logout}). Bearer 전용
+   * 로그아웃(prefix + {@code /logout})과는 별개의 엔드포인트이며, Bearer Token 활성 여부와
+   * 무관하게 CSRF 면제 목록에서 제외한다(보안 Medium #4, CWE-352 — 브라우저 강제 로그아웃 방지).
    * </p>
    *
    * <p><b>보안 Advisory 3:</b> {@code Authorization: Basic} 헤더 보유 여부만으로 CSRF를 전면
@@ -273,14 +276,19 @@ public final class KeycloakWebFluxSecurityConfigurer {
       // /token, /refresh — 비인증 자격증명 제출 엔드포인트이므로 항상 면제
       ignorePaths.add(prefix + "/token");
       ignorePaths.add(prefix + "/refresh");
-      // /logout — Bearer Token 활성 시에만 면제
+      // /logout(prefix) — Bearer Token 전용 로그아웃 API. Bearer 토큰으로만 호출되므로
+      // (브라우저 폼 세션과 무관) Bearer Token 활성 시 면제
       ignorePaths.add(prefix + "/logout");
-      // Front-Channel 로그아웃도 Bearer Token 활성 시에만 면제
-      // (쿠키 기반 OIDC 전용 환경에서는 /logout CSRF 보호 유지)
-      ignorePaths.add(KeycloakWebFluxConstants.LOGOUT_URL);
-    } else {
-      log.debug("[Configurer] Bearer Token 비활성 — /logout CSRF 보호 활성화 (면제 목록에서 제외)");
     }
+
+    // 보안 Medium #4: 브라우저 Front-Channel 로그아웃(KeycloakWebFluxConstants.LOGOUT_URL,
+    // 기본 "/logout")은 Bearer Token 전용 로그아웃(prefix + "/logout")과 별개의 엔드포인트이며,
+    // 항상 CSRF 보호를 유지한다(Bearer Token 활성 여부와 무관). 이 경로는 브라우저 쿠키 기반
+    // OIDC 세션을 종료하는 폼 POST 엔드포인트이므로, 여기를 CSRF 면제 목록에 포함시키면 공격
+    // 사이트가 크로스사이트 POST로 로그인된 사용자를 강제 로그아웃시킬 수 있다(CSRF, CWE-352).
+    // 따라서 어떤 조건에서도 LOGOUT_URL을 ignorePaths에 추가하지 않는다.
+    log.debug("[Configurer] /logout(LOGOUT_URL) CSRF 보호 항상 활성화 "
+        + "(Bearer Token 활성 여부와 무관, 면제 목록에서 제외)");
 
     ignorePaths.addAll(csrfProperties.getIgnorePaths());
     log.info("[Configurer] CSRF 활성화 (면제 경로: {})", ignorePaths);

@@ -205,8 +205,8 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
 
           // Bearer Token 경로 면제:
           //   /token, /refresh — 비인증 자격증명 제출 엔드포인트이므로 항상 면제
-          //   /logout          — Bearer Token 활성 시에만 면제
-          //                      (쿠키 기반 OIDC 전용 환경에서는 /logout에 CSRF 보호 유지)
+          //   /logout(prefix)  — Bearer Token 전용 로그아웃 API. Bearer 토큰으로만 호출되므로
+          //                      (브라우저 폼 세션과 무관) Bearer Token 활성 시 면제
           if (bearerTokenProperties.isEnabled()) {
               String prefix = bearerTokenProperties.getTokenEndpoint().getPrefix();
               ignorePaths.add(prefix + "/token");
@@ -214,16 +214,13 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
               ignorePaths.add(prefix + "/logout");
           }
 
-          // Front-Channel 로그아웃(/logout):
-          //   Bearer Token 비활성(쿠키 기반 OIDC 전용)인 경우 CSRF 보호 유지.
-          //   Bearer Token 활성인 경우 위에서 이미 추가됨.
-          if (!bearerTokenProperties.isEnabled()) {
-              // OIDC 로그아웃은 브라우저 폼 POST → CSRF 보호 적용 (면제 목록에서 제외)
-              log.debug("Bearer Token 비활성 — /logout CSRF 보호 활성화 (면제 목록에서 제외)");
-          } else {
-              // Bearer Token 활성 시 /logout은 위에서 이미 추가했으므로 추가 처리 불필요
-              ignorePaths.add(LOGOUT_URL);
-          }
+          // 보안 Medium #4: 브라우저 Front-Channel 로그아웃(LOGOUT_URL, 기본 "/logout")은
+          // Bearer Token 전용 로그아웃(prefix + "/logout")과 별개의 엔드포인트이며, 항상
+          // CSRF 보호를 유지한다(Bearer Token 활성 여부와 무관). 이 경로는 브라우저 쿠키 기반
+          // OIDC 세션을 종료하는 폼 POST 엔드포인트이므로, 여기를 CSRF 면제 목록에 포함시키면
+          // 공격 사이트가 크로스사이트 POST로 로그인된 사용자를 강제 로그아웃시킬 수 있다
+          // (CSRF, CWE-352). 따라서 어떤 조건에서도 LOGOUT_URL을 ignorePaths에 추가하지 않는다.
+          log.debug("/logout(LOGOUT_URL) CSRF 보호 항상 활성화 (Bearer Token 활성 여부와 무관, 면제 목록에서 제외)");
 
           // 사용자 지정 면제 경로 추가
           ignorePaths.addAll(csrfProperties.getIgnorePaths());
