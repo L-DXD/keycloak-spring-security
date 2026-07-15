@@ -157,9 +157,16 @@ public class KeycloakReactiveAuthenticationManager implements ReactiveAuthentica
   public Mono<Authentication> createAuthenticatedToken(
       String idTokenValue, String accessTokenValue, OidcUserInfo oidcUserInfo) {
     return decodeIdToken(idTokenValue)
-        .flatMap(idToken -> validateAccessTokenIfJwt(accessTokenValue, idToken.getSubject())
-            .then(Mono.fromCallable(
-                () -> buildAuthenticatedToken(idToken, idTokenValue, accessTokenValue, oidcUserInfo))));
+        .flatMap(idToken -> {
+          // servlet KeycloakAuthenticationProvider와 동일한 순서로 정렬(일관성 목적, 보안 정책·결과는
+          // 동일): ID Token 결합 검증 -> Subject 결합 검증 -> Access Token(JWT인 경우) azp/subject 검증.
+          TokenBindingValidator.validateIdTokenBinding(idToken, clientId);
+          TokenBindingValidator.validateSubjectBinding(
+              idToken.getSubject(), oidcUserInfo != null ? oidcUserInfo.getSubject() : null);
+          return validateAccessTokenIfJwt(accessTokenValue, idToken.getSubject())
+              .then(Mono.fromCallable(
+                  () -> buildAuthenticatedToken(idToken, idTokenValue, accessTokenValue, oidcUserInfo)));
+        });
   }
 
   /**
@@ -216,17 +223,11 @@ public class KeycloakReactiveAuthenticationManager implements ReactiveAuthentica
   }
 
   /**
-   * 서명 검증이 완료된 ID Token, UserInfo로부터 최종 인증 객체를 생성합니다.
-   * 토큰 결합 검증(sub/aud/azp)을 수행한 뒤 Principal을 생성합니다.
-   *
-   * @throws TokenBindingException 토큰 결합 검증 실패 시
+   * 서명 검증 및 토큰 결합 검증(sub/aud/azp, {@link #createAuthenticatedToken}에서 선행 수행)이 모두
+   * 끝난 ID Token, UserInfo로부터 최종 인증 객체를 생성합니다.
    */
   private Authentication buildAuthenticatedToken(
       Jwt idToken, String idTokenValue, String accessTokenValue, OidcUserInfo oidcUserInfo) {
-    TokenBindingValidator.validateIdTokenBinding(idToken, clientId);
-    TokenBindingValidator.validateSubjectBinding(
-        idToken.getSubject(), oidcUserInfo != null ? oidcUserInfo.getSubject() : null);
-
     OidcIdToken oidcIdToken = createOidcIdToken(idTokenValue, idToken);
     KeycloakPrincipal principal = createPrincipal(oidcIdToken, oidcUserInfo, idToken.getSubject());
 
