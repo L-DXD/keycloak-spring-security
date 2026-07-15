@@ -104,14 +104,16 @@ public class TokenBindingValidator {
      * @param accessToken    서명 검증이 완료된 Access Token {@link Jwt} (JWT 형식일 때만 호출)
      * @param idTokenSubject 서명 검증이 완료된 ID Token에서 추출한 subject
      * @throws TokenBindingException Access Token의 subject가 ID Token의 subject와 다를 경우(둘 중
-     *     하나라도 null이어서 비교 불가한 경우 포함)
+     *     하나라도 null이어서 비교 불가한 경우 포함). 예외 메시지의 subject는 {@link LogMaskingUtil}로
+     *     마스킹되어 노출됩니다(원문 UUID가 warn 로그로 그대로 남지 않도록, Low #4).
      */
     public static void validateAccessTokenSubject(Jwt accessToken, String idTokenSubject) {
         String accessTokenSubject = accessToken.getSubject();
         if (accessTokenSubject == null || !accessTokenSubject.equals(idTokenSubject)) {
             throw new TokenBindingException(
-                "Access Token의 subject(" + accessTokenSubject + ")가 ID Token의 subject("
-                    + idTokenSubject + ")와 일치하지 않습니다.");
+                "Access Token의 subject(" + LogMaskingUtil.maskIdentifier(accessTokenSubject)
+                    + ")가 ID Token의 subject(" + LogMaskingUtil.maskIdentifier(idTokenSubject)
+                    + ")와 일치하지 않습니다.");
         }
     }
 
@@ -149,7 +151,9 @@ public class TokenBindingValidator {
      *
      * @param idTokenSubject  서명 검증이 완료된 ID Token에서 추출한 subject
      * @param userInfoSubject UserInfo 응답의 subject (조회 실패/미사용 시 {@code null})
-     * @throws TokenBindingException 두 subject가 다를 경우
+     * @throws TokenBindingException 두 subject가 다를 경우. 예외 메시지의 subject는
+     *     {@link LogMaskingUtil}로 마스킹되어 노출됩니다(원문 UUID가 warn 로그로 그대로 남지 않도록,
+     *     Low #4).
      */
     public static void validateSubjectBinding(String idTokenSubject, String userInfoSubject) {
         if (userInfoSubject == null) {
@@ -157,7 +161,8 @@ public class TokenBindingValidator {
         }
         if (!userInfoSubject.equals(idTokenSubject)) {
             throw new TokenBindingException(
-                "ID Token의 subject(" + idTokenSubject + ")와 UserInfo의 subject(" + userInfoSubject
+                "ID Token의 subject(" + LogMaskingUtil.maskIdentifier(idTokenSubject)
+                    + ")와 UserInfo의 subject(" + LogMaskingUtil.maskIdentifier(userInfoSubject)
                     + ")가 일치하지 않습니다.");
         }
     }
