@@ -33,6 +33,7 @@ import org.springframework.security.oauth2.client.web.server.ServerOAuth2Authori
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.security.web.server.authentication.AuthenticationWebFilter;
 import org.springframework.security.web.server.context.NoOpServerSecurityContextRepository;
+import org.springframework.security.web.server.csrf.CsrfWebFilter;
 import org.springframework.security.web.server.util.matcher.AndServerWebExchangeMatcher;
 import org.springframework.security.web.server.util.matcher.NegatedServerWebExchangeMatcher;
 import org.springframework.security.web.server.util.matcher.OrServerWebExchangeMatcher;
@@ -229,16 +230,23 @@ public final class KeycloakWebFluxSecurityConfigurer {
   /**
    * CSRF 설정을 적용합니다.
    *
-   * <p>API 서버 기본값은 disabled. CSRF 활성화 시 면제 경로를 {@code requireCsrfProtectionMatcher}에
-   * <b>부정 매처(NegatedServerWebExchangeMatcher)</b>로 지정합니다.</p>
+   * <p>API 서버 기본값은 disabled. CSRF 활성화 시 {@code requireCsrfProtectionMatcher}는
+   * <b>{@link CsrfWebFilter#DEFAULT_CSRF_MATCHER}(GET/HEAD/TRACE/OPTIONS 등 안전 메서드 제외)</b>와
+   * <b>면제 경로 부정 매처(NegatedServerWebExchangeMatcher)</b>를 AND로 결합해 지정합니다.
+   * 안전 메서드까지 CSRF 보호 대상으로 잘못 지정되면 일반 GET 요청, OIDC 로그인 콜백,
+   * 정적 리소스, 리다이렉트 등이 403으로 차단될 수 있으므로 반드시 두 조건을 함께 적용해야
+   * 합니다.</p>
    *
    * <p><b>면제 대상:</b>
    * <ul>
-   *   <li>Front-Channel 로그아웃 경로 ({@code /logout})</li>
    *   <li>Back-Channel 로그아웃 경로 — POST+exact 경로 한정 (M-2 보강)</li>
-   *   <li>Bearer Token 엔드포인트 경로</li>
+   *   <li>Bearer Token 엔드포인트 경로 (토큰 발급/갱신, Bearer 전용 로그아웃)</li>
    *   <li>사용자 지정 ignorePaths</li>
    * </ul>
+   * <b>면제 대상 아님(항상 CSRF 보호):</b> 브라우저 Front-Channel 로그아웃 경로
+   * ({@link KeycloakWebFluxConstants#LOGOUT_URL}, 기본 {@code /logout}). Bearer 전용
+   * 로그아웃(prefix + {@code /logout})과는 별개의 엔드포인트이며, Bearer Token 활성 여부와
+   * 무관하게 CSRF 면제 목록에서 제외한다(보안 Medium #4, CWE-352 — 브라우저 강제 로그아웃 방지).
    * </p>
    *
    * <p><b>보안 Advisory 3:</b> {@code Authorization: Basic} 헤더 보유 여부만으로 CSRF를 전면
@@ -268,14 +276,19 @@ public final class KeycloakWebFluxSecurityConfigurer {
       // /token, /refresh — 비인증 자격증명 제출 엔드포인트이므로 항상 면제
       ignorePaths.add(prefix + "/token");
       ignorePaths.add(prefix + "/refresh");
-      // /logout — Bearer Token 활성 시에만 면제
+      // /logout(prefix) — Bearer Token 전용 로그아웃 API. Bearer 토큰으로만 호출되므로
+      // (브라우저 폼 세션과 무관) Bearer Token 활성 시 면제
       ignorePaths.add(prefix + "/logout");
-      // Front-Channel 로그아웃도 Bearer Token 활성 시에만 면제
-      // (쿠키 기반 OIDC 전용 환경에서는 /logout CSRF 보호 유지)
-      ignorePaths.add(KeycloakWebFluxConstants.LOGOUT_URL);
-    } else {
-      log.debug("[Configurer] Bearer Token 비활성 — /logout CSRF 보호 활성화 (면제 목록에서 제외)");
     }
+
+    // 보안 Medium #4: 브라우저 Front-Channel 로그아웃(KeycloakWebFluxConstants.LOGOUT_URL,
+    // 기본 "/logout")은 Bearer Token 전용 로그아웃(prefix + "/logout")과 별개의 엔드포인트이며,
+    // 항상 CSRF 보호를 유지한다(Bearer Token 활성 여부와 무관). 이 경로는 브라우저 쿠키 기반
+    // OIDC 세션을 종료하는 폼 POST 엔드포인트이므로, 여기를 CSRF 면제 목록에 포함시키면 공격
+    // 사이트가 크로스사이트 POST로 로그인된 사용자를 강제 로그아웃시킬 수 있다(CSRF, CWE-352).
+    // 따라서 어떤 조건에서도 LOGOUT_URL을 ignorePaths에 추가하지 않는다.
+    log.debug("[Configurer] /logout(LOGOUT_URL) CSRF 보호 항상 활성화 "
+        + "(Bearer Token 활성 여부와 무관, 면제 목록에서 제외)");
 
     ignorePaths.addAll(csrfProperties.getIgnorePaths());
     log.info("[Configurer] CSRF 활성화 (면제 경로: {})", ignorePaths);
@@ -293,7 +306,15 @@ public final class KeycloakWebFluxSecurityConfigurer {
     // 머신 전용 API를 면제하려면 csrfProperties.ignorePaths에 해당 경로를 명시적으로 등록한다.
 
     ServerWebExchangeMatcher exemptMatcher = new OrServerWebExchangeMatcher(exemptMatchers);
-    ServerWebExchangeMatcher csrfMatcher = new NegatedServerWebExchangeMatcher(exemptMatcher);
+
+    // 보안 Medium 3: 안전 메서드(GET/HEAD/TRACE/OPTIONS)는 CSRF 기본 동작과 동일하게 항상 제외한다.
+    // CsrfWebFilter.DEFAULT_CSRF_MATCHER를 재사용해 Spring Security 표준 안전-메서드 판정을 그대로 따르고,
+    // 여기에 "면제 경로가 아님" 조건을 AND로 추가해 최종 보호 대상을 좁힌다.
+    // (기존에는 면제 경로 부정만 사용해 안전 메서드까지 CSRF 토큰을 요구 -> GET 등이 403이 되는 버그가 있었다.)
+    ServerWebExchangeMatcher csrfMatcher = new AndServerWebExchangeMatcher(
+        CsrfWebFilter.DEFAULT_CSRF_MATCHER,
+        new NegatedServerWebExchangeMatcher(exemptMatcher)
+    );
 
     http.csrf(csrf -> csrf.requireCsrfProtectionMatcher(csrfMatcher));
   }

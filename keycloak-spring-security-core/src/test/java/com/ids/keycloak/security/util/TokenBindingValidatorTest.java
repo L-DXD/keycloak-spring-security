@@ -114,6 +114,50 @@ class TokenBindingValidatorTest {
     }
 
     @Nested
+    class validateAccessTokenSubject_테스트 {
+
+        // 2.0.1 패치(외부 검토 High #1): JWT Access Token의 sub를 ID Token의 sub와
+        // UserInfo 가용성과 무관하게 직접 비교한다. validateAccessTokenAzp와 대칭 구조.
+
+        @Test
+        void AT_sub와_ID_sub가_동일하면_성공한다() {
+            Jwt accessToken = buildJwt("user-1", List.of("account"), CLIENT_ID);
+
+            assertThatCode(() -> TokenBindingValidator.validateAccessTokenSubject(accessToken, "user-1"))
+                .doesNotThrowAnyException();
+        }
+
+        @Test
+        void AT_sub와_ID_sub가_다르면_TokenBindingException이_발생한다() {
+            // A의 ID Token(sub=user-A) + B의 Access Token(sub=user-B) 조합
+            Jwt accessToken = buildJwt("user-B", List.of("account"), CLIENT_ID);
+
+            assertThatThrownBy(() -> TokenBindingValidator.validateAccessTokenSubject(accessToken, "user-A"))
+                .isInstanceOf(TokenBindingException.class)
+                .hasMessageContaining("subject");
+        }
+
+        @Test
+        void AT_sub가_null이면_TokenBindingException이_발생한다() {
+            Jwt accessToken = buildJwt(null, List.of("account"), CLIENT_ID);
+
+            assertThatThrownBy(() -> TokenBindingValidator.validateAccessTokenSubject(accessToken, "user-1"))
+                .isInstanceOf(TokenBindingException.class)
+                .hasMessageContaining("subject");
+        }
+
+        @Test
+        void ID_sub가_null이면_TokenBindingException이_발생한다() {
+            // ID Token subject를 알 수 없는 상황(방어적 케이스) — 비교 불가로 간주해 차단
+            Jwt accessToken = buildJwt("user-1", List.of("account"), CLIENT_ID);
+
+            assertThatThrownBy(() -> TokenBindingValidator.validateAccessTokenSubject(accessToken, null))
+                .isInstanceOf(TokenBindingException.class)
+                .hasMessageContaining("subject");
+        }
+    }
+
+    @Nested
     class validateSubjectBinding_테스트 {
 
         @Test

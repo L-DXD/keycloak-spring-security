@@ -8,6 +8,7 @@ import com.ids.keycloak.security.exception.AuthenticationFailedException;
 import com.ids.keycloak.security.ratelimit.AuthenticationEventLogger;
 import com.ids.keycloak.security.exception.IntrospectionFailedException;
 import com.ids.keycloak.security.exception.RefreshTokenException;
+import com.ids.keycloak.security.exception.TokenBindingException;
 import com.ids.keycloak.security.exception.UserInfoFetchException;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
@@ -217,6 +218,16 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
             AuthenticationEventLogger.logSuccess(
                 AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(request), successfulAuthentication.getName());
 
+        } catch (TokenBindingException e) {
+            // ID Token/Access Token 결합 검증 실패는 오설정·재발급으로 해소되지 않는 예상된 인증
+            // 실패 사유이므로(Advisory 1), generic catch(Exception)의 "예상치 못한 오류"
+            // 스택트레이스 로깅 대신 원인 메시지만 warn으로 남긴다(로그 노이즈 정리).
+            SecurityContextHolder.clearContext();
+            log.warn("[Filter] 결합 검증 실패로 인증 실패: {}", e.getMessage());
+            AuthenticationEventLogger.logFailure(
+                AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(request), "unknown", e.getMessage());
+            CookieUtil.deleteAllTokenCookies(response);
+            sessionManager.invalidateSession(request.getSession());
         } catch (AuthenticationException e) {
             SecurityContextHolder.clearContext();
             log.warn("[Filter] Keycloak 인증에 실패했습니다: {}", e.getMessage());

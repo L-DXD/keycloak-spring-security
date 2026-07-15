@@ -3,6 +3,8 @@ package com.ids.keycloak.security.authentication;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.ids.keycloak.security.exception.AuthenticationFailedException;
@@ -10,6 +12,12 @@ import com.ids.keycloak.security.exception.ConfigurationException;
 import com.ids.keycloak.security.exception.IntrospectionFailedException;
 import com.ids.keycloak.security.exception.TokenBindingException;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.crypto.MACSigner;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
 import com.sd.KeycloakClient.client.auth.async.KeycloakAuthAsyncClient;
 import com.sd.KeycloakClient.client.user.async.KeycloakUserAsyncClient;
 import com.sd.KeycloakClient.dto.KeycloakResponse;
@@ -102,6 +110,23 @@ class KeycloakReactiveAuthenticationManagerTest {
       builder.claim("azp", azp);
     }
     return builder.build();
+  }
+
+  /**
+   * {@code JwtUtil.isStructurallyJwt()}가 {@code true}를 반환하도록 실제로 서명된(점 2개 포함,
+   * header.payload.signature 구조) JWT 문자열을 생성합니다. servlet
+   * {@code KeycloakAuthenticationProviderTest}와 동일한 픽스처 — 서명/클레임 내용은 이 테스트에서
+   * 신뢰되지 않으며(jwtDecoder가 mock), 오직 Opaque Access Token과 구분하기 위한 구조만 필요하다.
+   */
+  private String buildStructuralJwtAccessToken() {
+    try {
+      JWTClaimsSet claims = new JWTClaimsSet.Builder().subject("fixture-subject").build();
+      SignedJWT signedJWT = new SignedJWT(new JWSHeader(JWSAlgorithm.HS256), claims);
+      signedJWT.sign(new MACSigner("0123456789abcdef0123456789abcdef"));
+      return signedJWT.serialize();
+    } catch (JOSEException e) {
+      throw new IllegalStateException("테스트 픽스처 JWT 서명 생성에 실패했습니다.", e);
+    }
   }
 
   private KeycloakResponse<KeycloakIntrospectResponse> introspectOk(boolean active) {
@@ -237,6 +262,85 @@ class KeycloakReactiveAuthenticationManagerTest {
       StepVerifier.create(manager.authenticate(buildAuthRequest(ID_TOKEN_VAL, ACCESS_TOKEN_VAL)))
           .expectErrorMatches(e -> e instanceof TokenBindingException
               && e.getMessage().contains("azp"))
+          .verify();
+    }
+  }
+
+  // ==========================================================================
+  // 2.0.1 패치(외부 검토 High #1) 핵심 회귀 방지 — servlet Provider와 동일 시나리오, WebFlux 스택
+  // ==========================================================================
+
+  /**
+   * 패치 이전에는 Access Token에 대해 azp만 검증하고 sub는 UserInfo를 통해서만 간접 확인했다.
+   * {@code require-user-info=false}(기본값)에서 UserInfo 조회가 실패하면 이 간접 sub 검증 자체가
+   * 스킵되어, 사용자 A의 ID Token과 같은 Client에서 발급된 사용자 B의 JWT Access Token 조합이
+   * azp 일치만으로 인증을 통과할 수 있었다. 이 클래스는 그 회귀가 재발하지 않는지 검증한다.
+   */
+  @Nested
+  class Access_Token_Subject_직접_검증_2_0_1_패치 {
+
+    private String jwtAccessTokenVal;
+
+    @BeforeEach
+    void setUp() {
+      jwtAccessTokenVal = buildStructuralJwtAccessToken();
+      lenient().when(authAsyncClient.authenticationByIntrospect(ID_TOKEN_VAL))
+          .thenReturn(Mono.just(introspectOk(true)));
+      lenient().when(jwtDecoder.decode(ID_TOKEN_VAL))
+          .thenReturn(Mono.just(buildJwt(ID_TOKEN_VAL, USER_SUB, List.of(CLIENT_ID), CLIENT_ID)));
+    }
+
+    @Test
+    void requireUserInfo_false_UserInfo_실패_JWT_AT_sub_불일치시_TokenBindingException으로_인증에_실패한다() {
+      // require-user-info=false(기본값)에서 UserInfo 조회가 401로 실패하면 UserInfo 기반
+      // validateSubjectBinding은 스킵된다. 그러나 Access Token이 JWT 구조이고 sub가 ID Token과
+      // 다르면(OTHER_USER_SUB != USER_SUB) validateAccessTokenSubject가 이를 직접 차단해야 한다.
+      when(userAsyncClient.getUserInfo(jwtAccessTokenVal))
+          .thenReturn(Mono.just(userInfoFail(401)));
+      when(jwtDecoder.decode(jwtAccessTokenVal))
+          .thenReturn(Mono.just(buildJwt(jwtAccessTokenVal, OTHER_USER_SUB, List.of(CLIENT_ID), CLIENT_ID)));
+
+      StepVerifier.create(manager.authenticate(buildAuthRequest(ID_TOKEN_VAL, jwtAccessTokenVal)))
+          .expectErrorMatches(e -> e instanceof TokenBindingException
+              && e.getMessage().contains("subject"))
+          .verify();
+    }
+
+    @Test
+    void Opaque_Access_Token은_UserInfo_실패해도_sub_직접_검증을_스킵하고_기존_정책대로_인증에_성공한다_회귀없음() {
+      // Opaque(비-JWT) Access Token은 JwtUtil.isStructurallyJwt()가 false이므로
+      // jwtDecoder.decode(accessToken)가 호출되지 않아야 하고, 기존 정책
+      // (require-user-info=false → UserInfo 실패 시 빈 권한으로 인증 성공)이 그대로 유지되어야 한다.
+      String opaqueAccessTokenVal = "opaque-access-token-no-dots";
+      when(userAsyncClient.getUserInfo(opaqueAccessTokenVal))
+          .thenReturn(Mono.just(userInfoFail(401)));
+
+      StepVerifier.create(manager.authenticate(buildAuthRequest(ID_TOKEN_VAL, opaqueAccessTokenVal)))
+          .expectNextMatches(auth -> {
+            assertThat(auth.isAuthenticated()).isTrue();
+            assertThat(auth.getAuthorities()).isEmpty();
+            return true;
+          })
+          .verifyComplete();
+
+      verify(jwtDecoder, never()).decode(opaqueAccessTokenVal);
+    }
+
+    @Test
+    void Refresh_경로_createAuthenticatedToken_직접_호출에서도_JWT_AT_sub_불일치시_TokenBindingException이_발생한다() {
+      // Refresh Token 재발급 후 Filter가 직접 호출하는 진입점(createAuthenticatedToken)도
+      // 동일한 검증을 우회할 수 없어야 한다. UserInfo의 subject는 ID Token과 일치시켜
+      // (기존 validateSubjectBinding 통과) 실패 원인이 오직 새 direct sub 비교임을 격리한다.
+      when(jwtDecoder.decode(jwtAccessTokenVal))
+          .thenReturn(Mono.just(buildJwt(jwtAccessTokenVal, OTHER_USER_SUB, List.of(CLIENT_ID), CLIENT_ID)));
+
+      org.springframework.security.oauth2.core.oidc.OidcUserInfo sameUserInfo =
+          new org.springframework.security.oauth2.core.oidc.OidcUserInfo(Map.of("sub", USER_SUB));
+
+      StepVerifier.create(
+              manager.createAuthenticatedToken(ID_TOKEN_VAL, jwtAccessTokenVal, sameUserInfo))
+          .expectErrorMatches(e -> e instanceof TokenBindingException
+              && e.getMessage().contains("subject"))
           .verify();
     }
   }

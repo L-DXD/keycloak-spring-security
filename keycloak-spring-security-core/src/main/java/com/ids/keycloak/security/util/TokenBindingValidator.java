@@ -24,6 +24,14 @@ import org.springframework.security.oauth2.jwt.Jwt;
  * 포함하지 않는 경우가 흔합니다(예: {@code aud=["account"]}). 따라서 Access Token에는 {@code aud}
  * 포함 여부를 강제하지 않고, {@code azp}(있는 경우에 한해)만 검증합니다. ID Token은 OIDC Core 스펙상
  * {@code aud}에 client-id가 항상 포함되어야 하므로 이 클래스에서 엄격히 강제합니다.</p>
+ *
+ * <p><b>보안 패치 2.0.1(외부 검토 High #1) 대응 배경:</b> Advisory 1 도입 당시에는 Access Token에
+ * 대해 {@code azp}만 검증하고 {@code sub}는 UserInfo를 통해서만 간접 확인했습니다({@link
+ * #validateSubjectBinding}). 그런데 {@code require-user-info=false}(기본값)이고 UserInfo 조회가
+ * 실패하면 이 간접 sub 검증 자체가 스킵되어, 같은 Client에 발급된 서로 다른 사용자의 ID Token과
+ * Access Token 조합(Principal=A, 토큰=B)이 azp 일치만으로 통과할 수 있었습니다. 이를 막기 위해
+ * {@link #validateAccessTokenSubject}를 추가해 JWT Access Token의 {@code sub}를 ID Token의
+ * {@code sub}와 UserInfo 가용성과 무관하게 직접 비교합니다.</p>
  */
 @UtilityClass
 public class TokenBindingValidator {
@@ -59,6 +67,9 @@ public class TokenBindingValidator {
      * Keycloak Access Token은 Audience 매퍼 설정에 따라 {@code aud}에 client-id를 포함하지 않는 경우가
      * 흔하므로 {@code aud} 포함 여부는 강제하지 않습니다.
      *
+     * <p>이 메서드는 Client 결합(azp)만 검증합니다. 사용자 결합(sub)은 {@link #validateAccessTokenSubject}로
+     * 별도 검증해야 하며, 호출부는 이 메서드에 이어서 반드시 함께 호출해야 합니다(2.0.1 패치).</p>
+     *
      * @param accessToken 서명 검증이 완료된 Access Token {@link Jwt} (JWT 형식일 때만 호출)
      * @param clientId    이 애플리케이션의 OIDC client-id
      * @throws TokenBindingException azp가 있는데 client-id와 불일치할 시
@@ -68,6 +79,42 @@ public class TokenBindingValidator {
             return;
         }
         validateAzp(accessToken, clientId, "Access Token");
+    }
+
+    /**
+     * JWT 형식인 Access Token의 {@code sub}가 ID Token의 {@code sub}와 동일한지 직접 비교합니다.
+     *
+     * <p><b>보안 패치 2.0.1(외부 검토 High #1) 대응:</b> 기존에는 Access Token에 대해 {@code azp}만
+     * 검증하고 {@code sub}는 UserInfo 조회 결과를 통해서만 간접 확인했습니다({@link
+     * #validateSubjectBinding}). {@code require-user-info=false}(기본값)에서 UserInfo 조회가 실패하면
+     * 그 간접 검증 자체가 스킵되어, 사용자 A의 ID Token과 같은 Client에서 발급된 사용자 B의 Access Token
+     * 조합이 azp 일치만으로 인증을 통과할 수 있었습니다(Principal=A, 토큰=B 혼동). 이 메서드는 UserInfo
+     * 가용성과 무관하게 Access Token 자체의 서명 검증된 {@code sub} 클레임을 ID Token의 {@code sub}와
+     * 직접 비교하여 이 경로를 차단합니다.</p>
+     *
+     * <p><b>호출 순서:</b> {@link #validateAccessTokenAzp}로 Client 결합(azp)을 검증한 직후 이 메서드로
+     * 사용자 결합(sub)을 검증해야 합니다(둘 다 Access Token이 구조적으로 JWT일 때만 호출).</p>
+     *
+     * <p><b>Opaque Access Token의 한계:</b> Access Token이 Opaque(비-JWT) 형식이면 로컬에서 {@code sub}를
+     * 확인할 방법이 없습니다(Keycloak Introspect 응답이 {@code active} 여부만 노출하는 라이브러리 제약).
+     * 이 경우 호출부({@code JwtUtil.isStructurallyJwt}로 분기)가 이 메서드를 호출하지 않으며, 기존 정책
+     * (UserInfo 200 응답 + {@link #validateSubjectBinding})으로만 보호됩니다 — 회귀 없음. 이 한계를
+     * 제거하려면 Keycloak Access Token을 JWT 형식으로 발급하도록 구성해야 합니다.</p>
+     *
+     * @param accessToken    서명 검증이 완료된 Access Token {@link Jwt} (JWT 형식일 때만 호출)
+     * @param idTokenSubject 서명 검증이 완료된 ID Token에서 추출한 subject
+     * @throws TokenBindingException Access Token의 subject가 ID Token의 subject와 다를 경우(둘 중
+     *     하나라도 null이어서 비교 불가한 경우 포함). 예외 메시지의 subject는 {@link LogMaskingUtil}로
+     *     마스킹되어 노출됩니다(원문 UUID가 warn 로그로 그대로 남지 않도록, Low #4).
+     */
+    public static void validateAccessTokenSubject(Jwt accessToken, String idTokenSubject) {
+        String accessTokenSubject = accessToken.getSubject();
+        if (accessTokenSubject == null || !accessTokenSubject.equals(idTokenSubject)) {
+            throw new TokenBindingException(
+                "Access Token의 subject(" + LogMaskingUtil.maskIdentifier(accessTokenSubject)
+                    + ")가 ID Token의 subject(" + LogMaskingUtil.maskIdentifier(idTokenSubject)
+                    + ")와 일치하지 않습니다.");
+        }
     }
 
     private static void validateAzp(Jwt token, String clientId, String tokenLabel) {
@@ -104,7 +151,9 @@ public class TokenBindingValidator {
      *
      * @param idTokenSubject  서명 검증이 완료된 ID Token에서 추출한 subject
      * @param userInfoSubject UserInfo 응답의 subject (조회 실패/미사용 시 {@code null})
-     * @throws TokenBindingException 두 subject가 다를 경우
+     * @throws TokenBindingException 두 subject가 다를 경우. 예외 메시지의 subject는
+     *     {@link LogMaskingUtil}로 마스킹되어 노출됩니다(원문 UUID가 warn 로그로 그대로 남지 않도록,
+     *     Low #4).
      */
     public static void validateSubjectBinding(String idTokenSubject, String userInfoSubject) {
         if (userInfoSubject == null) {
@@ -112,7 +161,8 @@ public class TokenBindingValidator {
         }
         if (!userInfoSubject.equals(idTokenSubject)) {
             throw new TokenBindingException(
-                "ID Token의 subject(" + idTokenSubject + ")와 UserInfo의 subject(" + userInfoSubject
+                "ID Token의 subject(" + LogMaskingUtil.maskIdentifier(idTokenSubject)
+                    + ")와 UserInfo의 subject(" + LogMaskingUtil.maskIdentifier(userInfoSubject)
                     + ")가 일치하지 않습니다.");
         }
     }

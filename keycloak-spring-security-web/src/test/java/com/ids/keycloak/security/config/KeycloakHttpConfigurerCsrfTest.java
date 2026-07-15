@@ -42,6 +42,7 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
 import org.springframework.security.web.DefaultSecurityFilterChain;
 import org.springframework.security.web.csrf.CsrfFilter;
 import org.springframework.session.FindByIndexNameSessionRepository;
@@ -58,8 +59,15 @@ import org.springframework.session.Session;
  * 요청을 직접 흘려보내며 검증한다 — matcher/ignore 경로 로직을 테스트에 복제하지 않는다.</p>
  *
  * <p>webflux 모듈의 {@code CsrfExemptMatcherTest}와 동일한 시나리오를 검증해 servlet/webflux
- * 동등성을 확인한다 (보안 Advisory 3: {@code Authorization: Basic} 헤더는 더 이상 CSRF 면제
- * 사유가 아니다).</p>
+ * 동등성을 확인한다:
+ * <ul>
+ *   <li><b>보안 Advisory 3:</b> {@code Authorization: Basic} 헤더는 더 이상 CSRF 면제
+ *   사유가 아니다.</li>
+ *   <li><b>보안 Medium 4:</b> 브라우저 Front-Channel 로그아웃({@code /logout})은 Bearer Token
+ *   전용 로그아웃(prefix + {@code /logout})과 별개 엔드포인트이며, Bearer Token 활성 여부와
+ *   무관하게 항상 CSRF 보호를 유지해야 한다(CWE-352 — 강제 로그아웃 CSRF 방지).</li>
+ * </ul>
+ * </p>
  */
 class KeycloakHttpConfigurerCsrfTest {
 
@@ -145,12 +153,15 @@ class KeycloakHttpConfigurerCsrfTest {
     when(context.getBean(KeycloakLogoutHandler.class)).thenReturn(keycloakLogoutHandler);
     when(context.getBean(OidcClientInitiatedLogoutSuccessHandler.class)).thenReturn(oidcLogoutSuccessHandler);
     when(context.getBean(KeycloakSessionManager.class)).thenReturn(sessionManager);
-    when(context.getBean(JwtDecoder.class)).thenReturn(jwtDecoder);
+    when(context.getBean("keycloakOidcJwtDecoder", JwtDecoder.class)).thenReturn(jwtDecoder);
     when(context.getBean(KeycloakSecurityProperties.class)).thenReturn(props);
     when(context.getBean(KeycloakAuthenticationEntryPoint.class)).thenReturn(entryPoint);
     when(context.getBean(KeycloakAccessDeniedHandler.class)).thenReturn(accessDeniedHandler);
     when(context.getBean(LoggingContextAccessor.class)).thenReturn(new WebMdcContextAccessor());
     when(context.getBean(LoggingValueSanitizer.class)).thenReturn(new DefaultPiiMaskingSanitizer());
+    // Bearer Token 활성화 시 KeycloakHttpConfigurer#init이 OpaqueTokenIntrospector 빈을 조회한다
+    // (bearer-token.enabled=false인 시나리오에서는 조회되지 않으므로 stub만 등록해 두어도 무해하다).
+    when(context.getBean(OpaqueTokenIntrospector.class)).thenReturn(mock(OpaqueTokenIntrospector.class));
     // AuthorizeHttpRequestsConfigurer가 MVC 존재 여부/선택적 빈 존재 여부를 확인하기 위해 호출한다
     // (MVC·선택적 빈 미사용 환경으로 취급).
     when(context.getBeanNamesForType(any(Class.class))).thenReturn(new String[0]);
@@ -301,6 +312,75 @@ class KeycloakHttpConfigurerCsrfTest {
 
       assertThat(reached).isFalse();
       assertThat(response.getStatus()).isEqualTo(403);
+    }
+  }
+
+  // ==========================================================================
+  // 보안 Medium #4: 브라우저 Front-Channel 로그아웃(/logout)은 Bearer Token 활성 여부와
+  // 무관하게 항상 CSRF 보호를 유지한다. Bearer Token 전용 로그아웃(prefix + "/logout")과는
+  // 별개의 엔드포인트이며, 과거처럼 Bearer 활성 시 /logout까지 면제하면 공격 사이트가
+  // 크로스사이트 POST로 로그인 사용자를 강제 로그아웃시킬 수 있다(CWE-352).
+  // webflux CsrfExemptMatcherTest.Medium4_브라우저_logout_CSRF_보호_항상_유지 와 동일 시나리오.
+  // ==========================================================================
+
+  @Nested
+  class Medium4_브라우저_logout_CSRF_보호_항상_유지 {
+
+    @Test
+    void bearerToken_비활성시_logout_경로는_CSRF_보호_적용됨() throws Exception {
+      CsrfFilter csrfFilter = buildRealCsrfFilter(baseProperties());
+
+      MockHttpServletRequest request = newRequest("POST", "/logout");
+      MockHttpServletResponse response = new MockHttpServletResponse();
+
+      boolean reached = runThroughRealFilter(csrfFilter, request, response);
+
+      assertThat(reached).isFalse();
+      assertThat(response.getStatus()).isEqualTo(403);
+    }
+
+    @Test
+    void bearerToken_활성시에도_logout_경로는_CSRF_보호_유지() throws Exception {
+      // 보안 Medium #4 회귀 방지: Bearer Token을 켜도 브라우저 /logout은 면제되면 안 된다.
+      KeycloakSecurityProperties props = baseProperties();
+      props.getBearerToken().setEnabled(true);
+      CsrfFilter csrfFilter = buildRealCsrfFilter(props);
+
+      MockHttpServletRequest request = newRequest("POST", "/logout");
+      MockHttpServletResponse response = new MockHttpServletResponse();
+
+      boolean reached = runThroughRealFilter(csrfFilter, request, response);
+
+      assertThat(reached).isFalse();
+      assertThat(response.getStatus()).isEqualTo(403);
+    }
+
+    @Test
+    void bearerToken_활성시_전용_logout_엔드포인트는_CSRF_면제() throws Exception {
+      // Bearer 전용 로그아웃(prefix + "/logout")은 브라우저 폼 세션과 무관하므로 계속 면제된다.
+      KeycloakSecurityProperties props = baseProperties();
+      props.getBearerToken().setEnabled(true);
+      CsrfFilter csrfFilter = buildRealCsrfFilter(props);
+
+      String prefix = props.getBearerToken().getTokenEndpoint().getPrefix();
+      MockHttpServletRequest request = newRequest("POST", prefix + "/logout");
+      MockHttpServletResponse response = new MockHttpServletResponse();
+
+      boolean reached = runThroughRealFilter(csrfFilter, request, response);
+
+      assertThat(reached).isTrue();
+    }
+
+    @Test
+    void bearerToken_비활성시_back_channel_경로는_여전히_CSRF_면제() throws Exception {
+      CsrfFilter csrfFilter = buildRealCsrfFilter(baseProperties());
+
+      MockHttpServletRequest request = newRequest("POST", "/logout/connect/back-channel/keycloak");
+      MockHttpServletResponse response = new MockHttpServletResponse();
+
+      boolean reached = runThroughRealFilter(csrfFilter, request, response);
+
+      assertThat(reached).isTrue();
     }
   }
 }

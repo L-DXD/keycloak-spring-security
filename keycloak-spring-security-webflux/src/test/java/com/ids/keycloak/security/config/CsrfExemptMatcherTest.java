@@ -33,11 +33,17 @@ import reactor.test.StepVerifier;
  * 꺼내 요청을 직접 흘려보내며 검증한다. production {@code configureCsrf}가 조립한 matcher를
  * 그대로 실행하므로, matcher 로직이 바뀌면 이 테스트가 즉시 반응한다.</p>
  *
- * <p>CSRF 보호 = NOT(면제 대상) 공식 검증:
+ * <p>CSRF 보호 = AND(안전하지 않은 메서드, NOT(면제 대상)) 공식 검증:
  * <ul>
- *   <li>면제 경로(로그아웃/Back-Channel 로그아웃/Bearer Token 엔드포인트/사용자 지정 ignore-paths)
- *   → CSRF 토큰 없이도 통과</li>
- *   <li>일반 경로 → CSRF 토큰이 없으면 403</li>
+ *   <li>면제 경로(Back-Channel 로그아웃/Bearer Token 엔드포인트(전용 로그아웃 포함)/사용자 지정
+ *   ignore-paths) → CSRF 토큰 없이도 통과</li>
+ *   <li>일반 경로 + 안전하지 않은 메서드(POST/PUT/PATCH/DELETE) → CSRF 토큰이 없으면 403</li>
+ *   <li><b>보안 Medium 3:</b> 안전 메서드(GET/HEAD/OPTIONS)는 {@link CsrfWebFilter#DEFAULT_CSRF_MATCHER}에
+ *   의해 비면제 경로에서도 CSRF 토큰 없이 항상 통과해야 한다 — 그렇지 않으면 일반 GET, OIDC 로그인
+ *   콜백, 정적 리소스, 리다이렉트 등이 403으로 차단된다.</li>
+ *   <li><b>보안 Medium 4:</b> 브라우저 Front-Channel 로그아웃({@code /logout})은 Bearer Token
+ *   전용 로그아웃(prefix + {@code /logout})과 별개 엔드포인트이며, Bearer Token 활성 여부와
+ *   무관하게 항상 CSRF 보호를 유지해야 한다(CWE-352 — 강제 로그아웃 CSRF 방지).</li>
  *   <li><b>보안 Advisory 3:</b> {@code Authorization: Basic} 헤더 보유 여부는 더 이상 CSRF 면제
  *   사유가 아니다. Basic 헤더가 있어도 non-ignore 경로에서는 CSRF 토큰이 없으면 403이 반환되어야
  *   한다 — 브라우저가 캐시한 Basic 자격증명(ambient credential)을 이용한 cross-site 폼 제출이
@@ -123,6 +129,54 @@ class CsrfExemptMatcherTest {
   }
 
   // ==========================================================================
+  // 보안 Medium 3: 안전 메서드(GET/HEAD/OPTIONS)는 비면제 경로에서도 CSRF 보호 대상이 아니다.
+  // CsrfWebFilter.DEFAULT_CSRF_MATCHER가 안전 메서드를 판정하므로, production configureCsrf가
+  // 만든 실제 매처를 태워 검증한다.
+  // ==========================================================================
+
+  @Nested
+  class 안전_메서드는_비면제_경로에서도_CSRF_보호_대상_아님 {
+
+    @Test
+    void GET_요청은_비면제_경로에서도_토큰_없이_통과() throws Exception {
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(baseProperties());
+
+      MockServerWebExchange ex = exchange("GET", "/api/resource");
+
+      assertThat(runThroughRealFilter(csrfFilter, ex)).isTrue();
+    }
+
+    @Test
+    void HEAD_요청은_비면제_경로에서도_토큰_없이_통과() throws Exception {
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(baseProperties());
+
+      MockServerWebExchange ex = exchange("HEAD", "/api/resource");
+
+      assertThat(runThroughRealFilter(csrfFilter, ex)).isTrue();
+    }
+
+    @Test
+    void OPTIONS_요청은_비면제_경로에서도_토큰_없이_통과() throws Exception {
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(baseProperties());
+
+      MockServerWebExchange ex = exchange("OPTIONS", "/api/resource");
+
+      assertThat(runThroughRealFilter(csrfFilter, ex)).isTrue();
+    }
+
+    @Test
+    void OIDC_로그인_콜백_GET_요청은_토큰_없이_통과() throws Exception {
+      // OIDC Authorization Code Grant 리다이렉트 콜백. 브라우저가 인가서버에서 리다이렉트되며
+      // GET으로 도달하므로 CSRF 토큰을 들고 올 수 없다 — 안전 메서드 예외가 없으면 항상 403이 된다.
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(baseProperties());
+
+      MockServerWebExchange ex = exchange("GET", "/login/oauth2/code/keycloak");
+
+      assertThat(runThroughRealFilter(csrfFilter, ex)).isTrue();
+    }
+  }
+
+  // ==========================================================================
   // 면제 경로 → CSRF 토큰 없이 통과
   // ==========================================================================
 
@@ -187,14 +241,50 @@ class CsrfExemptMatcherTest {
       assertThat(reached).isFalse();
       assertThat(ex.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
     }
+
+    @Test
+    void PUT_요청은_비면제_경로에서_토큰_없으면_403() throws Exception {
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(baseProperties());
+
+      MockServerWebExchange ex = exchange("PUT", "/api/resource");
+      boolean reached = runThroughRealFilter(csrfFilter, ex);
+
+      assertThat(reached).isFalse();
+      assertThat(ex.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void PATCH_요청은_비면제_경로에서_토큰_없으면_403() throws Exception {
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(baseProperties());
+
+      MockServerWebExchange ex = exchange("PATCH", "/api/resource");
+      boolean reached = runThroughRealFilter(csrfFilter, ex);
+
+      assertThat(reached).isFalse();
+      assertThat(ex.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void DELETE_요청은_비면제_경로에서_토큰_없으면_403() throws Exception {
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(baseProperties());
+
+      MockServerWebExchange ex = exchange("DELETE", "/api/resource");
+      boolean reached = runThroughRealFilter(csrfFilter, ex);
+
+      assertThat(reached).isFalse();
+      assertThat(ex.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
   }
 
   // ==========================================================================
-  // H-4: /logout CSRF 면제는 Bearer Token 활성 시에만
+  // 보안 Medium #4: 브라우저 Front-Channel 로그아웃(/logout)은 Bearer Token 활성 여부와
+  // 무관하게 항상 CSRF 보호를 유지한다. Bearer Token 전용 로그아웃(prefix + "/logout")과는
+  // 별개의 엔드포인트이며, 과거처럼 Bearer 활성 시 /logout까지 면제하면 공격 사이트가
+  // 크로스사이트 POST로 로그인 사용자를 강제 로그아웃시킬 수 있다(CWE-352).
   // ==========================================================================
 
   @Nested
-  class H4_logout_CSRF_면제_조건 {
+  class Medium4_브라우저_logout_CSRF_보호_항상_유지 {
 
     @Test
     void bearerToken_비활성시_logout_경로는_CSRF_보호_적용됨() throws Exception {
@@ -208,12 +298,28 @@ class CsrfExemptMatcherTest {
     }
 
     @Test
-    void bearerToken_활성시_logout_경로는_CSRF_면제됨() throws Exception {
+    void bearerToken_활성시에도_logout_경로는_CSRF_보호_유지() throws Exception {
+      // 보안 Medium #4 회귀 방지: Bearer Token을 켜도 브라우저 /logout은 면제되면 안 된다.
       KeycloakSecurityProperties props = baseProperties();
       props.getBearerToken().setEnabled(true);
       CsrfWebFilter csrfFilter = buildRealCsrfFilter(props);
 
-      assertThat(runThroughRealFilter(csrfFilter, exchange("POST", "/logout"))).isTrue();
+      MockServerWebExchange ex = exchange("POST", "/logout");
+      boolean reached = runThroughRealFilter(csrfFilter, ex);
+
+      assertThat(reached).isFalse();
+      assertThat(ex.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void bearerToken_활성시_전용_logout_엔드포인트는_CSRF_면제() throws Exception {
+      // Bearer 전용 로그아웃(prefix + "/logout")은 브라우저 폼 세션과 무관하므로 계속 면제된다.
+      KeycloakSecurityProperties props = baseProperties();
+      props.getBearerToken().setEnabled(true);
+      CsrfWebFilter csrfFilter = buildRealCsrfFilter(props);
+
+      String prefix = props.getBearerToken().getTokenEndpoint().getPrefix();
+      assertThat(runThroughRealFilter(csrfFilter, exchange("POST", prefix + "/logout"))).isTrue();
     }
 
     @Test

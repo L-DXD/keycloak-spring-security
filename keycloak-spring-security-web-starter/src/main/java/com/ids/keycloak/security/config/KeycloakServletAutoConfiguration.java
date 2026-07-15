@@ -28,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
@@ -227,11 +228,21 @@ public class KeycloakServletAutoConfiguration {
          * 조회하므로, 애플리케이션 기동 시점에 Keycloak이 아직 기동되지 않았어도 컨텍스트 초기화가
          * 실패하지 않습니다.</p>
          *
-         * <p>사용자가 직접 {@link JwtDecoder} 빈을 등록하면 이 빈은 생략됩니다.</p>
+         * <p><b>High #2 대응 (webflux {@code keycloakOidcReactiveJwtDecoder}와 동일 패턴 정렬):</b>
+         * 조건을 {@code JwtDecoder.class} 타입이 아니라 이 빈의 <b>이름</b>({@code keycloakOidcJwtDecoder})
+         * 기반으로 좁힙니다. 과거에는 타입 기반 {@code @ConditionalOnMissingBean(JwtDecoder.class)}였는데,
+         * 애플리케이션이 다른 issuer/resource-server용 {@link JwtDecoder} 빈을 이미 가지고 있으면 이 전용
+         * decoder가 아예 생성되지 않거나(다른 decoder로 조용히 대체), 두 빈이 동시에 존재할 경우
+         * {@code NoUniqueBeanDefinitionException}으로 기동 자체가 실패할 수 있었습니다. 이 decoder를
+         * 소비하는 {@link #authenticationManager}도 타입이 아닌 {@code @Qualifier("keycloakOidcJwtDecoder")}로
+         * 명시 주입받습니다.</p>
+         *
+         * <p>사용자가 같은 이름({@code keycloakOidcJwtDecoder})의 {@link JwtDecoder} 빈을 직접 등록하면
+         * 이 빈은 생략됩니다.</p>
          */
-        @Bean
-        @ConditionalOnMissingBean(JwtDecoder.class)
-        public JwtDecoder keycloakJwtDecoder(
+        @Bean("keycloakOidcJwtDecoder")
+        @ConditionalOnMissingBean(name = "keycloakOidcJwtDecoder")
+        public JwtDecoder keycloakOidcJwtDecoder(
             KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig,
             KeycloakSecurityProperties securityProperties,
             @Value("${spring.security.oauth2.resourceserver.jwt.issuer-uri:"
@@ -257,7 +268,7 @@ public class KeycloakServletAutoConfiguration {
             KeycloakClient keycloakClient,
             KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig,
             KeycloakSecurityProperties securityProperties,
-            JwtDecoder jwtDecoder
+            @Qualifier("keycloakOidcJwtDecoder") JwtDecoder jwtDecoder
         ) {
             List<AuthenticationProvider> providers = new ArrayList<>();
 
