@@ -9,6 +9,14 @@
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-07-15
+### Fixed
+- **Redis 세션 사용 시 인증 요청이 500으로 실패하던 회귀 수정**: `session.store-type=redis` + `GenericJackson2JsonRedisSerializer`(Jackson 세션 직렬화) 조합에서 세션에 저장된 `SecurityContext`(OIDC 인증 정보)를 역직렬화할 때마다 예외가 발생해 이후 모든 요청이 인증 실패로 처리되던 문제. 원인 2가지를 함께 수정.
+  - 세션 전용 Jackson mixin(`KeycloakPrincipalMixin`/`KeycloakAuthenticationMixin`)이 getter 기반 introspection이라, `OidcUser`가 상속하는 setter 없는 파생 getter(`getAudience()` 등, `aud`는 OIDC 필수 클레임)까지 프로퍼티로 잡혀 `InvalidDefinitionException`(`no way to handle typed deser with setterless yet`)이 발생 → 필드 기반 introspection(`@JsonAutoDetect(fieldVisibility = ANY, getterVisibility = NONE)`)으로 전환(Spring 공식 `DefaultOidcUserMixin`과 동일 패턴).
+  - claims 역직렬화 시 `java.time.Instant`(`iat`/`exp`/`nbf`) 타입이 알려진 타입 목록에 없어 예외 없이 2-원소 `List`로 조용히 손상되던 것을 복원하도록 수정.
+  - 영향 범위: 2.0.0/2.0.1에서 `session.store-type=redis`를 사용하는 환경 전체(모든 인증 요청에서 재현). 세션 저장소가 `memory`(기본값)이거나 Redis를 JDK 직렬화로 쓰는 경우는 영향 없음.
+  - 대응: 세션 직렬화 포맷·설정 변경 없이 라이브러리 업그레이드만으로 해결(앱 코드 변경 불필요). breaking change 없음.
+
 ## [2.0.1] - 2026-07-15
 ### Security
 - **OIDC Access Token·ID Token subject 직접 비교 (외부 검토 High #1)**: 쿠키 기반 OIDC 인증에서 Access Token이 구조적으로 JWT이면 `TokenBindingValidator#validateAccessTokenSubject`로 Access Token의 `sub`를 ID Token `sub`와 직접 비교하도록 강화(servlet `KeycloakAuthenticationProvider`, webflux `KeycloakReactiveAuthenticationManager` 동일 적용). 기존에는 Access Token과 ID Token의 결합 여부를 UserInfo 엔드포인트 조회가 성공한 경우에만 확인했는데, UserInfo 조회가 실패하거나(장애) `require-user-info`가 기본값(`false`)이면 서로 다른 사용자의 Access Token과 ID Token이 조합되어도 인증이 성립할 수 있었음. **잔여 한계**: Opaque(불투명) Access Token은 로컬에서 `sub`를 파싱할 수 없어 이 직접 비교가 적용되지 않으며 여전히 UserInfo 일치 검증에만 의존함 — Opaque Access Token을 쓰는 환경은 `keycloak.security.authentication.require-user-info=true`로 UserInfo 검증을 필수화할 것을 권장.
@@ -118,7 +126,8 @@
 ### Added
 - `@EnableMethodSecurity` 적용, 초기 OIDC 로그인/세션/로그아웃/Redis 세션 등 기반 기능
 
-[Unreleased]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.1...HEAD
+[Unreleased]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.2...HEAD
+[2.0.2]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/L-DXD/keycloak-spring-security/compare/v1.10.2...v2.0.0
 [1.10.2]: https://github.com/L-DXD/keycloak-spring-security/compare/v1.10.1...v1.10.2
