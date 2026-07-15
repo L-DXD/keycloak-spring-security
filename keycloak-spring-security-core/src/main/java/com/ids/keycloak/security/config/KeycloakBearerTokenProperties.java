@@ -36,4 +36,18 @@ public class KeycloakBearerTokenProperties {
      */
     @NestedConfigurationProperty
     private TokenEndpointProperties tokenEndpoint = new TokenEndpointProperties();
+
+    /**
+     * 기동 시 검증입니다. Bearer Token이 비활성({@link #enabled} = {@code false})이면
+     * {@link TokenEndpointProperties}의 {@code prefix}는 CSRF 면제 경로 계산에 쓰이지 않으므로
+     * 검증을 생략합니다.
+     *
+     * @throws IllegalStateException {@link TokenEndpointProperties#validate()} 참고
+     */
+    public void validate() {
+        if (!enabled) {
+            return;
+        }
+        tokenEndpoint.validate();
+    }
 }

@@ -158,10 +158,15 @@ public class KeycloakSecurityProperties implements InitializingBean {
      * 오설정으로 인한 Advisory 7(CWE-863) 재현을 막기 위해 {@link #roleMapping}의 접두사 조합을
      * 검증하고, 위반 시 기동을 즉시 실패시킵니다.
      *
-     * @throws IllegalStateException {@link KeycloakRoleMappingProperties#validate()} 참고
+     * <p>또한 Bearer Token(Medium #4, CWE-352) 오설정으로 인한 CSRF 면제 무력화를 막기 위해
+     * {@link #bearerToken}의 토큰 발급 엔드포인트 {@code prefix}도 함께 검증합니다.</p>
+     *
+     * @throws IllegalStateException {@link KeycloakRoleMappingProperties#validate()},
+     *     {@link KeycloakBearerTokenProperties#validate()} 참고
      */
     @Override
     public void afterPropertiesSet() {
         roleMapping.validate();
+        bearerToken.validate();
     }
 }
