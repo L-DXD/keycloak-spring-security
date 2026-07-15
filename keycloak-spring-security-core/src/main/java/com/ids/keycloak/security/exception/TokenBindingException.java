@@ -10,6 +10,7 @@ package com.ids.keycloak.security.exception;
  *   <li>ID Token의 {@code sub}와 UserInfo의 {@code sub}가 불일치</li>
  *   <li>ID Token의 {@code aud}에 client-id가 없음</li>
  *   <li>{@code azp} 클레임이 있는데 client-id와 불일치 (ID Token/Access Token 공통)</li>
+ *   <li>(2.0.1 패치) JWT Access Token의 {@code sub}와 ID Token의 {@code sub}가 불일치</li>
  * </ul>
  * 이 예외는 {@link AuthenticationFailedException} 등과 마찬가지로 {@link KeycloakSecurityException}을
  * 상속하는 unchecked 예외이며, Refresh Token 재시도 대상이 아닙니다(재발급으로 해소되지 않는

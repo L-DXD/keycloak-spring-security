@@ -38,7 +38,8 @@ import org.springframework.web.client.RestClientException;
  * <p><b>보안 Advisory 1 대응:</b> ID Token은 {@link JwtDecoder}로 서명 검증을 통과한 뒤에만 Principal
  * 식별자(subject)로 사용하며, ID Token과 Access Token(UserInfo)이 동일 사용자·동일 Client에서
  * 발급되었는지({@link TokenBindingValidator}) 검증합니다. 하나라도 불일치하면
- * {@link TokenBindingException}이 발생해 인증에 실패합니다.</p>
+ * {@link TokenBindingException}이 발생해 인증에 실패합니다. (2.0.1 패치) JWT Access Token은
+ * UserInfo 가용성과 무관하게 subject를 ID Token과 직접 비교합니다.</p>
  */
 @Slf4j
 public class KeycloakAuthenticationProvider implements AuthenticationProvider {
@@ -133,7 +134,8 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
     *   <li>Access Token으로 UserInfo 조회(기존 로직)</li>
     *   <li>ID Token의 aud/azp가 이 애플리케이션의 client-id와 일치하는지 검증</li>
     *   <li>ID Token의 subject와 UserInfo의 subject가 일치하는지 검증</li>
-    *   <li>Access Token이 JWT 형식이면 추가로 디코딩하여 azp를 검증(Opaque면 로컬 결합 검증은 스킵)</li>
+    *   <li>Access Token이 JWT 형식이면 추가로 디코딩하여 azp와 subject(2.0.1 패치, ID Token과 직접
+    *       비교)를 검증(Opaque면 로컬 결합 검증은 스킵)</li>
     * </ol>
     * 하나라도 실패하면 {@link TokenBindingException}이 발생해 인증이 실패합니다(SecurityContext 미생성).</p>
     *
@@ -153,7 +155,7 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
       TokenBindingValidator.validateIdTokenBinding(idToken, clientId);
       TokenBindingValidator.validateSubjectBinding(
           idToken.getSubject(), oidcUserInfo != null ? oidcUserInfo.getSubject() : null);
-      validateAccessTokenIfJwt(accessTokenValue);
+      validateAccessTokenIfJwt(accessTokenValue, idToken.getSubject());
 
       OidcIdToken oidcIdToken = createOidcIdToken(idTokenValue, idToken);
       KeycloakPrincipal principal = createPrincipal(oidcIdToken, oidcUserInfo, idToken.getSubject());
@@ -179,23 +181,34 @@ public class KeycloakAuthenticationProvider implements AuthenticationProvider {
    }
 
    /**
-    * Access Token이 구조적으로 JWT 형식일 때만 추가로 디코딩하여 azp 결합 검증을 수행합니다.
+    * Access Token이 구조적으로 JWT 형식일 때만 추가로 디코딩하여 azp/subject 결합 검증을 수행합니다.
+    *
+    * <p><b>2.0.1 패치(외부 검토 High #1):</b> azp 검증({@link TokenBindingValidator#validateAccessTokenAzp})에
+    * 이어 Access Token의 subject를 ID Token의 subject와 직접 비교합니다
+    * ({@link TokenBindingValidator#validateAccessTokenSubject}). UserInfo 조회 실패
+    * ({@code require-user-info=false})로 {@link TokenBindingValidator#validateSubjectBinding}이
+    * 스킵되더라도, 이 직접 비교로 사용자 A의 ID Token과 사용자 B의 Access Token 조합(Principal=A,
+    * 토큰=B)을 차단합니다.</p>
     *
     * <p><b>알려진 제약(Opaque Access Token):</b> Access Token이 Opaque(비-JWT) 형식이면
-    * Keycloak Introspect 응답이 {@code active} 여부만 노출하므로(라이브러리 제약) 로컬 aud/azp
+    * Keycloak Introspect 응답이 {@code active} 여부만 노출하므로(라이브러리 제약) 로컬 aud/azp/subject
     * 결합 검증을 수행할 수 없습니다. 이 경우 UserInfo 200 응답 + subject 일치 검증으로만 보호됩니다
     * (기존 정책과 동일, 회귀 없음).</p>
     *
-    * @throws TokenBindingException Access Token이 JWT 구조인데 서명/클레임 검증에 실패한 경우
+    * @param accessTokenValue Access Token
+    * @param idTokenSubject   서명 검증이 완료된 ID Token에서 추출한 subject
+    * @throws TokenBindingException Access Token이 JWT 구조인데 서명/클레임 검증에 실패했거나,
+    *     azp/subject 결합 검증에 실패한 경우
     */
-   private void validateAccessTokenIfJwt(String accessTokenValue) {
+   private void validateAccessTokenIfJwt(String accessTokenValue, String idTokenSubject) {
       if (!JwtUtil.isStructurallyJwt(accessTokenValue)) {
-         log.debug("[Provider] Access Token이 JWT 구조가 아님(Opaque 추정) — aud/azp 로컬 결합 검증 스킵.");
+         log.debug("[Provider] Access Token이 JWT 구조가 아님(Opaque 추정) — aud/azp/subject 로컬 결합 검증 스킵.");
          return;
       }
       try {
          Jwt accessToken = jwtDecoder.decode(accessTokenValue);
          TokenBindingValidator.validateAccessTokenAzp(accessToken, clientId);
+         TokenBindingValidator.validateAccessTokenSubject(accessToken, idTokenSubject);
       } catch (JwtException e) {
          log.warn("[Provider] Access Token 서명/클레임 검증 실패: {}", e.getMessage());
          throw new TokenBindingException(
