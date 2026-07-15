@@ -145,7 +145,7 @@ class KeycloakHttpConfigurerCsrfTest {
     when(context.getBean(KeycloakLogoutHandler.class)).thenReturn(keycloakLogoutHandler);
     when(context.getBean(OidcClientInitiatedLogoutSuccessHandler.class)).thenReturn(oidcLogoutSuccessHandler);
     when(context.getBean(KeycloakSessionManager.class)).thenReturn(sessionManager);
-    when(context.getBean(JwtDecoder.class)).thenReturn(jwtDecoder);
+    when(context.getBean("keycloakOidcJwtDecoder", JwtDecoder.class)).thenReturn(jwtDecoder);
     when(context.getBean(KeycloakSecurityProperties.class)).thenReturn(props);
     when(context.getBean(KeycloakAuthenticationEntryPoint.class)).thenReturn(entryPoint);
     when(context.getBean(KeycloakAccessDeniedHandler.class)).thenReturn(accessDeniedHandler);

@@ -120,7 +120,10 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         // === 1. Authentication Provider 등록 ===
         String clientId = clientRegistrationRepository.findByRegistrationId("keycloak").getClientId();
         // 보안 Advisory 1: ID/Access Token 서명 검증 및 토큰 결합 검증용 JwtDecoder
-        JwtDecoder jwtDecoder = context.getBean(JwtDecoder.class);
+        // High #2: 타입(JwtDecoder.class)이 아닌 keycloakOidcJwtDecoder 빈 이름으로 조회한다.
+        // 애플리케이션이 다른 issuer/resource-server용 JwtDecoder를 등록해도 이 전용 decoder를
+        // 정확히 지목하며, NoUniqueBeanDefinitionException 위험도 없앤다.
+        JwtDecoder jwtDecoder = context.getBean("keycloakOidcJwtDecoder", JwtDecoder.class);
         KeycloakAuthenticationProvider provider =
             new KeycloakAuthenticationProvider(keycloakClient, clientId, jwtDecoder);
         // M-2: require-user-info 토글 적용 (기본 false = 기존 동작 유지, 회귀 0)
