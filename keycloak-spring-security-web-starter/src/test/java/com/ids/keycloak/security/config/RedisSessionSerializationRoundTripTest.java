@@ -254,4 +254,69 @@ class RedisSessionSerializationRoundTripTest {
       assertThat(result.getAuthorities()).hasSize(1);
     }
   }
+
+  // ------------------------------------------------------------------
+  // 2.0.2 회귀 테스트 — 실제 운영 ID Token 클레임 형태
+  // ------------------------------------------------------------------
+
+  /**
+   * 2.0.1까지의 회귀(regression) 재현 테스트.
+   *
+   * <p>위의 기존 테스트들은 {@code aud} 클레임을 포함하지 않아 다음 결함을 놓쳤다.</p>
+   * <ul>
+   *   <li>{@code KeycloakPrincipal}은 {@code OidcUser}/{@code IdTokenClaimAccessor}의
+   *   {@code getAudience()}(setter 없는 파생 {@code List<String>} getter)를 상속한다. {@code aud}는
+   *   OIDC 필수 클레임이라 실제 ID Token에는 항상 존재하며, 2.0.1의 mixin(getter 기반 introspection)은
+   *   이 파생 getter까지 프로퍼티로 잡아 역직렬화 시
+   *   {@code InvalidDefinitionException: Problem deserializing 'setterless' property ("audience"):
+   *   no way to handle typed deser with setterless yet}로 실패했다 — 모든 인증 요청에서 세션 복원이
+   *   깨지는 원인.</li>
+   *   <li>{@code Jwt.getClaims()}(Spring {@code MappedJwtClaimSetConverter})는 {@code iat}/{@code exp}를
+   *   {@code Long}이 아닌 {@code java.time.Instant}로 변환한다. 2.0.1의
+   *   {@code PlainClaimsMapDeserializer.isKnownTypeName()}에는 {@code java.time.Instant}가 없어
+   *   예외는 없지만 값이 2-원소 {@code List}로 조용히 손상되었다.</li>
+   * </ul>
+   */
+  @Nested
+  class 실제_운영_클레임_형태_회귀테스트 {
+
+    @Test
+    void aud_클레임_포함_KeycloakAuthentication_round_trip_성공() {
+      Instant now = Instant.now();
+      // Jwt.getClaims()가 실제로 만드는 형태: aud=List<String>, iat/exp=Instant,
+      // auth_time=Long(Keycloak가 추가하는, Spring이 자동 변환하지 않는 커스텀 숫자 클레임)
+      Map<String, Object> idTokenClaims = Map.of(
+          "sub", "user-123",
+          "aud", List.of("my-client"),
+          "iat", now,
+          "exp", now.plusSeconds(3600),
+          "auth_time", now.getEpochSecond()
+      );
+      OidcIdToken idToken = new OidcIdToken(
+          "valid.id.token", now, now.plusSeconds(3600), idTokenClaims);
+
+      KeycloakPrincipal principal = new KeycloakPrincipal(
+          "user-123",
+          List.of(new SimpleGrantedAuthority("ROLE_USER")),
+          idToken,
+          null
+      );
+
+      KeycloakAuthentication original =
+          new KeycloakAuthentication(principal, "valid.id.token", "valid.access.token", true);
+
+      byte[] serialized = serializer.serialize(original);
+      Object deserialized = serializer.deserialize(serialized);
+      assertThat(deserialized).isInstanceOf(KeycloakAuthentication.class);
+
+      KeycloakAuthentication result = (KeycloakAuthentication) deserialized;
+      assertThat(result.getPrincipal().getAudience()).containsExactly("my-client");
+
+      Map<String, Object> resultClaims = result.getPrincipal().getIdToken().getClaims();
+      assertThat(resultClaims.get("iat")).isInstanceOf(Instant.class);
+      assertThat((Instant) resultClaims.get("iat"))
+          .isCloseTo(now, org.assertj.core.api.Assertions.within(1, java.time.temporal.ChronoUnit.SECONDS));
+      assertThat(resultClaims.get("auth_time")).isEqualTo(now.getEpochSecond());
+    }
+  }
 }

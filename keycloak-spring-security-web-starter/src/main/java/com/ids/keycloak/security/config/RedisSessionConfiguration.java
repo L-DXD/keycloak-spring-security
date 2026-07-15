@@ -1,5 +1,7 @@
 package com.ids.keycloak.security.config;
 
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
@@ -173,14 +175,45 @@ public class RedisSessionConfiguration {
   // allowlist mixin — 커스텀 Keycloak 도메인 클래스
   // ---------------------------------------------------------------------------
 
-  /** allowlist mixin — {@link KeycloakPrincipal} */
+  /**
+   * allowlist mixin — {@link KeycloakPrincipal}.
+   *
+   * <p><b>2.0.2 패치(치명적 회귀):</b> {@code fieldVisibility=ANY, getterVisibility=NONE}로
+   * 필드 기반 introspection을 강제합니다. {@code KeycloakPrincipal}은 {@link
+   * org.springframework.security.oauth2.core.oidc.IdTokenClaimAccessor}를 구현하므로
+   * {@code getAudience()}(aud 클레임, {@code List<String>})·{@code getAuthenticationMethods()}(amr
+   * 클레임)처럼 setter 없는 파생 컬렉션 getter를 다수 상속합니다. 기본(getter 기반) introspection에서는
+   * default typing이 활성화된 상태에서 이 getter들도 직렬화 대상 프로퍼티로 잡히고, 역직렬화 시
+   * Jackson이 {@code SetterlessProperty}로 처리하려다
+   * {@code InvalidDefinitionException: Problem deserializing 'setterless' property ("audience"):
+   * no way to handle typed deser with setterless yet}를 던집니다. {@code aud} 클레임은 OIDC 필수
+   * 클레임이므로 실제 운영 ID Token에는 항상 존재해 <b>모든 인증 요청에서 세션 역직렬화가 실패</b>합니다
+   * (Spring 공식 {@code DefaultOidcUserMixin}/{@code OidcIdTokenMixin}과 동일한 필드 기반 패턴 적용).
+   * 필드 기반으로 전환하면 실제 생성자 파라미터(name/authorities/idToken/userInfo)만 프로퍼티로 잡혀
+   * 파생 getter는 전부 배제됩니다.</p>
+   */
   @JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
+  @JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY,
+      getterVisibility = JsonAutoDetect.Visibility.NONE,
+      isGetterVisibility = JsonAutoDetect.Visibility.NONE)
+  @JsonIgnoreProperties(value = {"attributes", "claims"}, ignoreUnknown = true)
   abstract static class KeycloakPrincipalMixin {
 
   }
 
-  /** allowlist mixin — {@link KeycloakAuthentication} */
+  /**
+   * allowlist mixin — {@link KeycloakAuthentication}.
+   *
+   * <p><b>2.0.2 패치:</b> {@link KeycloakPrincipalMixin}과 동일한 이유로 필드 기반 introspection을
+   * 적용합니다. {@code KeycloakAuthentication}은 {@code AbstractAuthenticationToken}을 상속하며,
+   * 이 슈퍼클래스가 노출하는 setter 없는 파생 getter({@code getName()} 등)를 getter 기반
+   * introspection에서 프로퍼티로 잡을 경우 유사한 역직렬화 실패 위험이 있어 동일하게 방지합니다.</p>
+   */
   @JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
+  @JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY,
+      getterVisibility = JsonAutoDetect.Visibility.NONE,
+      isGetterVisibility = JsonAutoDetect.Visibility.NONE)
+  @JsonIgnoreProperties(ignoreUnknown = true)
   abstract static class KeycloakAuthenticationMixin {
 
   }
@@ -266,8 +299,17 @@ public class RedisSessionConfiguration {
    * 이 클래스는 {@link JsonNode}를 직접 파싱하여 plain Java 타입으로 변환하므로,
    * AllowlistTypeIdResolver를 거치지 않습니다.</p>
    *
+   * <p><b>2.0.2 패치:</b> ID Token의 {@code iat}/{@code exp}/{@code nbf} 클레임은
+   * {@code Jwt.getClaims()}(Spring의 {@code MappedJwtClaimSetConverter}) 단계에서 이미
+   * {@code java.time.Instant}로 변환되어 있습니다({@code Long} 아님). 기존 코드가
+   * {@code isKnownTypeName()}에 {@code "java.time.Instant"}를 포함하지 않아, 이 값이
+   * {@code ["java.time.Instant", 1737039434.096212]} 형태로 직렬화된 뒤 역직렬화 시 타입 이름을
+   * 인식하지 못하고 <b>2개짜리 List로 잘못 변환되는 데이터 손상</b>이 있었습니다(예외는 발생하지 않아
+   * 발견이 어려움). {@code java.time.Instant}/{@code java.util.Date}를 별도 분기로 처리하여
+   * 실제 {@link Instant} 값으로 정확히 복원합니다.</p>
+   *
    * <p>지원 타입: {@code String}, {@code Long}, {@code Integer}, {@code Double},
-   * {@code Boolean}, {@code null}, 중첩 {@code Map}, {@code List}</p>
+   * {@code Boolean}, {@code Instant}, {@code Date}, {@code null}, 중첩 {@code Map}, {@code List}</p>
    */
   static class PlainClaimsMapDeserializer extends StdDeserializer<Map<String, Object>> {
 
@@ -340,17 +382,63 @@ public class RedisSessionConfiguration {
         return new ArrayList<>();
       }
       JsonNode first = arrayNode.get(0);
-      if (first.isTextual() && isKnownTypeName(first.asText())) {
-        // default typing 배열: ["TypeName", value] — 타입 이름을 무시하고 실제 값만 반환
-        if (arrayNode.size() >= 2) {
-          return parseNodeValue(arrayNode.get(1));
+      if (first.isTextual()) {
+        String typeName = first.asText();
+        // java.time.Instant/java.util.Date: 값을 그대로 반환하면 안 되고 실제 Instant로 복원해야 함
+        // (2.0.2 패치 — iat/exp/nbf 클레임 손상 수정)
+        if (isTemporalTypeName(typeName) && arrayNode.size() >= 2) {
+          return parseTemporalValue(arrayNode.get(1));
         }
-        return null;
+        if (isKnownTypeName(typeName)) {
+          // default typing 배열: ["TypeName", value] — 타입 이름을 무시하고 실제 값만 반환
+          if (arrayNode.size() >= 2) {
+            return parseNodeValue(arrayNode.get(1));
+          }
+          return null;
+        }
       }
       // 일반 배열
       List<Object> list = new ArrayList<>();
       arrayNode.forEach(item -> list.add(parseNodeValue(item)));
       return list;
+    }
+
+    /**
+     * {@code java.time.Instant}/{@code java.util.Date}로 default typing 래핑된 값을 실제
+     * {@link Instant}로 복원합니다.
+     *
+     * <p>jackson-datatype-jsr310의 기본 직렬화 형태(초 단위 소수 타임스탬프 숫자, 예:
+     * {@code 1737039434.096212}), ISO-8601 문자열, {@code {"epochSecond":..,"nano":..}} 객체
+     * 형태를 모두 지원합니다.</p>
+     */
+    private static Instant parseTemporalValue(JsonNode node) {
+      if (node == null || node.isNull()) {
+        return null;
+      }
+      if (node.isNumber()) {
+        java.math.BigDecimal seconds = node.decimalValue();
+        long epochSecond = seconds.longValue();
+        long nanos = seconds.subtract(java.math.BigDecimal.valueOf(epochSecond))
+            .multiply(java.math.BigDecimal.valueOf(1_000_000_000L))
+            .longValue();
+        return Instant.ofEpochSecond(epochSecond, nanos);
+      }
+      if (node.isTextual()) {
+        return Instant.parse(node.asText());
+      }
+      if (node.isObject()) {
+        long epochSecond = node.has("epochSecond") ? node.get("epochSecond").asLong() : 0;
+        int nano = node.has("nano") ? node.get("nano").asInt() : 0;
+        return Instant.ofEpochSecond(epochSecond, nano);
+      }
+      return null;
+    }
+
+    /**
+     * 클레임 맵 값 중 시간 관련 타입(변환이 필요한 타입)인지 확인합니다.
+     */
+    private static boolean isTemporalTypeName(String name) {
+      return name.equals("java.time.Instant") || name.equals("java.util.Date");
     }
 
     /**
