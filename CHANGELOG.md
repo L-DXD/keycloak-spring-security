@@ -9,6 +9,15 @@
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-07-15
+### Security
+- **OIDC Access Token·ID Token subject 직접 비교 (외부 검토 High #1)**: 쿠키 기반 OIDC 인증에서 Access Token이 구조적으로 JWT이면 `TokenBindingValidator#validateAccessTokenSubject`로 Access Token의 `sub`를 ID Token `sub`와 직접 비교하도록 강화(servlet `KeycloakAuthenticationProvider`, webflux `KeycloakReactiveAuthenticationManager` 동일 적용). 기존에는 Access Token과 ID Token의 결합 여부를 UserInfo 엔드포인트 조회가 성공한 경우에만 확인했는데, UserInfo 조회가 실패하거나(장애) `require-user-info`가 기본값(`false`)이면 서로 다른 사용자의 Access Token과 ID Token이 조합되어도 인증이 성립할 수 있었음. **잔여 한계**: Opaque(불투명) Access Token은 로컬에서 `sub`를 파싱할 수 없어 이 직접 비교가 적용되지 않으며 여전히 UserInfo 일치 검증에만 의존함 — Opaque Access Token을 쓰는 환경은 `keycloak.security.authentication.require-user-info=true`로 UserInfo 검증을 필수화할 것을 권장.
+- **WebFlux CSRF 매처의 안전 메서드 예외 누락 수정 (외부 검토 Medium #3)**: `KeycloakWebFluxSecurityConfigurer#configureCsrf()`의 CSRF 보호 대상 매처가 면제 경로 부정(NOT)만으로 구성되어 있어, CSRF 활성화 시 GET/HEAD/OPTIONS/TRACE 등 안전 메서드 요청(조회, OIDC 콜백 등)까지 CSRF 토큰을 요구해 `403`을 반환하던 문제. Spring 표준 안전-메서드 제외 매처(`CsrfWebFilter.DEFAULT_CSRF_MATCHER`)와 면제 경로 부정 매처를 AND로 결합해 servlet(`CsrfConfigurer`)과 동일한 방식으로 정렬.
+- **브라우저 Front-Channel `/logout`의 강제 로그아웃 CSRF 우회 수정 (외부 검토 Medium #4, CWE-352)**: `bearer-token.enabled=true`일 때 CSRF 면제 경로 목록에 브라우저용 Front-Channel 로그아웃 경로(`/logout`)까지 함께 추가되던 로직을 제거(servlet `KeycloakHttpConfigurer`, webflux `KeycloakWebFluxSecurityConfigurer` 동일). Bearer 활성 여부와 무관하게 브라우저 폼 기반 `/logout`은 항상 CSRF 보호되며, Bearer 전용 로그아웃(`{prefix}/logout`)만 계속 면제됨.
+- **(외부 검토 Low #1~#4 묶음)**: Bearer Token 엔드포인트 `token-endpoint.prefix`가 공백이거나 `"/"` 자체이면 기동을 실패시키는 검증을 추가(prefix가 비정상이면 Bearer 전용 로그아웃 경로가 브라우저 Front-Channel `/logout`과 사실상 동일해져 위 Medium #4가 재현될 수 있는 설정을 fail-fast로 차단); webflux `KeycloakReactiveAuthenticationManager`의 토큰 결합 검증 순서를 servlet `KeycloakAuthenticationProvider`와 동일하게 정렬(검증 결과는 동일, 두 스택 간 일관성 목적); `KeycloakAuthenticationFilter`에서 `TokenBindingException`을 포괄 `catch(Exception)`보다 먼저 전용 처리해 전체 스택트레이스 대신 warn 로그 한 줄만 남기도록 정리; `TokenBindingValidator`의 결합 검증 실패 예외 메시지에 그대로 노출되던 subject(UUID)를 기존 `LogMaskingUtil`로 마스킹.
+### Changed (Breaking)
+- Servlet OIDC 인증용 `JwtDecoder` 빈(`keycloakJwtDecoder` → `keycloakOidcJwtDecoder`)의 대체 조건(`@ConditionalOnMissingBean`)이 타입(`JwtDecoder.class`) 기반에서 빈 이름(`keycloakOidcJwtDecoder`) 기반으로 변경됨(webflux `keycloakOidcReactiveJwtDecoder`와 동일 패턴으로 정렬). 애플리케이션이 다른 issuer/resource-server용 `JwtDecoder` 빈을 이미 등록한 경우, 과거에는 이 전용 decoder가 생성되지 않거나(조용히 대체) 두 빈이 동시에 존재해 `NoUniqueBeanDefinitionException`으로 기동이 실패할 수 있었음. 이 decoder를 커스텀 재정의(override)하던 경우 빈 이름을 `keycloakOidcJwtDecoder`로 맞춰야 하며, 별도 resource-server용 JWT decoder가 필요하면 다른 이름을 쓰거나 소비 지점에서 `@Qualifier`로 명시 구분할 것.
+
 ## [2.0.0] - 2026-07-14
 ### Security
 - **OIDC ID/Access Token 사용자·클라이언트 결합 검증 강화 (Advisory 1)**: 쿠키 기반 OIDC 인증에서 ID Token subject를 서명 검증 없이 파싱해 Principal로 신뢰하던 로직을 제거. `JwtDecoder`(servlet) / `ReactiveJwtDecoder`(webflux)로 서명·iss·exp·nbf를 검증한 뒤에만 subject를 사용하도록 변경하고, ID Token의 `aud`/`azp`가 애플리케이션 client-id와 일치하는지, ID Token subject와 UserInfo subject가 일치하는지 추가 검증(`TokenBindingValidator`)해 서로 다른 사용자·클라이언트의 토큰이 조합되어 인증되는 것을 차단(Access Token이 JWT 형식이면 `azp`도 함께 검증, Opaque Access Token은 UserInfo 일치 검증까지 — 회귀 없음). 함께, OIDC issuer(`iss`) 해석 우선순위를 명시 프로퍼티 → 표준 Spring Boot `issuer-uri` → `base-url` 파생 순으로 정리해, `base-url`이 서버간 통신용 내부 주소라 브라우저가 보는 실제 issuer와 다른 환경에서 로그인이 전면 실패하는 문제를 예방.
@@ -109,7 +118,8 @@
 ### Added
 - `@EnableMethodSecurity` 적용, 초기 OIDC 로그인/세션/로그아웃/Redis 세션 등 기반 기능
 
-[Unreleased]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.1...HEAD
+[2.0.1]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/L-DXD/keycloak-spring-security/compare/v1.10.2...v2.0.0
 [1.10.2]: https://github.com/L-DXD/keycloak-spring-security/compare/v1.10.1...v1.10.2
 [1.10.1]: https://github.com/L-DXD/keycloak-spring-security/compare/v1.10.0...v1.10.1

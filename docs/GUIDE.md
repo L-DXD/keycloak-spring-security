@@ -3,7 +3,7 @@
 Keycloak을 Spring Security에 통합하는 라이브러리입니다. 의존성 하나와 최소 설정으로 OIDC 로그인·세션·로그아웃·인가가 자동 구성됩니다.
 
 - **지원**: JDK 17+, Spring Boot 3.5.x, Spring Security 6.5.x
-- **현재 버전**: `2.0.0`
+- **현재 버전**: `2.0.1`
 - **스택**: Servlet(Spring MVC) / **Reactive(WebFlux) — v1.8.0부터 servlet과 기능 동등** ([8. Reactive](#8-reactivewebflux))
 - 이 문서는 **도입 개발자용 사용 가이드**입니다. 아키텍처/기여 규칙은 [README](../README.md) 참고.
 
@@ -27,10 +27,10 @@ Keycloak을 Spring Security에 통합하는 라이브러리입니다. 의존성 
 
 ```gradle
 // Servlet (Spring MVC)
-implementation("io.github.l-dxd:keycloak-spring-security-web-starter:2.0.0")
+implementation("io.github.l-dxd:keycloak-spring-security-web-starter:2.0.1")
 
 // 또는 Reactive (WebFlux)
-implementation("io.github.l-dxd:keycloak-spring-security-webflux-starter:2.0.0")
+implementation("io.github.l-dxd:keycloak-spring-security-webflux-starter:2.0.1")
 ```
 > Redis 세션을 쓸 경우에만 추가:
 > ```gradle
@@ -366,6 +366,7 @@ LoggingValueSanitizer loggingValueSanitizer() {
 
 | 버전 | 변경 | 주의 |
 |------|------|------|
+| **2.0.1** ⚠️ | **외부 보안 검토 4건 대응** — OIDC Access Token subject를 ID Token subject와 직접 비교(High #1), WebFlux CSRF 안전 메서드 예외 누락 수정(Medium #3), 브라우저 Front-Channel `/logout` CSRF 우회 차단(Medium #4), Bearer prefix 검증·검증 순서 정렬·로그 정리·subject 마스킹(Low #1~#4) | **Breaking 1건** — 아래 [마이그레이션](#마이그레이션-201--외부-보안-검토-4건-breaking) |
 | **2.0.0** ⚠️ | **보안 강화 8건** — OIDC ID/Access Token 결합 검증(Advisory 1), 로그인 세션 고정 방지(Advisory 2), Rate Limit IP 판정 일원화(Advisory 2), Basic Auth CSRF 전면 면제 제거(Advisory 3), 백채널 로그아웃 로그 마스킹(Advisory 5), 인메모리 세션 저장소 용량 상한(Advisory 6), Realm/Client Role 네임스페이스 분리(Advisory 7), WebFlux 백채널 decoder 검증 강화(Advisory 8) | **Breaking 3건** — 아래 [마이그레이션](#마이그레이션-200--보안-강화-8건-breaking) |
 | **1.10.2** | (버그픽스 #54) webflux 토큰 무효화(백채널 로그아웃 등) 후 보호 경로 접근 시 refresh 재발급 실패가 500 나던 문제 → 미인증 처리로 EntryPoint(로그인 리다이렉트/401) 경유 | breaking 없음 |
 | **1.10.1** | (버그픽스 #52) webflux/servlet AJAX 판정 통일 — 브라우저 `Accept: */*`를 JSON으로 오판하던 문제 수정(`ajax-returns-json=true` 시 브라우저 리다이렉트 정상화) | breaking 없음 |
@@ -378,6 +379,24 @@ LoggingValueSanitizer loggingValueSanitizer() {
 | **1.4.x** | Bearer/Basic 인가 지원, stateless 세션 분리 | — |
 
 상세: `docs/12`, `docs/13`, `docs/14`
+
+### 마이그레이션 (2.0.1 — 외부 보안 검토 4건, breaking)
+외부 보안 검토(High #1/Medium #3/Medium #4/Low #1~#4) 반영으로 **API 변경 1건**이 있습니다. 나머지는 회귀 없는 보안 강화입니다.
+
+| # | 변경 | 영향 | 해제/대응 |
+|---|------|------|-----------|
+| 1 | Servlet OIDC 인증용 `JwtDecoder` 빈의 `@ConditionalOnMissingBean` 조건이 타입(`JwtDecoder.class`) 기반에서 빈 이름(`keycloakOidcJwtDecoder`) 기반으로 변경(webflux `keycloakOidcReactiveJwtDecoder`와 동일 패턴 정렬) | 이 decoder를 커스텀 빈으로 재정의(override)하던 코드가 빈 이름 불일치로 더 이상 대체되지 않음(라이브러리 기본 decoder와 사용자 decoder가 동시에 등록되어 `NoUniqueBeanDefinitionException`으로 기동 실패 가능) | 재정의 빈 이름을 `keycloakOidcJwtDecoder`로 맞출 것. 별도 resource-server용 JWT decoder가 필요하면 다른 이름을 쓰고 소비 지점에서 `@Qualifier`로 명시 구분 |
+
+**주의 (breaking은 아니지만 확인 필요) — Opaque Access Token + `require-user-info`**: 이번 버전은 Access Token이 구조적으로 JWT인 경우에 한해 `sub`를 ID Token과 직접 비교합니다(외부 검토 High #1). **Opaque(불투명) Access Token은 로컬에서 `sub`를 파싱할 수 없어 이 직접 비교의 보호를 받지 못하며**, 여전히 UserInfo 엔드포인트 조회 성공 시의 `sub` 일치 검증에만 의존합니다. Opaque Access Token을 발급하는 Keycloak 클라이언트를 쓴다면 다음을 반드시 켜세요.
+```yaml
+keycloak:
+  security:
+    authentication:
+      require-user-info: true   # UserInfo 조회 실패를 인증 실패로 승격(기본 false)
+```
+`require-user-info=false`(기본값)이면서 Opaque Access Token을 쓰는 환경은, UserInfo 조회가 실패(장애·타임아웃)했을 때 서로 다른 사용자의 Access Token과 ID Token이 조합되어도 인증이 성립할 수 있는 잔여 위험이 남습니다.
+
+그 외(회귀 없음): WebFlux CSRF 매처 안전 메서드(GET/HEAD/OPTIONS/TRACE) 예외 처리 정상화(Medium #3, 과거 CSRF 활성화 시 안전 메서드까지 403이 나던 문제 수정이라 오히려 허용 범위가 넓어짐), 브라우저 Front-Channel `/logout` CSRF 보호 강화(Medium #4 — Bearer 활성 시에만 `/logout`이 CSRF 면제되던 것을 제거, 정상적인 CSRF 토큰을 포함한 로그아웃 요청은 영향 없음), Bearer prefix 기동 시 검증(Low #1, 공백/`"/"` prefix를 쓰던 비정상 설정만 영향), webflux 토큰 결합 검증 순서 정렬·로그 정리·예외 메시지 마스킹(Low #2~#4).
 
 ### 마이그레이션 (2.0.0 — 보안 강화 8건, breaking)
 보안 검토(Advisory 1/2/3/5/6/7/8) 반영으로 **기본 동작 2가지가 변경**되고, **수동 배선(auto-filter-chain 미사용) 사용자에 한해** API 변경이 하나 있습니다.
