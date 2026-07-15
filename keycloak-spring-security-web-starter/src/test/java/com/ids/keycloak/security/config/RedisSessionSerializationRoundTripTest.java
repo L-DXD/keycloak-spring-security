@@ -7,18 +7,34 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ids.keycloak.security.authentication.KeycloakAuthentication;
 import com.ids.keycloak.security.config.RedisSessionConfiguration.KeycloakSecurityJackson2Module;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.crypto.RSASSASigner;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
+import java.net.URL;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
 import java.time.Instant;
 import java.util.Collections;
+import java.util.Date;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
+import org.springframework.data.redis.serializer.JdkSerializationRedisSerializer;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.jackson2.SecurityJackson2Modules;
+import org.springframework.security.oauth2.client.oidc.authentication.OidcIdTokenDecoderFactory;
 import org.springframework.security.oauth2.core.oidc.OidcIdToken;
 import org.springframework.security.oauth2.core.oidc.OidcUserInfo;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 
 /**
  * N-3: Redis 세션 직렬화 round-trip 검증 테스트.
@@ -256,54 +272,120 @@ class RedisSessionSerializationRoundTripTest {
   }
 
   // ------------------------------------------------------------------
-  // 2.0.2 회귀 테스트 — 실제 운영 ID Token 클레임 형태
+  // 2.0.2 회귀 테스트 — 실제 NimbusJwtDecoder 산출 Jwt.getClaims() 기반
   // ------------------------------------------------------------------
 
   /**
-   * 2.0.1까지의 회귀(regression) 재현 테스트.
+   * 2.0.1까지의 회귀(regression) 재현 + code-review High #1/#2(2.0.2) 검증 테스트.
    *
-   * <p>위의 기존 테스트들은 {@code aud} 클레임을 포함하지 않아 다음 결함을 놓쳤다.</p>
+   * <p>과거 테스트들은 손으로 만든 {@code Map.of(...)} claims를 사용해 다음 결함들을 놓쳤다.</p>
    * <ul>
-   *   <li>{@code KeycloakPrincipal}은 {@code OidcUser}/{@code IdTokenClaimAccessor}의
-   *   {@code getAudience()}(setter 없는 파생 {@code List<String>} getter)를 상속한다. {@code aud}는
-   *   OIDC 필수 클레임이라 실제 ID Token에는 항상 존재하며, 2.0.1의 mixin(getter 기반 introspection)은
-   *   이 파생 getter까지 프로퍼티로 잡아 역직렬화 시
-   *   {@code InvalidDefinitionException: Problem deserializing 'setterless' property ("audience"):
-   *   no way to handle typed deser with setterless yet}로 실패했다 — 모든 인증 요청에서 세션 복원이
-   *   깨지는 원인.</li>
-   *   <li>{@code Jwt.getClaims()}(Spring {@code MappedJwtClaimSetConverter})는 {@code iat}/{@code exp}를
-   *   {@code Long}이 아닌 {@code java.time.Instant}로 변환한다. 2.0.1의
-   *   {@code PlainClaimsMapDeserializer.isKnownTypeName()}에는 {@code java.time.Instant}가 없어
-   *   예외는 없지만 값이 2-원소 {@code List}로 조용히 손상되었다.</li>
+   *   <li>{@code KeycloakPrincipal}이 상속하는 setter 없는 파생 getter(예: {@code getAudience()})가
+   *   getter 기반 introspection에서 프로퍼티로 잡혀 역직렬화가 실패하던 결함(2.0.1) — 필드 기반
+   *   introspection(mixin)으로 수정됨.</li>
+   *   <li><b>High #1</b>: 운영 ID Token의 {@code iss}는 {@link OidcIdTokenDecoderFactory}(실제
+   *   {@link NimbusJwtDecoder}를 내부에서 사용)의 기본 claim 변환기가 {@code java.net.URL}로
+   *   변환하는데, 구버전 allowlist에 없어 2원소 {@code List}로 조용히 손상되었다. 중첩된
+   *   {@code resource_access}/{@code realm_access} 객체 값에는 {@code @class} 타입 메타데이터가
+   *   claim 키로 섞여 들어가는 오염도 있었다.</li>
+   *   <li><b>High #2</b>: {@code iat}/{@code exp}/{@code auth_time}은 {@code Instant}로 변환되는데
+   *   {@code JavaTimeModule} 미등록 시 직렬화 형태가 불안정했다.</li>
    * </ul>
+   *
+   * <p>아래 테스트는 손으로 만든 claims 대신, 로컬 RSA 키로 자체 서명한 JWT를 실제
+   * {@link NimbusJwtDecoder}로 디코딩하고 운영 코드와 동일한
+   * {@link OidcIdTokenDecoderFactory#createDefaultClaimTypeConverter()}를 적용해 얻은
+   * {@link Jwt#getClaims()}를 사용한다(네트워크 불필요 — JWKS 조회 없이 공개키로 즉시 검증).</p>
    */
   @Nested
-  class 실제_운영_클레임_형태_회귀테스트 {
+  class 실제_NimbusJwtDecoder_클레임_기반_회귀테스트 {
+
+    /**
+     * 로컬 RSA 키로 자체 서명한 JWT를 실제 {@link NimbusJwtDecoder} + 운영과 동일한
+     * {@link OidcIdTokenDecoderFactory} 기본 claim 변환기로 디코딩해 실제 운영 ID Token과
+     * 동일한 형태({@code iss}=URL, {@code aud}=List, {@code iat}/{@code exp}=Instant, 중첩
+     * {@code resource_access}/{@code realm_access}, 커스텀 Long 클레임)의 {@link Jwt}를 만든다.
+     */
+    private Jwt decodeRealIdTokenClaims() throws Exception {
+      KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("RSA");
+      keyPairGenerator.initialize(2048);
+      KeyPair keyPair = keyPairGenerator.generateKeyPair();
+
+      Instant now = Instant.now();
+      JWTClaimsSet claimsSet = new JWTClaimsSet.Builder()
+          .issuer("https://keycloak.example.com/realms/test")
+          .subject("user-123")
+          .audience("my-client")
+          .issueTime(Date.from(now))
+          .expirationTime(Date.from(now.plusSeconds(3600)))
+          // Keycloak가 추가하는, 기본 claim 변환기가 건드리지 않는 커스텀 숫자 클레임(Long 유지 검증용)
+          .claim("org_id", 9_999_999_999L)
+          .claim("resource_access", Map.of(
+              "my-client", Map.of("roles", List.of("ROLE_USER", "ROLE_ADMIN"))))
+          .claim("realm_access", Map.of("roles", List.of("offline_access", "uma_authorization")))
+          .build();
+
+      SignedJWT signedJwt =
+          new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).build(), claimsSet);
+      signedJwt.sign(new RSASSASigner((RSAPrivateKey) keyPair.getPrivate()));
+      String token = signedJwt.serialize();
+
+      NimbusJwtDecoder decoder =
+          NimbusJwtDecoder.withPublicKey((RSAPublicKey) keyPair.getPublic()).build();
+      // 운영 코드(OidcIdTokenDecoderFactory.createDecoder)와 동일한 claim 변환기를 재사용:
+      // iss -> java.net.URL, aud/amr -> List<String>, iat/exp/auth_time -> Instant 등
+      decoder.setClaimSetConverter(OidcIdTokenDecoderFactory.createDefaultClaimTypeConverter());
+
+      return decoder.decode(token);
+    }
+
+    /**
+     * claims 키집합 + 값 타입 + 값이 원본과 동일한지(잉여 {@code @class} 키 없음, 손상 없음)를
+     * 단언한다.
+     *
+     * <p>{@code iss}(URL)는 {@link URL#equals}가 호스트명 DNS 조회를 수행할 수 있어 테스트
+     * 환경에 따라 느려지거나 결과가 달라질 위험이 있으므로 {@code toString()} 비교로 대체하고,
+     * 나머지는 {@link Map#equals}로 한 번에 비교한다(값 타입이 바뀌면 예:
+     * {@code Long(1).equals(Integer(1))}이 {@code false}이므로 타입 손상도 함께 잡힌다).</p>
+     */
+    private void assertClaimsRoundTripIntact(Map<String, Object> expected, Map<String, Object> actual) {
+      assertThat(actual.keySet()).containsExactlyInAnyOrderElementsOf(expected.keySet());
+
+      assertThat(actual.get("iss")).isInstanceOf(URL.class);
+      assertThat(actual.get("iss").toString()).isEqualTo(expected.get("iss").toString());
+
+      Map<String, Object> expectedWithoutIss = new LinkedHashMap<>(expected);
+      Map<String, Object> actualWithoutIss = new LinkedHashMap<>(actual);
+      expectedWithoutIss.remove("iss");
+      actualWithoutIss.remove("iss");
+      assertThat(actualWithoutIss).isEqualTo(expectedWithoutIss);
+    }
 
     @Test
-    void aud_클레임_포함_KeycloakAuthentication_round_trip_성공() {
-      Instant now = Instant.now();
-      // Jwt.getClaims()가 실제로 만드는 형태: aud=List<String>, iat/exp=Instant,
-      // auth_time=Long(Keycloak가 추가하는, Spring이 자동 변환하지 않는 커스텀 숫자 클레임)
-      Map<String, Object> idTokenClaims = Map.of(
-          "sub", "user-123",
-          "aud", List.of("my-client"),
-          "iat", now,
-          "exp", now.plusSeconds(3600),
-          "auth_time", now.getEpochSecond()
-      );
+    void 실제_클레임_사전조건_확인() throws Exception {
+      // 아래 라운드트립 테스트가 실제로 취약했던 형태를 검증하고 있는지 사전 확인
+      Map<String, Object> claims = decodeRealIdTokenClaims().getClaims();
+
+      assertThat(claims.get("iss")).isInstanceOf(URL.class);
+      assertThat(claims.get("aud")).isInstanceOf(List.class);
+      assertThat(claims.get("iat")).isInstanceOf(Instant.class);
+      assertThat(claims.get("exp")).isInstanceOf(Instant.class);
+      assertThat(claims.get("org_id")).isInstanceOf(Long.class);
+      assertThat(claims.get("resource_access")).isInstanceOf(Map.class);
+      assertThat(claims.get("realm_access")).isInstanceOf(Map.class);
+    }
+
+    @Test
+    void 실제_클레임_GenericJackson2JsonRedisSerializer_왕복_손상없음() throws Exception {
+      Jwt jwt = decodeRealIdTokenClaims();
+      Map<String, Object> claims = jwt.getClaims();
+
       OidcIdToken idToken = new OidcIdToken(
-          "valid.id.token", now, now.plusSeconds(3600), idTokenClaims);
-
+          "signed.jwt.token", jwt.getIssuedAt(), jwt.getExpiresAt(), claims);
       KeycloakPrincipal principal = new KeycloakPrincipal(
-          "user-123",
-          List.of(new SimpleGrantedAuthority("ROLE_USER")),
-          idToken,
-          null
-      );
-
+          "user-123", List.of(new SimpleGrantedAuthority("ROLE_USER")), idToken, null);
       KeycloakAuthentication original =
-          new KeycloakAuthentication(principal, "valid.id.token", "valid.access.token", true);
+          new KeycloakAuthentication(principal, "signed.jwt.token", "access.token.value", true);
 
       byte[] serialized = serializer.serialize(original);
       Object deserialized = serializer.deserialize(serialized);
@@ -313,10 +395,33 @@ class RedisSessionSerializationRoundTripTest {
       assertThat(result.getPrincipal().getAudience()).containsExactly("my-client");
 
       Map<String, Object> resultClaims = result.getPrincipal().getIdToken().getClaims();
-      assertThat(resultClaims.get("iat")).isInstanceOf(Instant.class);
-      assertThat((Instant) resultClaims.get("iat"))
-          .isCloseTo(now, org.assertj.core.api.Assertions.within(1, java.time.temporal.ChronoUnit.SECONDS));
-      assertThat(resultClaims.get("auth_time")).isEqualTo(now.getEpochSecond());
+      assertClaimsRoundTripIntact(claims, resultClaims);
+      assertThat(result.getPrincipal().getIdToken().getIssuedAt()).isEqualTo(idToken.getIssuedAt());
+      assertThat(result.getPrincipal().getIdToken().getExpiresAt()).isEqualTo(idToken.getExpiresAt());
+    }
+
+    @Test
+    void 실제_클레임_JdkSerializationRedisSerializer_왕복_손상없음() throws Exception {
+      Jwt jwt = decodeRealIdTokenClaims();
+      Map<String, Object> claims = jwt.getClaims();
+
+      OidcIdToken idToken = new OidcIdToken(
+          "signed.jwt.token", jwt.getIssuedAt(), jwt.getExpiresAt(), claims);
+      KeycloakPrincipal principal = new KeycloakPrincipal(
+          "user-123", List.of(new SimpleGrantedAuthority("ROLE_USER")), idToken, null);
+      KeycloakAuthentication original =
+          new KeycloakAuthentication(principal, "signed.jwt.token", "access.token.value", true);
+
+      JdkSerializationRedisSerializer jdkSerializer = new JdkSerializationRedisSerializer();
+      byte[] serialized = jdkSerializer.serialize(original);
+      Object deserialized = jdkSerializer.deserialize(serialized);
+      assertThat(deserialized).isInstanceOf(KeycloakAuthentication.class);
+
+      KeycloakAuthentication result = (KeycloakAuthentication) deserialized;
+      Map<String, Object> resultClaims = result.getPrincipal().getIdToken().getClaims();
+      // JDK 직렬화는 Jackson default typing/@class 메타데이터 경로를 타지 않으므로
+      // (원본 객체 그래프를 그대로 직렬화) claims가 완전히 동일해야 한다.
+      assertThat(resultClaims).isEqualTo(claims);
     }
   }
 }
