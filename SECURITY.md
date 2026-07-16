@@ -1,48 +1,50 @@
-# 보안 정책 (Security Policy)
+# Security Policy
 
-## 지원 버전 (Supported Versions)
+**English** | [한국어](SECURITY.ko.md)
 
-| 버전 | 지원 | 비고 |
+## Supported Versions
+
+| Version | Support | Notes |
 |------|------|------|
-| **2.0.2+** | **권장** | Redis + Jackson 세션 역직렬화 회귀 수정. 외부 보안 검토 4건(2.0.1분) + 보안 전수 검토 8건(2.0.0분) 모두 포함. 프로덕션 권장 |
-| 2.0.1 | **사용 금지 (deprecated)** | Redis + Jackson 세션 사용 시 인증 요청마다 500 (`SecurityContext` 역직렬화 실패) — 2.0.2에서 수정. 즉시 2.0.2로 업그레이드 |
-| 2.0.0 | **사용 금지 (deprecated)** | 2.0.1과 동일한 세션 역직렬화 500 회귀 + 외부 검토 4건 미반영 — 즉시 2.0.2로 업그레이드 |
-| 1.10.2 | ⚠️ 업그레이드 권고 | Advisory 1/2/3/5/6/7/8 미반영 — OIDC 토큰 결합 검증, 세션 고정 방지, CSRF 전면 면제 제거 등 (아래 "과거 보안 수정" 참고) |
-| 1.10.1 | ⚠️ 업그레이드 권고 | [#54](https://github.com/L-DXD/keycloak-spring-security/issues/54)(백채널 로그아웃 후 500) 미수정, Advisory 1/2/3/5/6/7/8도 미반영 |
-| 1.10.0 | ⚠️ 업그레이드 권고 | #52 / #54 미수정, Advisory 1/2/3/5/6/7/8도 미반영 |
-| 1.6.0 – 1.9.x | ⚠️ 업그레이드 권고 | 보안 전수 검토(1.10.0) 미반영 — reactive 백채널 JWKS 검증, 쿠키 `secure` 기본값, X-Forwarded-For 신뢰, Redis JSON 직렬화 등, Advisory 1/2/3/5/6/7/8도 미반영 |
-| < 1.5.0 | ❌ 미지원 | **SecurityFilterChain Fail-Open** (CVSS 8.1) — 즉시 업그레이드 |
+| **2.0.2+** | **Recommended** | Redis + Jackson session deserialization regression fixed. Includes all 4 external security review items (from 2.0.1) + all 8 full security review items (from 2.0.0). Recommended for production |
+| 2.0.1 | **Deprecated (do not use)** | With Redis + Jackson sessions, every authenticated request returns 500 (`SecurityContext` deserialization failure) — fixed in 2.0.2. Upgrade to 2.0.2 immediately |
+| 2.0.0 | **Deprecated (do not use)** | Same session deserialization 500 regression as 2.0.1 + the 4 external review items not applied — upgrade to 2.0.2 immediately |
+| 1.10.2 | Upgrade recommended | Advisory 1/2/3/5/6/7/8 not applied — OIDC token combined validation, session fixation prevention, removal of blanket CSRF exemption, etc. (see "Resolved Advisories" below) |
+| 1.10.1 | Upgrade recommended | [#54](https://github.com/L-DXD/keycloak-spring-security/issues/54) (500 after back-channel logout) not fixed; Advisory 1/2/3/5/6/7/8 also not applied |
+| 1.10.0 | Upgrade recommended | #52 / #54 not fixed; Advisory 1/2/3/5/6/7/8 also not applied |
+| 1.6.0 – 1.9.x | Upgrade recommended | Full security review (1.10.0) not applied — reactive back-channel JWKS validation, cookie `secure` default, X-Forwarded-For trust, Redis JSON serialization, etc.; Advisory 1/2/3/5/6/7/8 also not applied |
+| < 1.5.0 | Unsupported | **SecurityFilterChain Fail-Open** (CVSS 8.1) — upgrade immediately |
 
-> 프로덕션에서는 **항상 2.0.2 이상**을 사용하세요. **2.0.0 / 2.0.1은 Redis + Jackson 세션 역직렬화 회귀(인증 요청마다 500)로 사용 금지**이며 2.0.2에서 수정됐습니다. 버전별 상세 변경은 [CHANGELOG.md](CHANGELOG.md)를 참고하세요.
+> In production, **always use 2.0.2 or higher**. **2.0.0 / 2.0.1 must not be used due to the Redis + Jackson session deserialization regression (500 on every authenticated request)**, which was fixed in 2.0.2. For detailed per-version changes, see [CHANGELOG.md](CHANGELOG.md).
 
-## 과거 보안 수정 (Resolved Advisories)
+## Resolved Advisories
 
-| 버전 | 내용 | 심각도 |
+| Version | Content | Severity |
 |------|------|--------|
-| **2.0.2** | Redis + Jackson(`GenericJackson2JsonRedisSerializer`) 세션에서 `SecurityContext` 역직렬화가 실패해 인증 요청마다 500이던 회귀 수정(2.0.0/2.0.1 영향, 가용성). 원인: OIDC 토큰 claims의 setterless getter 오검출 및 값 타입(iss=URL·iat/exp=Instant·중첩 객체) 손상 → 필드 기반 mixin + 범용 언랩 + JavaTimeModule로 수정 | Medium (가용성) |
-| **2.0.1** | OIDC Access Token subject를 ID Token subject와 직접 비교해 UserInfo 조회 실패 시 서로 다른 사용자 토큰 결합 차단(외부 검토 High #1, Opaque Access Token은 잔여 한계 — `require-user-info` 권장), WebFlux CSRF 매처 안전 메서드 예외 누락 수정(Medium #3), 브라우저 Front-Channel `/logout` 강제 로그아웃 CSRF 우회 차단(Medium #4, CWE-352), Bearer prefix 검증·인증 검증 순서 정렬·로그 정리·subject 마스킹(Low #1~#4) — 외부 보안 검토 4건 | Mixed |
-| **2.0.0** | OIDC ID/Access Token 결합 검증 강화(Advisory 1), 로그인 세션 고정 방지(Advisory 2), Rate Limit IP 판정 일원화(Advisory 2), Basic Auth CSRF 전면 면제 제거(Advisory 3, CWE-352), 백채널 로그아웃 로그 마스킹(Advisory 5), 인메모리 세션 저장소 용량 상한(Advisory 6, CWE-400/CWE-770), Realm/Client Role 네임스페이스 분리(Advisory 7, CWE-863), WebFlux 백채널 decoder 검증 강화(Advisory 8) — 보안 전수 검토 8건 | Mixed |
-| **1.10.2** | webflux 토큰 무효화 후 재발급 실패가 500 (로그인 리다이렉트 대신) — DoS성 (#54) | Medium |
-| **1.10.0** | reactive 백채널 로그아웃 `logout_token` 서명 미검증 → 임의 세션 강제 종료 (CVSS 8.2) | **High** |
-| **1.10.0** | 쿠키 `secure` 기본 false, X-Forwarded-For 무검증 신뢰, Redis JDK 직렬화(Gadget), 토큰 응답 캐시 등 보안 전수 검토 13건 | Mixed |
-| **1.5.0** | SecurityFilterChain Fail-Open — 사용자 자체 체인 추가 시 인증 우회 (CVSS 8.1) | **High** |
+| **2.0.2** | Fixed a regression where, with Redis + Jackson (`GenericJackson2JsonRedisSerializer`) sessions, `SecurityContext` deserialization failed and every authenticated request returned 500 (affecting 2.0.0/2.0.1; availability). Cause: misdetection of setterless getters in OIDC token claims and corruption of value types (iss=URL · iat/exp=Instant · nested objects) → fixed with a field-based mixin + generic unwrap + JavaTimeModule | Medium (availability) |
+| **2.0.1** | Directly compares the OIDC Access Token subject with the ID Token subject to block combining tokens from different users when the UserInfo lookup fails (external review High #1; Opaque Access Token has a residual limitation — `require-user-info` recommended), fixed the missing WebFlux CSRF matcher safe-method exception (Medium #3), blocked browser Front-Channel `/logout` forced-logout CSRF bypass (Medium #4, CWE-352), Bearer prefix validation, aligned authentication validation order, log cleanup, and subject masking (Low #1–#4) — 4 external security review items | Mixed |
+| **2.0.0** | Stronger OIDC ID/Access Token combined validation (Advisory 1), login session fixation prevention (Advisory 2), unified Rate Limit IP determination (Advisory 2), removal of blanket Basic Auth CSRF exemption (Advisory 3, CWE-352), back-channel logout log masking (Advisory 5), in-memory session store capacity cap (Advisory 6, CWE-400/CWE-770), Realm/Client Role namespace separation (Advisory 7, CWE-863), stronger WebFlux back-channel decoder validation (Advisory 8) — 8 full security review items | Mixed |
+| **1.10.2** | After webflux token invalidation, re-issuance failure returned 500 (instead of a login redirect) — DoS-like (#54) | Medium |
+| **1.10.0** | The reactive back-channel logout `logout_token` signature was not validated → arbitrary sessions could be forcibly terminated (CVSS 8.2) | **High** |
+| **1.10.0** | Cookie `secure` default false, unverified X-Forwarded-For trust, Redis JDK serialization (Gadget), token response caching, and other issues — 13 full security review items | Mixed |
+| **1.5.0** | SecurityFilterChain Fail-Open — authentication bypass when the user adds their own chain (CVSS 8.1) | **High** |
 
-## 취약점 신고 (Reporting a Vulnerability)
+## Reporting a Vulnerability
 
-보안 취약점을 발견하시면 **공개 이슈로 등록하지 마시고** 아래로 비공개 신고해 주세요.
+If you discover a security vulnerability, **please do not open a public issue**; report it privately via the channels below.
 
-- **이메일**: **yui5227@gmail.com** (비공개 신고)
-- 또는 **GitHub Security Advisory**: 본 저장소의 **Security → Advisories → Report a vulnerability** (비공개)
+- **Email**: **yui5227@gmail.com** (private report)
+- Or **GitHub Security Advisory**: this repository's **Security → Advisories → Report a vulnerability** (private)
 
-신고 시 다음을 포함해 주세요: 영향 받는 버전, 재현 절차, 영향 범위(인증 우회/세션/토큰 노출 등), 가능하면 PoC.
+When reporting, please include: affected versions, reproduction steps, impact scope (authentication bypass / session / token exposure, etc.), and a PoC if possible.
 
-접수 후 확인·수정·릴리스 절차를 거쳐 수정 버전과 함께 advisory를 공개합니다.
+After receipt, we go through confirmation, fix, and release, and disclose the advisory together with the fixed version.
 
-## 보안 권장 설정
+## Recommended Security Settings
 
-- `keycloak.security.cookie.secure=true` (1.10.0+ 기본) — HTTPS 환경 필수
-- `keycloak.security.cookie.same-site=Lax` (또는 `Strict`)
-- 리버스 프록시 뒤라면 `keycloak.security.trusted-proxy-count`를 프록시 수에 맞게 설정 (XFF 스푸핑 방지)
-- Redis 세션 사용 시 라이브러리 기본 JSON 직렬화 유지(JDK 직렬화 금지)
-- PII 마스킹(`DefaultPiiMaskingSanitizer`) 기본 on 유지
-- 자세한 마이그레이션/설정은 [docs/GUIDE.md](docs/GUIDE.md) 참고
+- `keycloak.security.cookie.secure=true` (default since 1.10.0) — required in HTTPS environments
+- `keycloak.security.cookie.same-site=Lax` (or `Strict`)
+- Behind a reverse proxy, set `keycloak.security.trusted-proxy-count` to match the number of proxies (prevents XFF spoofing)
+- When using Redis sessions, keep the library's default JSON serialization (do not use JDK serialization)
+- Keep PII masking (`DefaultPiiMaskingSanitizer`) on by default
+- For detailed migration/configuration, see [docs/GUIDE.md](docs/GUIDE.md)
