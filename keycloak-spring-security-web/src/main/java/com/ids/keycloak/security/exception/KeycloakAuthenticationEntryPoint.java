@@ -111,7 +111,7 @@ public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoin
             && !isBasicAuthRequest(request)
             && !isOAuth2FlowPath(request)
             && !SecurityHandlerUtil.isAjaxRequest(request)) {
-            String authorizationUrl = buildOAuth2AuthorizationUrl();
+            String authorizationUrl = buildOAuth2AuthorizationUrl(request);
             log.debug("KeycloakAuthenticationEntryPoint: 인증 실패 - OAuth2 로그인으로 리다이렉트: {}", authorizationUrl);
             response.sendRedirect(authorizationUrl);
             return;
@@ -122,14 +122,24 @@ public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoin
     }
 
     /**
-     * OAuth2 로그인 authorization endpoint URL을 생성합니다 (C-1).
+     * OAuth2 로그인 authorization endpoint URL을 생성합니다 (C-1, H-A).
      * <p>
      * Spring Security {@code oauth2Login}의 기본 authorization endpoint 규약
      * ({@code /oauth2/authorization/{registrationId}})을 그대로 따른다.
      * </p>
+     * <p>
+     * <b>H-A (context-path 배포 404):</b> {@link HttpServletResponse#sendRedirect(String)}에
+     * {@code /}로 시작하는 경로를 넘기면 컨테이너 루트(서버 도메인) 기준으로 해석된다.
+     * {@code /myapp} 같은 context-path로 배포된 애플리케이션에서 context-path를 붙이지 않으면
+     * 실제로는 {@code /myapp/oauth2/authorization/keycloak}이어야 할 경로가
+     * {@code /oauth2/authorization/keycloak}으로 리다이렉트되어 404가 된다. Spring Security의
+     * {@code LoginUrlAuthenticationEntryPoint}와 동일하게 {@link HttpServletRequest#getContextPath()}를
+     * prefix로 붙인다(context-path가 없는 환경에서는 빈 문자열이므로 회귀가 없다).
+     * </p>
      */
-    private String buildOAuth2AuthorizationUrl() {
-        return "/oauth2/authorization/" + errorProperties.getOauth2LoginRegistrationId();
+    private String buildOAuth2AuthorizationUrl(HttpServletRequest request) {
+        return request.getContextPath() + OAUTH2_AUTHORIZATION_PREFIX
+            + errorProperties.getOauth2LoginRegistrationId();
     }
 
     /**

@@ -188,14 +188,23 @@ public class KeycloakServerAuthenticationEntryPoint implements ServerAuthenticat
   }
 
   /**
-   * OAuth2 로그인 authorization endpoint URL을 생성합니다 (C-1).
+   * OAuth2 로그인 authorization endpoint URL을 생성합니다 (C-1, H-A).
    * <p>
    * Spring Security {@code oauth2Login}의 기본 authorization endpoint 규약
    * ({@code /oauth2/authorization/{registrationId}})을 그대로 따른다.
    * </p>
+   * <p>
+   * <b>H-A (context-path 배포 404):</b> {@code /}로 시작하는 경로로 리다이렉트하면 컨테이너
+   * 루트(서버 도메인) 기준으로 해석된다. {@code /myapp} 같은 context-path로 배포된 애플리케이션에서
+   * context-path를 붙이지 않으면 404가 된다. servlet 모듈의
+   * {@code HttpServletRequest#getContextPath()}에 대응하는
+   * {@code exchange.getRequest().getPath().contextPath().value()}를 prefix로 붙인다(context-path가
+   * 없는 환경에서는 빈 문자열이므로 회귀가 없다).
+   * </p>
    */
   private String buildOAuth2AuthorizationUrl(ServerWebExchange exchange) {
-    return OAUTH2_AUTHORIZATION_PREFIX + errorProperties.getOauth2LoginRegistrationId();
+    String contextPath = exchange.getRequest().getPath().contextPath().value();
+    return contextPath + OAUTH2_AUTHORIZATION_PREFIX + errorProperties.getOauth2LoginRegistrationId();
   }
 
   /**
