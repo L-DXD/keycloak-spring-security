@@ -33,11 +33,17 @@ import org.springframework.security.web.context.SecurityContextRepository;
  * {@link com.ids.keycloak.security.exception.UserInfoFetchException}) 그대로 전파되며, 인증 세션은
  * 세워지지 않습니다.</p>
  *
- * <p><b>세션 고정 방지:</b> 호출 시점에 이미 세션이 존재했다면
- * {@link HttpServletRequest#changeSessionId()}로 세션 ID를 회전합니다. 이는 라이브러리가
- * OIDC 로그인 성공 시 이미 사용하는 {@code ChangeSessionIdAuthenticationStrategy}와 동일한 기준
- * (기존 세션이 없으면 회전하지 않음)입니다. Back-Channel 로그아웃 인덱싱을 위한 Principal Name
- * 저장에는 세션이 반드시 필요하므로, 세션이 없었다면 새로 생성합니다.</p>
+ * <p><b>세션 고정 방지 + 재로그인 잔여물 방지(H-3):</b> 호출 시점에 이미 세션이 존재했다면, 이전
+ * 세션의 Principal Name과 새 인증의 Principal Name을 비교한다. <b>동일 사용자</b>라면
+ * {@link HttpServletRequest#changeSessionId()}로 세션 ID만 회전한다(라이브러리가 OIDC 로그인
+ * 성공 시 이미 사용하는 {@code ChangeSessionIdAuthenticationStrategy}와 동일 기준). <b>다른
+ * 사용자</b>라면(예: 로그아웃 없이 다른 계정으로 재로그인) 이전 세션을 완전히 무효화한 뒤 새 세션을
+ * 생성한다 — {@code changeSessionId()}는 속성을 보존하므로 세션 ID만 회전해서는 이전 사용자의
+ * Refresh Token/Keycloak Session ID가 새 세션에 잔존해, 다음 요청에서 이전 사용자로 재발급·인증되거나
+ * 백채널 로그아웃이 엉뚱한 세션을 무효화할 위험이 있기 때문이다. 두 경로 모두 Back-Channel 로그아웃
+ * 인덱싱을 위한 Principal Name 저장에는 세션이 반드시 필요하므로, 세션이 없었다면(또는 무효화했다면)
+ * 새로 생성한다. 동일 사용자 재로그인 경로에서도, 이번 호출에 refreshToken/sid가 제공되지 않았다면
+ * 이전 값을 명시적으로 제거한다(아래 5단계 참고).</p>
  *
  * <p><b>SecurityContext 영속화 — {@code security-context-repository} 정책을 존중:</b>
  * 생성자로 주입된 {@link SecurityContextRepository}에 {@code saveContext}를 호출합니다. 이 저장소는
@@ -142,14 +148,30 @@ public class KeycloakLoginService {
         Authentication authentication =
             authenticationProvider.createAuthenticatedToken(tokens.idToken(), tokens.accessToken());
 
-        // 2. 세션 고정 방지: 기존 세션이 있었다면 changeSessionId()로 회전한다.
-        //    (ChangeSessionIdAuthenticationStrategy와 동일 기준 — 세션이 없었다면 회전하지 않는다)
+        // 2. 세션 고정 방지 + 재로그인 잔여물 방지 (H-3).
+        //    changeSessionId()는 세션 ID만 회전하고 기존 속성(Refresh Token/sid 등)은 그대로
+        //    보존한다. 따라서 이전 세션이 "다른 사용자"의 것이라면(예: 로그아웃 없이 다른 계정으로
+        //    재로그인) changeSessionId()만으로는 이전 사용자의 Refresh Token/Keycloak Session ID가
+        //    새 사용자의 세션에 잔존해, 다음 요청에서 이전 사용자로 재발급·인증되거나 백채널
+        //    로그아웃이 엉뚱한 세션을 무효화할 위험이 있다. 이전 세션의 Principal Name과 새
+        //    인증의 Principal Name이 다르면 이전 세션을 통째로 무효화하고 완전히 새 세션을
+        //    생성한다 — 이 경로에서는 잔여물이 원천적으로 존재할 수 없다.
         HttpSession existingSession = request.getSession(false);
         if (existingSession != null) {
-            request.changeSessionId();
-            log.debug("[LoginService] 기존 세션의 ID를 회전했습니다(세션 고정 방지).");
+            String previousPrincipalName = sessionManager.getPrincipalName(existingSession).orElse(null);
+            boolean differentUser = previousPrincipalName != null && !previousPrincipalName.equals(authentication.getName());
+            if (differentUser) {
+                log.warn("[LoginService] 이전 세션의 Principal('{}')과 새 인증('{}')이 달라 세션을 무효화하고 "
+                        + "새 세션을 생성합니다(재로그인 잔여물 방지).",
+                    previousPrincipalName, authentication.getName());
+                sessionManager.invalidateSession(existingSession);
+            } else {
+                request.changeSessionId();
+                log.debug("[LoginService] 기존 세션의 ID를 회전했습니다(세션 고정 방지).");
+            }
         }
         // Back-Channel 로그아웃 인덱싱(Principal Name)을 위해 세션이 반드시 필요하므로 없으면 생성한다.
+        // (위에서 무효화한 경우에도 여기서 완전히 새로운 세션이 생성된다.)
         HttpSession session = request.getSession(true);
 
         // 3. SecurityContext 설정 + 선택된 SecurityContextRepository에 저장.
@@ -164,12 +186,21 @@ public class KeycloakLoginService {
 
         // 5. Refresh Token / Principal Name / Keycloak Session ID를 세션에 저장.
         //    Principal Name 저장은 Back-Channel 로그아웃 인덱스 조회에 필수다.
+        //    H-3: 이번 호출에 refreshToken/sid가 제공되지 않았다면(위에서 무효화하지 않은 동일 사용자
+        //    재로그인 케이스 포함) 이전 값이 남아있지 않도록 명시적으로 제거한다 — changeSessionId()는
+        //    속성을 보존하므로 이 명시적 제거가 없으면 이전 호출의 값이 계속 유효하게 남는다.
         if (tokens.refreshToken() != null) {
             sessionManager.saveRefreshToken(session, tokens.refreshToken());
+        } else {
+            sessionManager.removeRefreshToken(session);
         }
         sessionManager.savePrincipalName(session, authentication.getName());
-        extractKeycloakSessionId(authentication)
-            .ifPresent(sid -> sessionManager.saveKeycloakSessionId(session, sid));
+        Optional<String> keycloakSid = extractKeycloakSessionId(authentication);
+        if (keycloakSid.isPresent()) {
+            sessionManager.saveKeycloakSessionId(session, keycloakSid.get());
+        } else {
+            sessionManager.removeKeycloakSessionId(session);
+        }
 
         log.debug("[LoginService] 프로그래밍 방식 로그인 완료: {}", authentication.getName());
         return authentication;

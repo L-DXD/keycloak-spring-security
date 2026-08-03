@@ -104,6 +104,23 @@ public class KeycloakSessionManager {
         return Optional.ofNullable(sid);
     }
 
+    /**
+     * 세션에서 Keycloak Session ID를 삭제합니다 (H-3).
+     * <p>
+     * 재로그인 시 새 토큰에 {@code sid} 클레임이 없다면, 이전 로그인의 Keycloak Session ID가 세션에
+     * 남아 있지 않도록 명시적으로 제거해야 한다(잔여물로 인한 Back-Channel 로그아웃 오탐지 방지).
+     * </p>
+     *
+     * @param session HTTP 세션
+     */
+    public void removeKeycloakSessionId(HttpSession session) {
+        if (session == null) {
+            return;
+        }
+        session.removeAttribute(KEYCLOAK_SESSION_ID_ATTR);
+        log.debug("[SessionManager] Keycloak Session ID 삭제 완료.");
+    }
+
     // =====================
     // Principal Name 관련
     // =====================
@@ -121,6 +138,24 @@ public class KeycloakSessionManager {
         }
         session.setAttribute(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME, principalName);
         log.debug("[SessionManager] Principal Name 저장: {}", principalName);
+    }
+
+    /**
+     * 세션에 저장된 Principal Name을 조회합니다 (H-3).
+     * <p>
+     * 재로그인 시 이전 사용자와 새 사용자가 동일한지 판별하는 데 사용된다
+     * ({@code KeycloakLoginService} 참고).
+     * </p>
+     *
+     * @param session HTTP 세션
+     * @return Principal Name (Optional)
+     */
+    public Optional<String> getPrincipalName(HttpSession session) {
+        if (session == null) {
+            return Optional.empty();
+        }
+        String principalName = (String) session.getAttribute(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME);
+        return Optional.ofNullable(principalName);
     }
 
     // =====================
