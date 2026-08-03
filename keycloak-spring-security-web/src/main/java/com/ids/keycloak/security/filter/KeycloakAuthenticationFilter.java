@@ -249,8 +249,13 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
         if (existingAuth != null && existingAuth.isAuthenticated()
                 && !(existingAuth instanceof org.springframework.security.authentication.AnonymousAuthenticationToken)
                 && !(existingAuth.getPrincipal() instanceof KeycloakPrincipal)) {
+            // L-A: principal이 null인 Authentication도 위 instanceof 검사(음성 판정)를 통과해 이
+            // 블록에 진입할 수 있다. existingAuth.getPrincipal()을 로그 문에서 한 번 더 호출해
+            // .getClass()를 부르면 NPE가 발생해(이 try/catch 밖이므로) 요청이 500으로 실패한다.
+            // 지역 변수로 한 번만 조회하고 null 가드를 둔다.
+            Object principal = existingAuth.getPrincipal();
             log.debug("[Filter] 이 라이브러리가 만들지 않은 인증 '{}'(principal={}) 보존 — OIDC 쿠키 인증 스킵.",
-                existingAuth.getName(), existingAuth.getPrincipal().getClass().getSimpleName());
+                existingAuth.getName(), principal != null ? principal.getClass().getSimpleName() : "null");
             filterChain.doFilter(request, response);
             return;
         }
