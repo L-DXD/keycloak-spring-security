@@ -28,8 +28,9 @@ import reactor.core.publisher.Mono;
  *   <li>Basic Auth 요청 ({@code Authorization: Basic}, basicAuthEnabled=true) → WWW-Authenticate: Basic realm 헤더</li>
  *   <li>redirect-enabled=true + AJAX 요청 + ajaxReturnsJson=true → 401 JSON</li>
  *   <li>redirect-enabled=true (비-AJAX) → 로그인/세션만료 URL로 리다이렉트</li>
- *   <li>redirect-enabled=false(기본) + oauth2LoginRedirectEnabled=true(기본) + Basic Auth 아님 +
- *       비-AJAX(HTML) → OAuth2 로그인 authorization endpoint로 리다이렉트 (C-1)</li>
+ *   <li>redirect-enabled=false(기본) + oauth2LoginRedirectEnabled=true(기본) + oauth2Login 등록됨(C-B) +
+ *       Basic Auth 아님 + OAuth2 authorization/callback 경로 아님(C-B) + 비-AJAX(HTML) → OAuth2 로그인
+ *       authorization endpoint로 리다이렉트 (C-1)</li>
  *   <li>그 외 (API 모드) → 401 JSON</li>
  * </ol>
  * </p>
@@ -42,10 +43,16 @@ public class KeycloakServerAuthenticationEntryPoint implements ServerAuthenticat
   private static final String AJAX_HEADER = "X-Requested-With";
   private static final String AJAX_HEADER_VALUE = "XMLHttpRequest";
 
+  /** OAuth2 로그인 authorize 엔드포인트 경로 prefix (C-B 자기참조 가드). */
+  private static final String OAUTH2_AUTHORIZATION_PREFIX = "/oauth2/authorization/";
+  /** OAuth2 로그인 콜백(redirect_uri) 경로 prefix (C-B 자기참조 가드). */
+  private static final String OAUTH2_CALLBACK_PREFIX = "/login/oauth2/code/";
+
   private final ObjectMapper objectMapper;
   private final KeycloakErrorProperties errorProperties;
   private final boolean basicAuthEnabled;
   private final String realmName;
+  private final boolean oauth2LoginAvailable;
 
   /**
    * API 모드(redirect 없음) 기본 생성자.
@@ -57,6 +64,12 @@ public class KeycloakServerAuthenticationEntryPoint implements ServerAuthenticat
   /**
    * 전체 분기 지원 생성자.
    *
+   * <p>{@code oauth2LoginAvailable}은 {@code true}로 간주한다(하위 호환) — 실제로 oauth2Login이
+   * 등록되지 않은 애플리케이션에서 C-B 회귀(리다이렉트 대상 필터가 없어 무한 302)를 피하려면
+   * {@link #KeycloakServerAuthenticationEntryPoint(ObjectMapper, KeycloakErrorProperties, boolean,
+   * String, boolean)} 생성자로 실제 등록 여부를 전달해야 한다. Auto-Configuration 경로는 이미 그
+   * 생성자를 사용한다.</p>
+   *
    * @param objectMapper      JSON 직렬화
    * @param errorProperties   redirect/ajaxReturnsJson/URL 설정
    * @param basicAuthEnabled  Basic Auth 요청 분기 활성 여부
@@ -67,10 +80,30 @@ public class KeycloakServerAuthenticationEntryPoint implements ServerAuthenticat
       KeycloakErrorProperties errorProperties,
       boolean basicAuthEnabled,
       String realmName) {
+    this(objectMapper, errorProperties, basicAuthEnabled, realmName, true);
+  }
+
+  /**
+   * oauth2Login 등록 여부까지 지정하는 생성자 (C-B).
+   *
+   * @param oauth2LoginAvailable {@code ReactiveClientRegistrationRepository}/
+   *     {@code ReactiveOAuth2AuthorizedClientService}가 모두 존재해 {@code oauth2Login}이 실제로
+   *     체인에 등록되었는지 여부. {@code false}면 {@code /oauth2/authorization/{registrationId}}를
+   *     처리할 필터가 아예 없으므로, {@code oauth2LoginRedirectEnabled=true}여도 리다이렉트를
+   *     보내지 않고 401 JSON을 반환한다(그 경로 자체도 미인증으로 막혀 영구 302 루프가 되는 것을
+   *     방지).
+   */
+  public KeycloakServerAuthenticationEntryPoint(
+      ObjectMapper objectMapper,
+      KeycloakErrorProperties errorProperties,
+      boolean basicAuthEnabled,
+      String realmName,
+      boolean oauth2LoginAvailable) {
     this.objectMapper = objectMapper;
     this.errorProperties = errorProperties;
     this.basicAuthEnabled = basicAuthEnabled;
     this.realmName = realmName;
+    this.oauth2LoginAvailable = oauth2LoginAvailable;
   }
 
   @Override
@@ -129,11 +162,17 @@ public class KeycloakServerAuthenticationEntryPoint implements ServerAuthenticat
       // AJAX/명시적 JSON 요청이 아닌(즉 브라우저의 HTML 네비게이션으로 보이는) 요청은 기본적으로 OAuth2
       // 로그인 authorization endpoint로 리다이렉트한다. oauth2LoginRedirectEnabled=false로 끄면 항상
       // 401 JSON을 반환한다.
+      // C-B: oauth2Login이 실제로 등록되지 않았다면(oauth2LoginAvailable=false) 이 리다이렉트 대상
+      // 자체를 처리할 필터가 없어 그 경로도 미인증으로 남아 EntryPoint가 다시 호출되는 무한 302
+      // 루프가 된다 — 이 경우 리다이렉트 대신 401 JSON을 반환한다. 또한 실패한 요청이 이미
+      // authorization/callback 경로 자신이면(자기참조) 리다이렉트하지 않는다(무한 루프 가드).
       boolean basicAuthHeaderPresent = authHeader != null && authHeader.startsWith(BASIC_PREFIX);
       if (errorProperties.isOauth2LoginRedirectEnabled()
+          && oauth2LoginAvailable
           && !basicAuthHeaderPresent
+          && !isOAuth2FlowPath(exchange)
           && !isAjaxRequest(exchange)) {
-        String authorizationUrl = buildOAuth2AuthorizationUrl();
+        String authorizationUrl = buildOAuth2AuthorizationUrl(exchange);
         log.debug("[EntryPoint] 인증 실패 — OAuth2 로그인으로 리다이렉트: {}", authorizationUrl);
         response.setStatusCode(HttpStatus.FOUND);
         response.getHeaders().setLocation(URI.create(authorizationUrl));
@@ -155,8 +194,22 @@ public class KeycloakServerAuthenticationEntryPoint implements ServerAuthenticat
    * ({@code /oauth2/authorization/{registrationId}})을 그대로 따른다.
    * </p>
    */
-  private String buildOAuth2AuthorizationUrl() {
-    return "/oauth2/authorization/" + errorProperties.getOauth2LoginRegistrationId();
+  private String buildOAuth2AuthorizationUrl(ServerWebExchange exchange) {
+    return OAUTH2_AUTHORIZATION_PREFIX + errorProperties.getOauth2LoginRegistrationId();
+  }
+
+  /**
+   * 실패한 요청 자체가 OAuth2 authorization/callback 경로인지 확인합니다 (C-B 자기참조 가드).
+   * <p>
+   * 정상 구성이라면 이 경로들은 Spring Security의 OAuth2 관련 필터가 이 EntryPoint보다 먼저
+   * 처리하지만, oauth2Login 미등록 등 예외적인 구성에서 이 경로 자체가 미인증으로 EntryPoint까지
+   * 도달하면, 여기서 다시 같은 authorization endpoint로 리다이렉트해 무한 루프가 될 수 있다. 이를
+   * 방지하기 위해 이 경로들은 리다이렉트 대상에서 제외하고 401 JSON으로 처리한다.
+   * </p>
+   */
+  private boolean isOAuth2FlowPath(ServerWebExchange exchange) {
+    String path = exchange.getRequest().getPath().pathWithinApplication().value();
+    return path.startsWith(OAUTH2_AUTHORIZATION_PREFIX) || path.startsWith(OAUTH2_CALLBACK_PREFIX);
   }
 
   /**

@@ -671,13 +671,22 @@ public class KeycloakWebFluxAutoConfiguration {
     public KeycloakServerAuthenticationEntryPoint keycloakServerAuthenticationEntryPoint(
         ObjectMapper objectMapper,
         KeycloakSecurityProperties securityProperties,
-        KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig) {
+        KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig,
+        org.springframework.beans.factory.ObjectProvider<ReactiveClientRegistrationRepository> clientRegistrationRepoProvider,
+        org.springframework.beans.factory.ObjectProvider<ReactiveOAuth2AuthorizedClientService> authorizedClientServiceProvider) {
       log.debug("지원 Bean을 등록합니다: [KeycloakServerAuthenticationEntryPoint]");
+      // C-B: oauth2Login은 KeycloakWebFluxSecurityConfigurer#configure()에서 이 두 협력 빈이 모두
+      // 있을 때만 등록된다(그 메서드의 10번 항목 참고). 이 EntryPoint가 그 등록 여부를 정확히
+      // 알아야, 미등록 상태에서 OAuth2 로그인 리다이렉트를 시도해 처리 필터가 없는 무한 302 루프에
+      // 빠지는 것을 막을 수 있다.
+      boolean oauth2LoginAvailable = clientRegistrationRepoProvider.getIfAvailable() != null
+          && authorizedClientServiceProvider.getIfAvailable() != null;
       return new KeycloakServerAuthenticationEntryPoint(
           objectMapper,
           securityProperties.getError(),
           securityProperties.getBasicAuth().isEnabled(),
-          keycloakConfig.getRealmName());
+          keycloakConfig.getRealmName(),
+          oauth2LoginAvailable);
     }
 
     @Bean

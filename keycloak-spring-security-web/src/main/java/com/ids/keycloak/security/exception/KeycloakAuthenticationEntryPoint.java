@@ -21,6 +21,11 @@ import java.io.IOException;
 @Slf4j
 public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoint {
 
+    /** OAuth2 로그인 authorize 엔드포인트 경로 prefix (C-B 자기참조 가드). */
+    private static final String OAUTH2_AUTHORIZATION_PREFIX = "/oauth2/authorization/";
+    /** OAuth2 로그인 콜백(redirect_uri) 경로 prefix (C-B 자기참조 가드). */
+    private static final String OAUTH2_CALLBACK_PREFIX = "/login/oauth2/code/";
+
     private final ObjectMapper objectMapper;
     private final KeycloakErrorProperties errorProperties;
     private final boolean basicAuthEnabled;
@@ -100,8 +105,11 @@ public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoin
         // 로그인 플로우를 그대로 유지한다. Authorization 헤더 보유 자체가 "프로그래밍적 클라이언트"의
         // 근거이므로 basicAuthEnabled 토글과 무관하게 리다이렉트 대상에서 제외한다.
         // oauth2LoginRedirectEnabled=false로 끄면 항상 401 JSON을 반환한다(순수 API 서버).
+        // C-B: 실패한 요청 자체가 OAuth2 authorization/callback 경로면 리다이렉트하지 않는다
+        // (자기참조 가드 — 무한 루프 방지).
         if (errorProperties.isOauth2LoginRedirectEnabled()
             && !isBasicAuthRequest(request)
+            && !isOAuth2FlowPath(request)
             && !SecurityHandlerUtil.isAjaxRequest(request)) {
             String authorizationUrl = buildOAuth2AuthorizationUrl();
             log.debug("KeycloakAuthenticationEntryPoint: 인증 실패 - OAuth2 로그인으로 리다이렉트: {}", authorizationUrl);
@@ -156,5 +164,27 @@ public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoin
     private boolean isBasicAuthRequest(HttpServletRequest request) {
         String authHeader = request.getHeader("Authorization");
         return authHeader != null && authHeader.startsWith("Basic ");
+    }
+
+    /**
+     * 실패한 요청 자체가 OAuth2 authorization/callback 경로인지 확인합니다 (C-B 자기참조 가드).
+     * <p>
+     * 정상 구성이라면 이 경로들은 Spring Security의 OAuth2 관련 필터가 이 EntryPoint보다 먼저
+     * 처리하지만, 예외적인 구성(예: 필터 순서 커스터마이즈)에서 이 경로 자체가 미인증으로
+     * EntryPoint까지 도달하면, 여기서 다시 같은 authorization endpoint로 리다이렉트해 무한 루프가
+     * 될 수 있다. 이를 방지하기 위해 이 경로들은 리다이렉트 대상에서 제외하고 401 JSON으로 처리한다.
+     * </p>
+     */
+    private boolean isOAuth2FlowPath(HttpServletRequest request) {
+        String requestUri = request.getRequestURI();
+        if (requestUri == null || requestUri.isEmpty()) {
+            return false;
+        }
+        String contextPath = request.getContextPath();
+        String path = requestUri;
+        if (contextPath != null && !contextPath.isEmpty() && requestUri.startsWith(contextPath)) {
+            path = requestUri.substring(contextPath.length());
+        }
+        return path.startsWith(OAUTH2_AUTHORIZATION_PREFIX) || path.startsWith(OAUTH2_CALLBACK_PREFIX);
     }
 }
