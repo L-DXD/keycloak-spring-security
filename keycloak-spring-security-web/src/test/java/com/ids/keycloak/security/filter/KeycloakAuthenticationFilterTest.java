@@ -1122,4 +1122,58 @@ class KeycloakAuthenticationFilterTest {
             assertThat(result).isFalse();
         }
     }
+
+    /**
+     * C-A 회귀 수정 — 정적 리소스 무한 리다이렉트 루프 방지 검증.
+     * <p>
+     * 기본 설정(filterSkip=true, permitAll=false)에서는
+     * {@code KeycloakStaticResourceProperties#isFilterSkipEffective()}가 {@code false}를 반환하므로,
+     * {@code KeycloakHttpConfigurer}는 static-resource 패턴을 skipPaths에 추가하지 않는다(위
+     * {@code static_resources_enabled_false에_해당하는_skipPaths_미등록_상태에서는_css_경로도_스킵하지_않는다}
+     * 참고). 이 클래스는 그 결과로 필터가 정적 리소스 경로도 실제로 OIDC 쿠키를 재검증해, 로그인
+     * 세션이 있는 사용자는 정상적으로 인증되어 체인이 진행됨을(=무한 302 루프가 아니라 200 응답으로
+     * 이어질 수 있음을) 검증한다.
+     * </p>
+     */
+    @Nested
+    class C_A_정적_리소스_무한_리다이렉트_루프_방지 {
+
+        @Test
+        void 기본_설정에서_로그인_세션이_있으면_정적_리소스_경로도_인증에_성공하고_체인이_진행된다() throws Exception {
+            // Given — 기본 skipPaths(List.of())인 filter(위 setUp 참고): static-resources.enabled=true여도
+            // permitAll=false(기본값)면 isFilterSkipEffective()=false이므로 KeycloakHttpConfigurer가
+            // 이 필터에 정적 리소스 패턴을 추가하지 않는다. 즉 이 필터 인스턴스는 실제 운영 기본값과
+            // 동일한 shouldNotFilter=false 상태다.
+            when(request.getRequestURI()).thenReturn("/css/app.css");
+            when(request.getSession(false)).thenReturn(session);
+            when(sessionManager.getRefreshToken(session)).thenReturn(Optional.of(REFRESH_TOKEN_VALUE));
+
+            KeycloakAuthentication successAuth = createSuccessfulAuthentication();
+            when(authenticationManager.authenticate(any())).thenReturn(successAuth);
+
+            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class);
+                 MockedStatic<JwtUtil> jwtUtil = mockStatic(JwtUtil.class)) {
+
+                cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ID_TOKEN_NAME))
+                    .thenReturn(Optional.of(ID_TOKEN_VALUE));
+                cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ACCESS_TOKEN_NAME))
+                    .thenReturn(Optional.of(ACCESS_TOKEN_VALUE));
+                jwtUtil.when(() -> JwtUtil.parseSubjectWithoutValidation(anyString()))
+                    .thenReturn(USER_SUB);
+
+                // When — shouldNotFilter가 false이므로 doFilterInternal이 실제로 실행된다는 전제
+                assertThat(filter.shouldNotFilter(request)).isFalse();
+                filter.doFilterInternal(request, response, filterChain);
+
+                // Then — 로그인 세션(유효한 OIDC 쿠키)이 있으므로 정적 리소스 경로에서도 인증에
+                // 성공해 SecurityContext가 채워지고 체인이 계속 진행된다. 이 요청이 인증 실패로
+                // 판정되어 EntryPoint의 OAuth2 로그인 리다이렉트(302)로 보내지지 않는다는 것이
+                // 곧 "정적 리소스 무한 루프가 없다"는 것이다 — 200으로 정상 종결될 수 있다.
+                verify(authenticationManager).authenticate(any(KeycloakAuthentication.class));
+                verify(filterChain).doFilter(request, response);
+                assertThat(SecurityContextHolder.getContext().getAuthentication()).isNotNull();
+                assertThat(SecurityContextHolder.getContext().getAuthentication().getName()).isEqualTo(USER_SUB);
+            }
+        }
+    }
 }
