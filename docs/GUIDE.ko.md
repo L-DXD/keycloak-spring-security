@@ -5,7 +5,7 @@
 Keycloak을 Spring Security에 통합하는 라이브러리입니다. 의존성 하나와 최소 설정으로 OIDC 로그인·세션·로그아웃·인가가 자동 구성됩니다.
 
 - **지원**: JDK 17+, Spring Boot 3.5.x, Spring Security 6.5.x
-- **현재 버전**: `2.0.2`
+- **현재 버전**: `2.0.3`
 - **스택**: Servlet(Spring MVC) / **Reactive(WebFlux) — v1.8.0부터 servlet과 기능 동등** ([8. Reactive](#8-reactivewebflux))
 - 이 문서는 **도입 개발자용 사용 가이드**입니다. 아키텍처/기여 규칙은 [README](../README.ko.md) 참고.
 
@@ -29,10 +29,10 @@ Keycloak을 Spring Security에 통합하는 라이브러리입니다. 의존성 
 
 ```gradle
 // Servlet (Spring MVC)
-implementation("io.github.l-dxd:keycloak-spring-security-web-starter:2.0.2")
+implementation("io.github.l-dxd:keycloak-spring-security-web-starter:2.0.3")
 
 // 또는 Reactive (WebFlux)
-implementation("io.github.l-dxd:keycloak-spring-security-webflux-starter:2.0.2")
+implementation("io.github.l-dxd:keycloak-spring-security-webflux-starter:2.0.3")
 ```
 > Redis 세션을 쓸 경우에만 추가:
 > ```gradle
@@ -118,6 +118,7 @@ MdcRequestFilter (traceId 등 MDC)
 | `authentication.authorization-request.max-age` | (없음) | `max_age`(초). 마지막 인증 후 경과 시 재인증. 예: `1800` |
 | `authentication.authorization-request.prompt` | (없음) | `prompt`. `login`(강제 재인증)/`consent`/`none`/`select_account` |
 | `authentication.issuer-uri` | (없음) | OIDC ID/Access Token 서명 검증용 issuer(`iss`) 명시 지정. 미설정 시 표준 Spring Boot `spring.security.oauth2.resourceserver.jwt.issuer-uri`/`...client.provider.keycloak.issuer-uri` → `base-url` 파생 순으로 해석(보안 Advisory 1) |
+| `authentication.security-context-repository` | `NULL` | (v2.0.3+) 인증된 `SecurityContext`를 어디에 영속화할지. `NULL`=영속화 안 함(기존 동작 — `KeycloakAuthenticationFilter`가 매 요청 OIDC 쿠키 재검증) / `HTTP_SESSION`=HTTP 세션에 저장 / `DELEGATING`=요청 속성 + 세션 위임. 세션을 통해 인증을 이어받아야 하면 `HTTP_SESSION`(또는 `DELEGATING`)으로 opt-in 한다(`KeycloakLoginService`에도 동일 적용, [4.11](#411-프로그래밍-방식-로그인-keycloakloginservice--v203) 참고) |
 
 ### 3.2 인가 (`authorization`)
 | 키 | 기본값 | 설명 |
@@ -131,6 +132,8 @@ MdcRequestFilter (traceId 등 MDC)
 | `session.timeout` | `30m` | 세션 만료 시간 |
 | `session.max-sessions` | `10000` | (`MEMORY` 전용) 동시 보유 가능한 최대 세션 수. 상한 도달 시 신규 세션은 fail-closed(생성 거부), 기존 세션은 영향 없음(보안 Advisory 6) |
 | `session.cleanup-interval` | `5m` | (`MEMORY` 전용) 만료 세션을 스캔해 제거하는 정리 스케줄 주기(전용 데몬 스레드) |
+| `session.back-channel-logout-strict` | `false` | (v2.0.3+) indexed session repository가 없어 Back-Channel 로그아웃이 실제로 동작할 수 없는 상태(기본 `MEMORY` 저장소는 미구현)일 때 기동을 실패(`IllegalStateException`)시킬지 여부. 기본값 `false`에서는 원인과 해결 방법을 WARN 로그로 안내하고 기동은 계속한다 |
+| `session.cleanup-corrupted` | `false` | (v2.0.3+, `REDIS` 전용) 손상 세션 감지 시 Redis 키를 실제로 삭제할지 여부. 기본값 `false`에서도 손상 세션은 미인증으로 처리되고(HTTP 500 없음) 키는 Redis TTL로 자연 만료된다. 롤링 배포 중 일시적 직렬화 불일치를 겪지 않는다고 확신하는 환경에서만 켠다(정상 세션을 손상으로 오인하면 다수 사용자가 강제 로그아웃된다) |
 
 ### 3.4 쿠키 (`cookie`)
 | 키 | 기본값 | 설명 |
@@ -149,6 +152,10 @@ MdcRequestFilter (traceId 등 MDC)
 | `error.authentication-failed-redirect-url` | `/login` | |
 | `error.session-expired-redirect-url` | (auth 실패 URL 따름) | |
 | `error.access-denied-redirect-url` | `/error/403` | |
+| `error.oauth2-login-redirect-enabled` | `true` | (v2.0.3+) `redirect-enabled=false`(API 모드, 기본값) 상태에서 브라우저 HTML 네비게이션 요청을 OAuth2 authorization endpoint(`/oauth2/authorization/{registrationId}`)로 위임할지 여부. **`Accept`에 `text/html`을 명시 수용하는 요청만** 리다이렉트되며, `Accept` 헤더가 없거나 `*/*` 단독인 요청(curl, 서버간 호출)은 401 JSON을 받는다. 순수 API 서버는 `false`로 꺼서 항상 401 JSON을 받는다 |
+| `error.oauth2-login-registration-id` | `keycloak` | (v2.0.3+) `oauth2-login-redirect-enabled`가 사용할 OAuth2 Client `registrationId`. registrationId를 다르게 등록한 경우에만 재정의 |
+
+> **v2.0.3 참고**: 2.0.2까지는 EntryPoint/AccessDeniedHandler가 `configure()`에서 등록되어 `oauth2Login`이 심는 기본 EntryPoint에 밀렸기 때문에 `error.*` 설정이 조용히 무시됐습니다. 2.0.3부터는 `init()`에서 등록되어 이 설정이 처음으로 실제 적용되므로, 기존 `error.*` 값이 의도한 값인지 확인하세요.
 
 ### 3.6 Basic Auth (`basic-auth`)
 | 키 | 기본값 | 설명 |
@@ -166,6 +173,7 @@ MdcRequestFilter (traceId 등 MDC)
 |----|--------|------|
 | `csrf.enabled` | `true` | |
 | `csrf.ignore-paths` | `[]` | 추가 면제 경로 |
+| `csrf.token-repository` | `SESSION` | (v2.0.3+) CSRF 토큰 저장소. `SESSION`(기존 동작) / `COOKIE`. `matcher.exclude`로 제외한 경로는 Keycloak 체인이 적용되지 않아 `CsrfFilter`가 동작하지 않으므로 세션 저장소로는 토큰을 읽거나 심을 수 없다 — 그 경로에서도 CSRF 토큰이 필요하면 `COOKIE`로 전환 |
 
 ### 3.9 Rate Limiting (`rate-limit`)
 | 키 | 기본값 | 설명 |
@@ -211,6 +219,27 @@ Keycloak Realm/Client 역할을 Spring `GrantedAuthority`로 매핑하는 방식
 | `role-mapping.client-role-prefix` | `ROLE_CLIENT_` | `SEPARATE_NAMESPACE`일 때 Client 역할 접두사. 실제 권한은 `<접두사><정규화된 clientId>_<역할명>` |
 
 `SEPARATE_NAMESPACE`(기본값)에서 `realm-role-prefix`/`client-role-prefix`가 공백이거나 서로 같으면 기동이 실패합니다(Advisory 7 재현 방지 가드). 자세한 마이그레이션은 [4.10](#410-role-매핑-realmclient-역할-네임스페이스-분리)을 참고하세요.
+
+### 3.13 정적 리소스 (`static-resources`) — v2.0.3
+정적 리소스(CSS/JS/이미지/webjars/favicon)를 인증·인가에서 제외합니다. `matcher.include` 기본값 `/**`와 `anyRequest().authenticated()` 조합에서는 정적 리소스 요청도 인증 대상이 되어, 로그인 사용자는 **정적 파일 하나당** Keycloak Introspect/UserInfo 원격 호출이 1회씩 발생합니다.
+
+| 키 | 기본값 | 설명 |
+|----|--------|------|
+| `static-resources.enabled` | `true` | 기능 전체 마스터 스위치. `false`면 아래 두 축의 값과 무관하게 모두 비활성화 |
+| `static-resources.filter-skip` | `true` | `KeycloakAuthenticationFilter`(servlet)/`AuthenticationWebFilter`(webflux)의 인증 처리 자체를 스킵(성능 목적). **`permit-all`이 함께 `true`일 때만 실제로 적용된다**(아래 참고) |
+| `static-resources.permit-all` | `false` | `authorizeHttpRequests`/`authorizeExchange`에 permitAll로 등록해 인증을 면제. **명시적 opt-in만 허용** |
+| `static-resources.patterns` | `[/css/**, /js/**, /images/**, /webjars/**, /favicon.ico]` | 제외할 경로(Ant 패턴). 기본값은 Spring Boot `StaticResourceLocation`(CSS/JAVA_SCRIPT/IMAGES/WEBJARS/FAVICON)과 동일 |
+
+**`filter-skip`이 `permit-all`에 종속되는 이유**: "인증 스킵"과 "인가 면제"는 독립적으로 켤 수 없습니다. `permit-all=false`이면 해당 경로는 여전히 `anyRequest().authenticated()`로 보호되므로, 필터만 스킵하면 `SecurityContext`가 영구히 미인증으로 고정됩니다 — 유효한 로그인 세션이 있는 사용자를 포함해 모든 요청이 로그인 리다이렉트로 보내지고, SSO 세션이 있으면 즉시 콜백되어 같은 정적 리소스로 다시 리다이렉트되는 무한 루프가 됩니다. 그래서 `filter-skip`은 `permit-all=true`일 때만 효력을 갖습니다.
+
+**`permit-all` 기본값이 `false`인 이유**: 패턴이 컨트롤러로 매핑된 보호 리소스(예: `/images/**`를 컨트롤러로 서빙)와 겹치면 그 경로를 공개해버리기 때문입니다. 해당 패턴에 순수 정적 파일만 있다는 것을 확인한 뒤에만 켜세요.
+
+```yaml
+keycloak:
+  security:
+    static-resources:
+      permit-all: true   # 순수 정적 파일만 서빙하는 앱 — filter-skip까지 실제로 적용됨
+```
 
 ---
 
@@ -340,6 +369,50 @@ OAuth2AuthorizationRequestResolver authorizationRequestResolver(ClientRegistrati
 
 자세한 설정 항목은 [3.12](#312-role-매핑-role-mapping--보안-advisory-7) 참고.
 
+### 4.11 프로그래밍 방식 로그인 (`KeycloakLoginService`) — v2.0.3
+OIDC 리다이렉트 흐름 **밖에서** 이미 획득한 토큰으로 인증 세션을 세웁니다. Token Exchange, 커스텀 SSO 핸드오프, 테스트 등에 사용합니다. servlet 전용입니다.
+
+빈은 스타터가 자동 등록하므로 주입만 하면 됩니다.
+
+```java
+@RestController
+@RequiredArgsConstructor
+public class TokenHandoffController {
+
+    private final KeycloakLoginService keycloakLoginService;
+
+    @PostMapping("/handoff")
+    public ResponseEntity<Void> handoff(
+        @RequestBody HandoffRequest body,
+        HttpServletRequest request,
+        HttpServletResponse response
+    ) {
+        Authentication authentication = keycloakLoginService.authenticate(
+            request,
+            response,
+            KeycloakTokens.of(body.idToken(), body.accessToken(), body.refreshToken())
+        );
+        return ResponseEntity.ok().build();
+    }
+}
+```
+
+`KeycloakTokens`는 토큰 묶음 값 객체입니다. ID Token과 Access Token은 필수, Refresh Token은 선택입니다.
+- `KeycloakTokens.of(idToken, accessToken)` — Refresh Token 없음(이후 재발급이 필요하면 재로그인해야 함)
+- `KeycloakTokens.of(idToken, accessToken, refreshToken)`
+
+토큰 문자열을 직접 받는 편의 오버로드도 있습니다: `authenticate(request, response, idToken, accessToken)`, `authenticate(request, response, idToken, accessToken, refreshToken)`.
+
+**반드시 검증을 경유합니다.** 토큰은 일반 OIDC 로그인과 동일한 단일 진입점인 `KeycloakAuthenticationProvider#createAuthenticatedToken`으로 검증되므로 검증 우회가 불가능합니다(서명·클레임, ID/Access Token 결합, UserInfo 조회). 실패 시 기존 `KeycloakSecurityException` 계열(`TokenBindingException`, `UserInfoFetchException` 등)이 그대로 전파되며 **어떤 `SecurityContext`도 세우지 않습니다.**
+
+**성공 시 수행하는 처리**(OIDC 로그인 성공 시 `OidcLoginSuccessHandler`가 하는 것과 동등):
+1. 세션 고정 방지 — 이전 세션이 **다른 사용자**의 것이면 세션을 새로 생성하고(`changeSessionId()`는 속성을 보존하므로 ID만 회전해서는 이전 사용자의 잔여물이 남음), 동일 사용자면 세션 ID만 회전.
+2. `SecurityContextHolder`에 `Authentication`을 설정하고 구성된 `SecurityContextRepository`에 저장.
+3. 토큰 쿠키 발급.
+4. Refresh Token/Principal Name/Keycloak Session ID(`sid`)를 세션에 저장.
+
+**세션 영속화는 `security-context-repository` 정책을 따릅니다.** 이 서비스에 주입되는 저장소는 `keycloak.security.authentication.security-context-repository`로 선택된 것과 동일합니다. **기본값 `NULL`에서는 `SecurityContext`가 세션에 저장되지 않으므로**, 이후 요청의 인증은 여전히 `KeycloakAuthenticationFilter`가 매 요청 토큰 쿠키를 재검증하는 데 의존합니다. 호출자가 세션 자체로 인증을 이어받아야 한다면 `security-context-repository=HTTP_SESSION`(또는 `DELEGATING`)으로 opt-in 하세요.
+
 ---
 
 ## 5. 확장점
@@ -368,6 +441,7 @@ LoggingValueSanitizer loggingValueSanitizer() {
 
 | 버전 | 변경 | 주의 |
 |------|------|------|
+| **2.0.3** (주의) | **`error.*` 프로퍼티가 전혀 적용되지 않던 버그 수정**(EntryPoint/AccessDeniedHandler가 `configure()`에서 등록돼 `oauth2Login`이 심는 기본 EntryPoint에 밀리던 것을 `init()`으로 이동, 1.9.0~2.0.2 공통), Basic Auth 실패 시 앞단 필터가 세운 인증까지 지우던 문제, 정적 리소스 요청마다 Introspect/UserInfo 원격 호출이 발생하던 문제, Redis 세션 손상 시 HTTP 500 대신 재로그인 유도, 인증 실패 사유 구조화 감사 로그(webflux 감사 로그 신설), 백채널 로그아웃 무동작 기동 경고. **`KeycloakLoginService` 추가**(프로그래밍 방식 로그인, [4.11](#411-프로그래밍-방식-로그인-keycloakloginservice--v203)) | **breaking 3건** — 아래 [마이그레이션](#마이그레이션-203--entrypoint-수정--신규-프로퍼티-breaking) 참고 |
 | **2.0.2** | (버그픽스) `session.store-type: redis` 사용 시 세션의 `SecurityContext` 역직렬화가 실패해 인증 요청이 500이 되던 회귀 수정(mixin 필드 기반 introspection 전환, claims의 `Instant` 복원 누락 수정) | breaking 없음. 세션 직렬화 포맷 변경 없음, 앱 코드 변경 불필요 |
 | **2.0.1** (주의) | **외부 보안 검토 4건 대응** — OIDC Access Token subject를 ID Token subject와 직접 비교(High #1), WebFlux CSRF 안전 메서드 예외 누락 수정(Medium #3), 브라우저 Front-Channel `/logout` CSRF 우회 차단(Medium #4), Bearer prefix 검증·검증 순서 정렬·로그 정리·subject 마스킹(Low #1~#4) | **Breaking 1건** — 아래 [마이그레이션](#마이그레이션-201--외부-보안-검토-4건-breaking) |
 | **2.0.0** (주의) | **보안 강화 8건** — OIDC ID/Access Token 결합 검증(Advisory 1), 로그인 세션 고정 방지(Advisory 2), Rate Limit IP 판정 일원화(Advisory 2), Basic Auth CSRF 전면 면제 제거(Advisory 3), 백채널 로그아웃 로그 마스킹(Advisory 5), 인메모리 세션 저장소 용량 상한(Advisory 6), Realm/Client Role 네임스페이스 분리(Advisory 7), WebFlux 백채널 decoder 검증 강화(Advisory 8) | **Breaking 3건** — 아래 [마이그레이션](#마이그레이션-200--보안-강화-8건-breaking) |
@@ -382,6 +456,21 @@ LoggingValueSanitizer loggingValueSanitizer() {
 | **1.4.x** | Bearer/Basic 인가 지원, stateless 세션 분리 | — |
 
 상세: `docs/12`, `docs/13`, `docs/14`
+
+### 마이그레이션 (2.0.3 — EntryPoint 수정 + 신규 프로퍼티, breaking)
+이 라이브러리의 EntryPoint/AccessDeniedHandler가 처음으로 실제 필터 체인에 적용되면서(1.9.0~2.0.2에서는 조용히 덮어씌워지고 있었음) **미인증 응답 동작이 바뀌고**, 인가 기본값 하나가 좁혀집니다. 소스 호환은 유지되는 생성자 변경도 1건 있습니다.
+
+| # | 변경 | 영향 | 해제/대응 |
+|---|------|------|-----------|
+| 1 | **미인증 응답**: `Accept: text/html`을 명시 수용하는 요청만 `/oauth2/authorization/{registrationId}`로 302된다. `Accept` 헤더가 없거나 `*/*` 단독인 요청(curl, 서버간 호출, 일부 모바일 클라이언트)은 **401 JSON**을 받는다. 순수 와일드카드 `*/*`는 브라우저 네비게이션의 신뢰 가능한 신호가 아니므로 제외한다(`text/*`는 포함) | 2.0.2까지는 이런 요청도 대부분 302를 받았다. 미인증 시 302를 기대하고 리다이렉트를 따라가도록 구현된 API 클라이언트는 401을 받게 된다 | 브라우저 흐름은 그대로다. 302가 필요한 클라이언트는 `Accept: text/html`을 명시하거나 401을 처리하도록 변경한다. 순수 API 서버라면 `keycloak.security.error.oauth2-login-redirect-enabled=false`로 항상 401 JSON을 받도록 고정한다 |
+| 2 | **정적 리소스 `permit-all` 기본값 `false`** — `static-resources.permit-all`은 명시적 opt-in만 허용 | `/css/**`, `/js/**`, `/images/**`, `/webjars/**`, `/favicon.ico`에 순수 정적 파일만 서빙하는 앱은 이 값을 켜야 로그인 없이 자산이 로드된다. (기본값은 그 경로에 컨트롤러로 보호 리소스를 매핑한 앱이 업그레이드만으로 그 경로를 공개해버리는 것을 막기 위함) | 해당 패턴에 컨트롤러로 매핑된 보호 리소스가 없다는 것을 확인한 뒤 `keycloak.security.static-resources.permit-all=true`로 켠다. 켜지 않아도 정적 리소스는 OIDC 쿠키로 정상 재검증되므로 로그인 사용자는 영향이 없다 — [3.13](#313-정적-리소스-static-resources--v203) 참고 |
+| 3 | `OidcLoginSuccessHandler` 생성자에 `SecurityContextRepository` 파라미터 추가(4-arg) | 기존 3-arg 생성자는 `NullSecurityContextRepository`를 쓰는 하위 호환 생성자로 유지되므로 기존 코드는 컴파일이 깨지지 않는다. 스타터 자동 구성 사용자는 영향 없음 | `security-context-repository`를 `NULL` 외의 값으로 opt-in 하려면 4-arg 생성자를 사용한다 |
+
+**함께 확인(breaking은 아니지만 동작 변경)**: `KeycloakAuthenticationFilter`가 기존 인증이 `KeycloakPrincipal`이면 매 요청 재검증하고, 앞단 필터가 세운 **다른 타입의** 인증은 그대로 보존합니다(Basic Auth 조건부 clear와 동일한 원칙). 커스텀 필터로 인증을 세우고 Keycloak 필터를 통과시키던 구성은 오히려 정상화되지만, 세션에 남은 stale OIDC 컨텍스트로 재검증이 영구히 스킵되던 동작에는 더 이상 의존할 수 없습니다.
+
+**함께 확인 — `error.*` 설정이 이제 실제로 적용됩니다.** `error.redirect-enabled`, `error.authentication-failed-redirect-url`, `error.access-denied-redirect-url` 등은 2.0.2까지 무시됐습니다. 설정해 두었지만 실제로는 관측된 적 없는 값이 남아 있다면, 업그레이드 전에 의도한 값인지 확인하세요.
+
+신규 프로퍼티(모두 기본값이 기존 동작이므로 미설정 시 조치 불필요): `authentication.security-context-repository`([3.1](#31-인증-authentication)), `static-resources.*`([3.13](#313-정적-리소스-static-resources--v203)), `csrf.token-repository`([3.8](#38-csrf-csrf)), `session.back-channel-logout-strict`·`session.cleanup-corrupted`([3.3](#33-세션-session)), `error.oauth2-login-redirect-enabled`·`error.oauth2-login-registration-id`([3.5](#35-에러-처리-error)).
 
 ### 마이그레이션 (2.0.1 — 외부 보안 검토 4건, breaking)
 외부 보안 검토(High #1/Medium #3/Medium #4/Low #1~#4) 반영으로 **API 변경 1건**이 있습니다. 나머지는 회귀 없는 보안 강화입니다.

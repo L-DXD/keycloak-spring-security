@@ -5,7 +5,7 @@
 A library that integrates Keycloak with Spring Security. With a single dependency and minimal configuration, OIDC login, session, logout, and authorization are auto-configured.
 
 - **Support**: JDK 17+, Spring Boot 3.5.x, Spring Security 6.5.x
-- **Current version**: `2.0.2`
+- **Current version**: `2.0.3`
 - **Stacks**: Servlet (Spring MVC) / **Reactive (WebFlux) — feature-equivalent to servlet since v1.8.0** ([8. Reactive](#8-reactivewebflux))
 - This document is the **user guide for adopting developers**. For architecture/contribution rules, see the [README](../README.md).
 
@@ -29,10 +29,10 @@ A library that integrates Keycloak with Spring Security. With a single dependenc
 
 ```gradle
 // Servlet (Spring MVC)
-implementation("io.github.l-dxd:keycloak-spring-security-web-starter:2.0.2")
+implementation("io.github.l-dxd:keycloak-spring-security-web-starter:2.0.3")
 
 // or Reactive (WebFlux)
-implementation("io.github.l-dxd:keycloak-spring-security-webflux-starter:2.0.2")
+implementation("io.github.l-dxd:keycloak-spring-security-webflux-starter:2.0.3")
 ```
 > Add only if you use Redis sessions:
 > ```gradle
@@ -118,6 +118,7 @@ All settings live under the `keycloak.security.*` namespace.
 | `authentication.authorization-request.max-age` | (none) | `max_age` (seconds). Re-authenticate when this much time has passed since the last authentication. e.g. `1800` |
 | `authentication.authorization-request.prompt` | (none) | `prompt`. `login` (forced re-authentication) / `consent` / `none` / `select_account` |
 | `authentication.issuer-uri` | (none) | Explicitly sets the issuer (`iss`) used for OIDC ID/Access Token signature validation. If unset, resolved in the order of the standard Spring Boot `spring.security.oauth2.resourceserver.jwt.issuer-uri` / `...client.provider.keycloak.issuer-uri` → derivation from `base-url` (Security Advisory 1) |
+| `authentication.security-context-repository` | `NULL` | (v2.0.3+) Where the authenticated `SecurityContext` is persisted. `NULL` = not persisted (existing behavior — `KeycloakAuthenticationFilter` revalidates the OIDC cookie on every request) / `HTTP_SESSION` = persisted to the HTTP session / `DELEGATING` = request-attribute + session delegation. Opt-in to `HTTP_SESSION` (or `DELEGATING`) when authentication must be carried over through the session (also applies to `KeycloakLoginService`, see [4.11](#411-programmatic-login-keycloakloginservice--v203)) |
 
 ### 3.2 Authorization (`authorization`)
 | Key | Default | Description |
@@ -131,6 +132,8 @@ All settings live under the `keycloak.security.*` namespace.
 | `session.timeout` | `30m` | Session expiration time |
 | `session.max-sessions` | `10000` | (`MEMORY` only) Maximum number of sessions held concurrently. When the cap is reached, new sessions fail closed (creation refused); existing sessions are unaffected (Security Advisory 6) |
 | `session.cleanup-interval` | `5m` | (`MEMORY` only) Interval of the cleanup schedule that scans and removes expired sessions (dedicated daemon thread) |
+| `session.back-channel-logout-strict` | `false` | (v2.0.3+) Whether to fail startup (`IllegalStateException`) when Back-Channel logout cannot actually work because no indexed session repository is present (the default `MEMORY` store does not implement one). With the default `false`, startup continues with a WARN log explaining the cause and the fix |
+| `session.cleanup-corrupted` | `false` | (v2.0.3+, `REDIS` only) Whether to actually delete the Redis key when a corrupted session is detected. Even with the default `false`, a corrupted session is treated as unauthenticated (no HTTP 500) and the key expires naturally via the Redis TTL. Enable only if your deployment pipeline never hits a temporary serialization mismatch during a rolling deploy (misjudging a normal session as corrupted would force-log-out many users) |
 
 ### 3.4 Cookie (`cookie`)
 | Key | Default | Description |
@@ -149,6 +152,10 @@ All settings live under the `keycloak.security.*` namespace.
 | `error.authentication-failed-redirect-url` | `/login` | |
 | `error.session-expired-redirect-url` | (follows the auth-failure URL) | |
 | `error.access-denied-redirect-url` | `/error/403` | |
+| `error.oauth2-login-redirect-enabled` | `true` | (v2.0.3+) With `redirect-enabled=false` (API mode, the default), whether to delegate browser HTML navigation requests to the OAuth2 authorization endpoint (`/oauth2/authorization/{registrationId}`). **Only requests that explicitly accept `text/html` are redirected**; requests with no `Accept` header or `*/*` alone (curl, server-to-server) get a 401 JSON. Set to `false` for a pure API server to always return 401 JSON |
+| `error.oauth2-login-registration-id` | `keycloak` | (v2.0.3+) The OAuth2 Client `registrationId` used by `oauth2-login-redirect-enabled`. Override only if you registered a different registrationId |
+
+> **v2.0.3 note**: until 2.0.2 the `error.*` settings were silently ignored because the EntryPoint/AccessDeniedHandler were registered in `configure()` and overwritten by the default EntryPoint installed by `oauth2Login`. From 2.0.3 they are registered in `init()`, so these settings take effect for the first time — check that your `error.*` values are the ones you actually want.
 
 ### 3.6 Basic Auth (`basic-auth`)
 | Key | Default | Description |
@@ -166,6 +173,7 @@ All settings live under the `keycloak.security.*` namespace.
 |----|--------|------|
 | `csrf.enabled` | `true` | |
 | `csrf.ignore-paths` | `[]` | Additional exempt paths |
+| `csrf.token-repository` | `SESSION` | (v2.0.3+) CSRF token store. `SESSION` (existing behavior) / `COOKIE`. Paths excluded via `matcher.exclude` are not handled by the Keycloak chain, so `CsrfFilter` does not run there and a session-backed token can neither be read nor planted — switch to `COOKIE` if you need CSRF tokens on those paths |
 
 ### 3.9 Rate Limiting (`rate-limit`)
 | Key | Default | Description |
@@ -211,6 +219,27 @@ How Keycloak Realm/Client roles are mapped to Spring `GrantedAuthority`.
 | `role-mapping.client-role-prefix` | `ROLE_CLIENT_` | Client role prefix when `SEPARATE_NAMESPACE`. The actual authority is `<prefix><normalized clientId>_<role name>` |
 
 When `SEPARATE_NAMESPACE` (default), startup fails if `realm-role-prefix`/`client-role-prefix` are blank or equal to each other (guard preventing reproduction of Advisory 7). For detailed migration, see [4.10](#410-role-mapping-realmclient-role-namespace-separation).
+
+### 3.13 Static Resources (`static-resources`) — v2.0.3
+Excludes static resources (CSS/JS/images/webjars/favicon) from authentication and authorization. With `matcher.include` defaulting to `/**` and `anyRequest().authenticated()`, static resource requests are otherwise authenticated too — which means one Keycloak Introspect/UserInfo remote call **per static file** for logged-in users.
+
+| Key | Default | Description |
+|----|--------|------|
+| `static-resources.enabled` | `true` | Master switch for the whole feature. `false` disables both axes below regardless of their values |
+| `static-resources.filter-skip` | `true` | Skip authentication processing in `KeycloakAuthenticationFilter` (servlet) / `AuthenticationWebFilter` (webflux) — a performance optimization. **Effective only when `permit-all` is also `true`** (see below) |
+| `static-resources.permit-all` | `false` | Register the patterns as `permitAll` in `authorizeHttpRequests`/`authorizeExchange`, i.e. exempt them from authentication. **Explicit opt-in only** |
+| `static-resources.patterns` | `[/css/**, /js/**, /images/**, /webjars/**, /favicon.ico]` | Ant patterns to exclude. The default is identical to Spring Boot's `StaticResourceLocation` (CSS/JAVA_SCRIPT/IMAGES/WEBJARS/FAVICON) |
+
+**Why `filter-skip` depends on `permit-all`**: "skipping authentication" and "exempting authorization" cannot be turned on independently. With `permit-all=false` the paths are still protected by `anyRequest().authenticated()`, so skipping the filter would pin the `SecurityContext` to unauthenticated forever — every request (including users with a valid login session) would be sent to the login redirect, immediately called back by SSO, and redirected to the same static resource again: an infinite loop. So `filter-skip` only takes effect when `permit-all=true`.
+
+**Why `permit-all` defaults to `false`**: if the patterns overlap a controller-mapped protected resource (e.g. serving `/images/**` through a controller), turning it on would publish that path. Enable it only after confirming those patterns serve nothing but plain static files.
+
+```yaml
+keycloak:
+  security:
+    static-resources:
+      permit-all: true   # 순수 정적 파일만 서빙하는 앱 — filter-skip까지 실제로 적용됨
+```
 
 ---
 
@@ -340,6 +369,50 @@ OAuth2AuthorizationRequestResolver authorizationRequestResolver(ClientRegistrati
 
 For detailed configuration items, see [3.12](#312-role-mapping-role-mapping--security-advisory-7).
 
+### 4.11 Programmatic Login (`KeycloakLoginService`) — v2.0.3
+Establishes an authenticated session from tokens you already obtained **outside** the OIDC redirect flow. Typical uses: Token Exchange, a custom SSO handoff, and tests. Servlet only.
+
+The bean is auto-registered by the starter, so just inject it.
+
+```java
+@RestController
+@RequiredArgsConstructor
+public class TokenHandoffController {
+
+    private final KeycloakLoginService keycloakLoginService;
+
+    @PostMapping("/handoff")
+    public ResponseEntity<Void> handoff(
+        @RequestBody HandoffRequest body,
+        HttpServletRequest request,
+        HttpServletResponse response
+    ) {
+        Authentication authentication = keycloakLoginService.authenticate(
+            request,
+            response,
+            KeycloakTokens.of(body.idToken(), body.accessToken(), body.refreshToken())
+        );
+        return ResponseEntity.ok().build();
+    }
+}
+```
+
+`KeycloakTokens` is a value object holding the token bundle. The ID Token and Access Token are required; the Refresh Token is optional.
+- `KeycloakTokens.of(idToken, accessToken)` — no Refresh Token (subsequent re-issuance requires logging in again)
+- `KeycloakTokens.of(idToken, accessToken, refreshToken)`
+
+There are also convenience overloads that take the token strings directly: `authenticate(request, response, idToken, accessToken)` and `authenticate(request, response, idToken, accessToken, refreshToken)`.
+
+**Always goes through validation.** The tokens are validated via `KeycloakAuthenticationProvider#createAuthenticatedToken` — the single choke point that the normal OIDC login also uses — so there is no way to bypass validation (signature/claims, ID-Access token binding, UserInfo lookup). On failure the existing `KeycloakSecurityException` family (`TokenBindingException`, `UserInfoFetchException`, etc.) propagates as-is and **no `SecurityContext` is established**.
+
+**What it does on success** (equivalent to what `OidcLoginSuccessHandler` does on OIDC login success):
+1. Session fixation prevention — if the session belonged to a **different** user, a brand-new session is created (`changeSessionId()` preserves attributes, so rotating the id alone would leave the previous user's residue); for the same user, the session id is simply rotated.
+2. Sets the `Authentication` on the `SecurityContextHolder` and saves it via the configured `SecurityContextRepository`.
+3. Issues the token cookies.
+4. Stores the Refresh Token / principal name / Keycloak session id (`sid`) in the session.
+
+**Session persistence follows `security-context-repository`.** The repository injected into the service is the one selected by `keycloak.security.authentication.security-context-repository`. **With the default `NULL` the `SecurityContext` is not stored in the session**, so authentication on subsequent requests still depends on `KeycloakAuthenticationFilter` revalidating the token cookies on every request. If the caller needs the authentication to be carried over through the session itself, opt in with `security-context-repository=HTTP_SESSION` (or `DELEGATING`).
+
 ---
 
 ## 5. Extension Points
@@ -368,6 +441,7 @@ LoggingValueSanitizer loggingValueSanitizer() {
 
 | Version | Change | Notes |
 |------|------|------|
+| **2.0.3** (caution) | **The `error.*` properties never took effect** (EntryPoint/AccessDeniedHandler were registered in `configure()` and overwritten by the default EntryPoint installed by `oauth2Login` → moved to `init()`; common to 1.9.0–2.0.2), Basic Auth no longer clears an authentication established by an earlier filter, static resources no longer trigger an Introspect/UserInfo remote call per request, corrupted Redis sessions return a re-login instead of HTTP 500, authentication failure reasons are now written to a structured audit log (webflux audit log added), and a startup warning is emitted when back-channel logout is a silent no-op. **Added `KeycloakLoginService`** (programmatic login, [4.11](#411-programmatic-login-keycloakloginservice--v203)) | **3 breaking changes** — see [Migration](#migration-203--entrypoint-fix--new-properties-breaking) below |
 | **2.0.2** | (bugfix) Fixed a regression where, when using `session.store-type: redis`, deserialization of the session's `SecurityContext` failed and authenticated requests returned 500 (switched to mixin field-based introspection, fixed the missing `Instant` restoration in claims) | No breaking changes. No change to the session serialization format; no application code changes needed |
 | **2.0.1** (caution) | **Response to 4 external security review items** — directly compare the OIDC Access Token subject with the ID Token subject (High #1), fix the missing WebFlux CSRF safe-method exception (Medium #3), block browser Front-Channel `/logout` CSRF bypass (Medium #4), Bearer prefix validation, aligned validation order, log cleanup, subject masking (Low #1–#4) | **1 breaking change** — see [Migration](#migration-201--external-security-review-4-items-breaking) below |
 | **2.0.0** (caution) | **8 security hardening items** — OIDC ID/Access Token combined validation (Advisory 1), login session fixation prevention (Advisory 2), unified Rate Limit IP determination (Advisory 2), removal of blanket Basic Auth CSRF exemption (Advisory 3), back-channel logout log masking (Advisory 5), in-memory session store capacity cap (Advisory 6), Realm/Client Role namespace separation (Advisory 7), stronger WebFlux back-channel decoder validation (Advisory 8) | **3 breaking changes** — see [Migration](#migration-200--security-hardening-8-items-breaking) below |
@@ -382,6 +456,21 @@ LoggingValueSanitizer loggingValueSanitizer() {
 | **1.4.x** | Bearer/Basic authorization support, stateless session separation | — |
 
 Details: `docs/12`, `docs/13`, `docs/14`
+
+### Migration (2.0.3 — EntryPoint Fix + New Properties, breaking)
+Because this library's EntryPoint/AccessDeniedHandler are applied to the filter chain for the first time (they were silently overwritten in 1.9.0–2.0.2), **the unauthenticated response behavior changes**, and one authorization default is tightened. There is also one constructor change that stays source-compatible.
+
+| # | Change | Impact | Disable/Response |
+|---|------|------|-----------|
+| 1 | **Unauthenticated response**: only requests that explicitly accept `Accept: text/html` are redirected (302) to `/oauth2/authorization/{registrationId}`. Requests with no `Accept` header or `*/*` alone (curl, server-to-server calls, some mobile clients) get **401 JSON**. Pure wildcard `*/*` is not a reliable signal of browser navigation, so it is excluded (`text/*` is included) | Up to 2.0.2 most of these requests received a 302. An API client that expected a 302 and followed the redirect now sees a 401 | Browser flows are unchanged. A client that needs the redirect should send `Accept: text/html` explicitly; otherwise handle the 401. For a pure API server, pin it with `keycloak.security.error.oauth2-login-redirect-enabled=false` (always 401 JSON) |
+| 2 | **Static resource `permit-all` defaults to `false`** — `static-resources.permit-all` is explicit opt-in only | An app that serves nothing but plain static files under `/css/**`, `/js/**`, `/images/**`, `/webjars/**`, `/favicon.ico` must turn it on for those assets to load without login. (The default protects apps that map a protected, controller-served resource under those paths from having it published by an upgrade alone) | After confirming the patterns contain no controller-mapped protected resource, set `keycloak.security.static-resources.permit-all=true`. Even without it, static resources are revalidated normally against the OIDC cookie, so logged-in users are unaffected — see [3.13](#313-static-resources-static-resources--v203) |
+| 3 | A `SecurityContextRepository` parameter was added to the `OidcLoginSuccessHandler` constructor (4-arg) | The 3-arg constructor is kept as a backward-compatible overload using `NullSecurityContextRepository`, so existing code still compiles. Starter auto-configuration users are unaffected | To opt in to `security-context-repository` values other than `NULL`, use the 4-arg constructor |
+
+**Also check (not breaking, but a behavior change)**: `KeycloakAuthenticationFilter` now revalidates on every request when the existing authentication is a `KeycloakPrincipal`, while an authentication of a **different** type established by an earlier filter is preserved (the same principle as the conditional clear in Basic Auth). This normalizes setups that establish authentication in a custom filter and then pass through the Keycloak filter, but you can no longer rely on the old behavior where a stale OIDC context in the session caused revalidation to be skipped permanently.
+
+**Also check — the `error.*` settings now actually apply.** Values such as `error.redirect-enabled`, `error.authentication-failed-redirect-url`, and `error.access-denied-redirect-url` were ignored up to 2.0.2. If your configuration carries values that were set but never observed, verify they are what you actually want before upgrading.
+
+New properties (all default to the existing behavior, so no action is needed when unset): `authentication.security-context-repository` ([3.1](#31-authentication-authentication)), `static-resources.*` ([3.13](#313-static-resources-static-resources--v203)), `csrf.token-repository` ([3.8](#38-csrf-csrf)), `session.back-channel-logout-strict` · `session.cleanup-corrupted` ([3.3](#33-session-session)), `error.oauth2-login-redirect-enabled` · `error.oauth2-login-registration-id` ([3.5](#35-error-handling-error)).
 
 ### Migration (2.0.1 — External Security Review, 4 items, breaking)
 Reflecting the external security review (High #1 / Medium #3 / Medium #4 / Low #1–#4), there is **1 API change**. The rest are regression-free security hardening.
