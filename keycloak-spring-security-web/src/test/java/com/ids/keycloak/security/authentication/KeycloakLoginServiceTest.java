@@ -224,9 +224,10 @@ class KeycloakLoginServiceTest {
                 loginService.authenticate(request, response,
                     KeycloakTokens.of(ID_TOKEN_VALUE, ACCESS_TOKEN_VALUE, REFRESH_TOKEN_VALUE));
 
-                verify(sessionManager).saveRefreshToken(newSession, REFRESH_TOKEN_VALUE);
-                verify(sessionManager).savePrincipalName(newSession, USER_SUB);
-                verify(sessionManager).saveKeycloakSessionId(newSession, KEYCLOAK_SID);
+                // H-3/H-C: 개별 save* 호출이 아니라 KeycloakSessionManager로 추출된 공통 헬퍼
+                // syncReLoginArtifacts를 경유해 Refresh Token/Principal Name/Keycloak Session ID가
+                // 함께 동기화된다.
+                verify(sessionManager).syncReLoginArtifacts(newSession, USER_SUB, REFRESH_TOKEN_VALUE, KEYCLOAK_SID);
             }
         }
     }
@@ -279,7 +280,32 @@ class KeycloakLoginServiceTest {
                 loginService.authenticate(request, response, KeycloakTokens.of(ID_TOKEN_VALUE, ACCESS_TOKEN_VALUE));
 
                 verify(request).getSession(true);
-                verify(sessionManager).savePrincipalName(newSession, USER_SUB);
+                // Back-Channel 인덱싱을 위한 Principal Name 저장은 공통 헬퍼 syncReLoginArtifacts를
+                // 경유한다(H-3/H-C). 이 오버로드는 RefreshToken이 없으므로 세 번째 인자는 null이다.
+                verify(sessionManager).syncReLoginArtifacts(newSession, USER_SUB, null, KEYCLOAK_SID);
+            }
+        }
+
+        @Test
+        void 기존_세션의_Principal이_다르면_isDifferentUserReLogin을_경유해_세션을_무효화하고_새_세션을_생성한다() {
+            // Given — H-3/H-C: 재로그인 잔여물 방지 판별/무효화는 KeycloakSessionManager로 위임된다.
+            when(request.getSession(false)).thenReturn(existingSession);
+            when(request.getSession(true)).thenReturn(newSession);
+            when(authenticationProvider.createAuthenticatedToken(ID_TOKEN_VALUE, ACCESS_TOKEN_VALUE))
+                .thenReturn(createSuccessfulAuthentication(true));
+            when(sessionManager.isDifferentUserReLogin(existingSession, USER_SUB)).thenReturn(true);
+
+            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class)) {
+                cookieUtil.when(() -> CookieUtil.calculateRestMaxAge(any(Instant.class))).thenReturn(300);
+
+                loginService.authenticate(request, response, KeycloakTokens.of(ID_TOKEN_VALUE, ACCESS_TOKEN_VALUE));
+
+                verify(sessionManager).isDifferentUserReLogin(existingSession, USER_SUB);
+                verify(sessionManager).invalidateSession(existingSession);
+                // 다른 사용자 재로그인 경로에서는 changeSessionId()로 회전하지 않는다 — 이전 세션을
+                // 완전히 무효화하고 request.getSession(true)로 새 세션을 만든다.
+                verify(request, never()).changeSessionId();
+                verify(sessionManager).syncReLoginArtifacts(newSession, USER_SUB, null, KEYCLOAK_SID);
             }
         }
     }
@@ -299,8 +325,10 @@ class KeycloakLoginServiceTest {
 
                 loginService.authenticate(request, response, KeycloakTokens.of(ID_TOKEN_VALUE, ACCESS_TOKEN_VALUE));
 
-                verify(sessionManager, never()).saveRefreshToken(any(), anyString());
-                verify(sessionManager).savePrincipalName(newSession, USER_SUB);
+                // syncReLoginArtifacts에 refreshToken 자리에 null이 전달된다 — 세션에 저장하지 않는다는
+                // 의도는 KeycloakSessionManager#syncReLoginArtifacts 내부에서 명시적 제거로 처리된다
+                // (KeycloakSessionManagerTest에서 검증).
+                verify(sessionManager).syncReLoginArtifacts(newSession, USER_SUB, null, KEYCLOAK_SID);
             }
         }
     }
@@ -320,8 +348,8 @@ class KeycloakLoginServiceTest {
 
                 loginService.authenticate(request, response, KeycloakTokens.of(ID_TOKEN_VALUE, ACCESS_TOKEN_VALUE));
 
-                verify(sessionManager, never()).saveKeycloakSessionId(any(), anyString());
-                verify(sessionManager).savePrincipalName(newSession, USER_SUB);
+                // sid 클레임이 없으므로 syncReLoginArtifacts에 keycloakSid 자리에 null이 전달된다.
+                verify(sessionManager).syncReLoginArtifacts(newSession, USER_SUB, null, null);
             }
         }
     }
@@ -364,7 +392,7 @@ class KeycloakLoginServiceTest {
 
                 assertThat(result).isNotNull();
                 verify(authenticationProvider).createAuthenticatedToken(ID_TOKEN_VALUE, ACCESS_TOKEN_VALUE);
-                verify(sessionManager).saveRefreshToken(newSession, REFRESH_TOKEN_VALUE);
+                verify(sessionManager).syncReLoginArtifacts(newSession, USER_SUB, REFRESH_TOKEN_VALUE, KEYCLOAK_SID);
             }
         }
 
@@ -382,7 +410,7 @@ class KeycloakLoginServiceTest {
                     KeycloakTokens.of(ID_TOKEN_VALUE, ACCESS_TOKEN_VALUE, REFRESH_TOKEN_VALUE));
 
                 verify(authenticationProvider).createAuthenticatedToken(ID_TOKEN_VALUE, ACCESS_TOKEN_VALUE);
-                verify(sessionManager).saveRefreshToken(newSession, REFRESH_TOKEN_VALUE);
+                verify(sessionManager).syncReLoginArtifacts(newSession, USER_SUB, REFRESH_TOKEN_VALUE, KEYCLOAK_SID);
             }
         }
     }

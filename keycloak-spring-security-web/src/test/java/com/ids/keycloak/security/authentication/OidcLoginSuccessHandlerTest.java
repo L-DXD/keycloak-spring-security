@@ -131,10 +131,10 @@ class OidcLoginSuccessHandlerTest {
                 // When
                 handler.onAuthenticationSuccess(request, response, oauthToken);
 
-                // Then
-                verify(sessionManager).savePrincipalName(session, PRINCIPAL_NAME);
-                verify(sessionManager).saveKeycloakSessionId(session, KEYCLOAK_SID);
-                verify(sessionManager).saveRefreshToken(session, REFRESH_TOKEN_VALUE);
+                // Then — H-3/H-C: 개별 save* 호출이 아니라 KeycloakSessionManager로 추출된 공통
+                // 헬퍼 syncReLoginArtifacts를 경유해 Principal Name/Refresh Token/Keycloak Session ID가
+                // 함께 동기화된다(KeycloakLoginService#authenticate와 공유하는 로직).
+                verify(sessionManager).syncReLoginArtifacts(session, PRINCIPAL_NAME, REFRESH_TOKEN_VALUE, KEYCLOAK_SID);
 
                 cookieUtil.verify(() -> CookieUtil.addCookie(response, CookieUtil.ACCESS_TOKEN_NAME, ACCESS_TOKEN_VALUE, 300));
                 cookieUtil.verify(() -> CookieUtil.addCookie(response, CookieUtil.ID_TOKEN_NAME, ID_TOKEN_VALUE, 300));
@@ -230,10 +230,9 @@ class OidcLoginSuccessHandlerTest {
                 // When
                 handler.onAuthenticationSuccess(request, response, oauthToken);
 
-                // Then
-                verify(sessionManager).savePrincipalName(session, PRINCIPAL_NAME);
-                verify(sessionManager).saveKeycloakSessionId(session, KEYCLOAK_SID);
-                verify(sessionManager, never()).saveRefreshToken(any(), anyString());
+                // Then — AuthorizedClient가 null이라 refreshTokenValue는 null로 syncReLoginArtifacts에
+                // 전달된다(H-3/H-C 공통 헬퍼).
+                verify(sessionManager).syncReLoginArtifacts(session, PRINCIPAL_NAME, null, KEYCLOAK_SID);
 
                 cookieUtil.verify(
                     () -> CookieUtil.addCookie(eq(response), eq(CookieUtil.ACCESS_TOKEN_NAME), anyString(), anyInt()),
@@ -276,9 +275,9 @@ class OidcLoginSuccessHandlerTest {
                 // When
                 handler.onAuthenticationSuccess(request, response, oauthToken);
 
-                // Then
-                verify(sessionManager).savePrincipalName(session, PRINCIPAL_NAME);
-                verify(sessionManager, never()).saveKeycloakSessionId(any(), anyString());
+                // Then — sid 클레임이 없으므로 syncReLoginArtifacts에 keycloakSid 자리에 null이
+                // 전달된다(H-3/H-C 공통 헬퍼). refreshToken도 이 테스트에서는 미제공이라 null이다.
+                verify(sessionManager).syncReLoginArtifacts(session, PRINCIPAL_NAME, null, null);
             }
         }
 
@@ -313,10 +312,9 @@ class OidcLoginSuccessHandlerTest {
                 // When
                 handler.onAuthenticationSuccess(request, response, oauthToken);
 
-                // Then
-                verify(sessionManager).savePrincipalName(session, PRINCIPAL_NAME);
-                verify(sessionManager).saveKeycloakSessionId(session, KEYCLOAK_SID);
-                verify(sessionManager, never()).saveRefreshToken(any(), anyString());
+                // Then — RefreshToken이 null이므로 syncReLoginArtifacts에도 null로 전달된다
+                // (H-3/H-C 공통 헬퍼).
+                verify(sessionManager).syncReLoginArtifacts(session, PRINCIPAL_NAME, null, KEYCLOAK_SID);
             }
         }
 
@@ -340,6 +338,93 @@ class OidcLoginSuccessHandlerTest {
                     () -> CookieUtil.addCookie(any(), anyString(), anyString(), anyInt()),
                     never()
                 );
+            }
+        }
+    }
+
+    @Nested
+    class H_C_재로그인_잔여물_방지 {
+
+        @Test
+        void 기존_세션의_Principal이_다르면_isDifferentUserReLogin을_경유해_세션을_무효화하고_새_세션에_동기화한다() throws Exception {
+            // Given — OAuth2LoginAuthenticationFilter가 이 핸들러를 호출하기 전에 이미
+            // changeSessionId()로 세션 ID를 회전시키므로, 여기서는 그 changeSessionId()가 보존한
+            // 이전 사용자 잔여물만 판별·정리한다(KeycloakLoginService#authenticate와 공유 로직).
+            when(oauthToken.getName()).thenReturn(PRINCIPAL_NAME);
+            when(oauthToken.getPrincipal()).thenReturn(oidcUser);
+            when(oauthToken.getAuthorizedClientRegistrationId()).thenReturn(REGISTRATION_ID);
+
+            when(request.getSession(false)).thenReturn(session);
+            when(request.getSession(true)).thenReturn(session);
+            when(sessionManager.isDifferentUserReLogin(session, PRINCIPAL_NAME)).thenReturn(true);
+
+            when(oidcUser.getName()).thenReturn(PRINCIPAL_NAME);
+            when(oidcUser.getAuthorities()).thenReturn(Collections.emptyList());
+            when(oidcUser.getUserInfo()).thenReturn(null);
+            when(oidcUser.getIdToken()).thenReturn(idToken);
+            when(idToken.getClaimAsString("sid")).thenReturn(KEYCLOAK_SID);
+            when(idToken.getTokenValue()).thenReturn(ID_TOKEN_VALUE);
+            when(idToken.getExpiresAt()).thenReturn(Instant.now().plusSeconds(3600));
+
+            when(authorizedClientRepository.loadAuthorizedClient(eq(REGISTRATION_ID), any(), eq(request)))
+                .thenReturn(authorizedClient);
+            when(authorizedClient.getAccessToken()).thenReturn(accessToken);
+            when(authorizedClient.getRefreshToken()).thenReturn(refreshToken);
+
+            when(accessToken.getTokenValue()).thenReturn(ACCESS_TOKEN_VALUE);
+            when(accessToken.getExpiresAt()).thenReturn(Instant.now().plusSeconds(300));
+            when(refreshToken.getTokenValue()).thenReturn(REFRESH_TOKEN_VALUE);
+
+            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class)) {
+                cookieUtil.when(() -> CookieUtil.calculateRestMaxAge(any(Instant.class))).thenReturn(300);
+
+                // When
+                handler.onAuthenticationSuccess(request, response, oauthToken);
+
+                // Then
+                verify(sessionManager).isDifferentUserReLogin(session, PRINCIPAL_NAME);
+                verify(sessionManager).invalidateSession(session);
+                verify(sessionManager).syncReLoginArtifacts(session, PRINCIPAL_NAME, REFRESH_TOKEN_VALUE, KEYCLOAK_SID);
+            }
+        }
+
+        @Test
+        void 기존_세션의_Principal이_같으면_무효화하지_않고_기존_세션에_그대로_동기화한다() throws Exception {
+            // Given
+            when(oauthToken.getName()).thenReturn(PRINCIPAL_NAME);
+            when(oauthToken.getPrincipal()).thenReturn(oidcUser);
+            when(oauthToken.getAuthorizedClientRegistrationId()).thenReturn(REGISTRATION_ID);
+
+            when(request.getSession(false)).thenReturn(session);
+            when(sessionManager.isDifferentUserReLogin(session, PRINCIPAL_NAME)).thenReturn(false);
+
+            when(oidcUser.getName()).thenReturn(PRINCIPAL_NAME);
+            when(oidcUser.getAuthorities()).thenReturn(Collections.emptyList());
+            when(oidcUser.getUserInfo()).thenReturn(null);
+            when(oidcUser.getIdToken()).thenReturn(idToken);
+            when(idToken.getClaimAsString("sid")).thenReturn(KEYCLOAK_SID);
+            when(idToken.getTokenValue()).thenReturn(ID_TOKEN_VALUE);
+            when(idToken.getExpiresAt()).thenReturn(Instant.now().plusSeconds(3600));
+
+            when(authorizedClientRepository.loadAuthorizedClient(eq(REGISTRATION_ID), any(), eq(request)))
+                .thenReturn(authorizedClient);
+            when(authorizedClient.getAccessToken()).thenReturn(accessToken);
+            when(authorizedClient.getRefreshToken()).thenReturn(refreshToken);
+
+            when(accessToken.getTokenValue()).thenReturn(ACCESS_TOKEN_VALUE);
+            when(accessToken.getExpiresAt()).thenReturn(Instant.now().plusSeconds(300));
+            when(refreshToken.getTokenValue()).thenReturn(REFRESH_TOKEN_VALUE);
+
+            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class)) {
+                cookieUtil.when(() -> CookieUtil.calculateRestMaxAge(any(Instant.class))).thenReturn(300);
+
+                // When
+                handler.onAuthenticationSuccess(request, response, oauthToken);
+
+                // Then
+                verify(sessionManager, never()).invalidateSession(any());
+                verify(request, never()).getSession(true);
+                verify(sessionManager).syncReLoginArtifacts(session, PRINCIPAL_NAME, REFRESH_TOKEN_VALUE, KEYCLOAK_SID);
             }
         }
     }

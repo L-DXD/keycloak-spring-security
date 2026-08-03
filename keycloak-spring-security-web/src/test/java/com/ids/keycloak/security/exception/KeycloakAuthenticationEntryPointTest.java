@@ -45,6 +45,10 @@ class KeycloakAuthenticationEntryPointTest {
         lenient().when(response.getOutputStream()).thenReturn(new DelegatingServletOutputStream(outputStream));
         // Bearer Token 분기를 위해 Authorization 헤더 기본값 설정 (null = Bearer 아님)
         lenient().when(request.getHeader("Authorization")).thenReturn(null);
+        // H-A: buildOAuth2AuthorizationUrl이 request.getContextPath()를 prefix로 사용한다.
+        // 실제 서블릿 컨테이너는 context-path가 없으면 빈 문자열을 반환하므로 그 기본값을 재현한다
+        // (Mockito mock의 기본값 null과 달리, null이면 "null/oauth2/..." 문자열이 생성되어 버린다).
+        lenient().when(request.getContextPath()).thenReturn("");
     }
 
     @Nested
@@ -71,10 +75,12 @@ class KeycloakAuthenticationEntryPointTest {
         }
 
         @Test
-        void 비_AJAX_브라우저_요청은_기본적으로_OAuth2_로그인으로_리다이렉트한다() throws Exception {
-            // Given: C-1 회귀 수정 — redirectEnabled=false(기본) 상태에서 브라우저의 HTML 네비게이션
-            // 요청은 401 JSON이 아니라 authorization endpoint로 리다이렉트되어야 기존 SSO 로그인
-            // 플로우가 유지된다.
+        void Accept_text_html을_명시한_브라우저_요청은_기본적으로_OAuth2_로그인으로_리다이렉트한다() throws Exception {
+            // Given: C-1 회귀 수정 — redirectEnabled=false(기본) 상태에서 Accept: text/html을 명시한
+            // 브라우저의 HTML 네비게이션 요청은 401 JSON이 아니라 authorization endpoint로
+            // 리다이렉트되어야 기존 SSO 로그인 플로우가 유지된다. H-B: 판정 기준은
+            // acceptsHtmlExplicitly이므로 이 케이스는 Accept 헤더를 명시적으로 text/html로 설정한다.
+            lenient().when(request.getHeader("Accept")).thenReturn(MediaType.TEXT_HTML_VALUE);
             AuthenticationException authException = new BadCredentialsException("Invalid credentials");
 
             // When
@@ -82,6 +88,36 @@ class KeycloakAuthenticationEntryPointTest {
 
             // Then
             verify(response).sendRedirect("/oauth2/authorization/keycloak");
+        }
+
+        @Test
+        void Accept_헤더가_없는_요청은_H_B에_따라_401_JSON을_반환한다() throws Exception {
+            // Given: H-B 회귀 수정 — curl 기본 요청·서버간 호출처럼 Accept 헤더가 없는 요청은
+            // "AJAX가 아니면 브라우저"가 아니라 "Accept: text/html을 실제로 명시했을 때만 브라우저"
+            // 기준(acceptsHtmlExplicitly)으로 판정되어 302 리다이렉트 대신 401 JSON을 받아야 한다.
+            AuthenticationException authException = new BadCredentialsException("Invalid credentials");
+
+            // When
+            entryPoint.commence(request, response, authException);
+
+            // Then
+            verify(response).setStatus(401);
+            verify(response).setContentType(MediaType.APPLICATION_JSON_VALUE);
+            verify(response, org.mockito.Mockito.never()).sendRedirect(org.mockito.ArgumentMatchers.anyString());
+        }
+
+        @Test
+        void Accept가_wildcard_단독인_요청도_H_B에_따라_401_JSON을_반환한다() throws Exception {
+            // Given: curl -H "Accept: */*" 등 명시적 와일드카드 단독도 브라우저 신호로 보지 않는다.
+            lenient().when(request.getHeader("Accept")).thenReturn(MediaType.ALL_VALUE);
+            AuthenticationException authException = new BadCredentialsException("Invalid credentials");
+
+            // When
+            entryPoint.commence(request, response, authException);
+
+            // Then
+            verify(response).setStatus(401);
+            verify(response, org.mockito.Mockito.never()).sendRedirect(org.mockito.ArgumentMatchers.anyString());
         }
     }
 
@@ -344,6 +380,59 @@ class KeycloakAuthenticationEntryPointTest {
 
             // Then
             verify(response).sendRedirect("/custom/login");
+        }
+    }
+
+    @Nested
+    class H_A_context_path_리다이렉트 {
+
+        @Test
+        void context_path가_있으면_OAuth2_로그인_리다이렉트_URL에_prefix가_붙는다() throws Exception {
+            // Given: /myapp로 배포된 애플리케이션에서 미인증 브라우저(Accept: text/html) 요청.
+            when(request.getContextPath()).thenReturn("/myapp");
+            lenient().when(request.getHeader("Accept")).thenReturn(MediaType.TEXT_HTML_VALUE);
+            AuthenticationException authException = new BadCredentialsException("Invalid credentials");
+
+            // When
+            entryPoint.commence(request, response, authException);
+
+            // Then
+            verify(response).sendRedirect("/myapp/oauth2/authorization/keycloak");
+        }
+    }
+
+    @Nested
+    class C_B_자기참조_가드 {
+
+        @Test
+        void authorization_엔드포인트_자체_요청은_다시_리다이렉트되지_않고_401_JSON을_반환한다() throws Exception {
+            // Given: 예외적인 필터 순서 구성으로 /oauth2/authorization/keycloak 자체가 미인증으로
+            // 이 EntryPoint까지 도달한 경우, 다시 같은 URL로 리다이렉트하면 무한 루프가 된다.
+            when(request.getRequestURI()).thenReturn("/oauth2/authorization/keycloak");
+            lenient().when(request.getHeader("Accept")).thenReturn(MediaType.TEXT_HTML_VALUE);
+            AuthenticationException authException = new BadCredentialsException("Invalid credentials");
+
+            // When
+            entryPoint.commence(request, response, authException);
+
+            // Then
+            verify(response, org.mockito.Mockito.never()).sendRedirect(org.mockito.ArgumentMatchers.anyString());
+            verify(response).setStatus(401);
+        }
+
+        @Test
+        void 콜백_경로_자체_요청도_다시_리다이렉트되지_않고_401_JSON을_반환한다() throws Exception {
+            // Given
+            when(request.getRequestURI()).thenReturn("/login/oauth2/code/keycloak");
+            lenient().when(request.getHeader("Accept")).thenReturn(MediaType.TEXT_HTML_VALUE);
+            AuthenticationException authException = new BadCredentialsException("Invalid credentials");
+
+            // When
+            entryPoint.commence(request, response, authException);
+
+            // Then
+            verify(response, org.mockito.Mockito.never()).sendRedirect(org.mockito.ArgumentMatchers.anyString());
+            verify(response).setStatus(401);
         }
     }
 

@@ -258,9 +258,31 @@ class KeycloakHttpConfigurerExceptionHandlingTest {
     }
 
     @Test
-    void 기본_설정_API_모드에서_비_AJAX_브라우저_요청은_OAuth2_로그인으로_리다이렉트한다() throws Exception {
+    void 기본_설정_API_모드에서_Accept_text_html을_명시한_브라우저_요청은_OAuth2_로그인으로_리다이렉트한다() throws Exception {
       // C-1 회귀 수정: exceptionHandling의 init() 등록으로 이 EntryPoint가 항상 이기게 되어도,
       // oauth2Login이 기본 제공하던 브라우저 → 로그인 리다이렉트 플로우가 그대로 유지되어야 한다.
+      // H-B: 판정 기준이 acceptsHtmlExplicitly로 좁혀졌으므로 Accept: text/html을 명시해야 한다.
+      DefaultSecurityFilterChain chain = buildChain(baseProperties(), new KeycloakErrorProperties());
+      ExceptionTranslationFilter filter = extractExceptionTranslationFilter(chain);
+      AuthenticationEntryPoint appliedEntryPoint =
+          (AuthenticationEntryPoint) ReflectionTestUtils.getField(filter, "authenticationEntryPoint");
+
+      MockHttpServletRequest request = new MockHttpServletRequest("GET", "/page");
+      request.addHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+      MockHttpServletResponse response = new MockHttpServletResponse();
+      AuthenticationException authException = new InsufficientAuthenticationException("인증 필요");
+
+      appliedEntryPoint.commence(request, response, authException);
+
+      assertThat(response.getStatus()).isEqualTo(302);
+      assertThat(response.getRedirectedUrl()).isEqualTo("/oauth2/authorization/keycloak");
+    }
+
+    @Test
+    void 기본_설정_API_모드에서_Accept_헤더가_없는_요청은_401_JSON을_반환한다() throws Exception {
+      // H-B 회귀 수정: curl 기본 요청·서버간 호출처럼 Accept 헤더가 없거나 */* 단독인 요청은
+      // "AJAX가 아니면 브라우저"가 아니라 acceptsHtmlExplicitly 기준으로 판정되어 302 리다이렉트
+      // 대신 401 JSON을 받아야 한다(2.0.2 대비 breaking 회귀 수정).
       DefaultSecurityFilterChain chain = buildChain(baseProperties(), new KeycloakErrorProperties());
       ExceptionTranslationFilter filter = extractExceptionTranslationFilter(chain);
       AuthenticationEntryPoint appliedEntryPoint =
@@ -272,8 +294,9 @@ class KeycloakHttpConfigurerExceptionHandlingTest {
 
       appliedEntryPoint.commence(request, response, authException);
 
-      assertThat(response.getStatus()).isEqualTo(302);
-      assertThat(response.getRedirectedUrl()).isEqualTo("/oauth2/authorization/keycloak");
+      assertThat(response.getStatus()).isEqualTo(401);
+      assertThat(response.getContentType()).contains("application/json");
+      assertThat(response.getContentAsString()).contains("AUTHENTICATION_FAILED");
     }
 
     @Test
