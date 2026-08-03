@@ -22,7 +22,8 @@ import reactor.test.StepVerifier;
  * - Basic Auth 요청 + basicAuthEnabled=true → WWW-Authenticate: Basic + 401
  * - redirectEnabled=true + AJAX → JSON 401
  * - redirectEnabled=true (비-AJAX) → 302 리다이렉트
- * - API 모드 기본 → JSON 401
+ * - API 모드(redirectEnabled=false) 기본 + AJAX/명시적 JSON → JSON 401
+ * - API 모드(redirectEnabled=false) 기본 + 비-AJAX(브라우저) → OAuth2 로그인으로 302 리다이렉트 (C-1)
  */
 class KeycloakServerAuthenticationEntryPointTest {
 
@@ -97,8 +98,24 @@ class KeycloakServerAuthenticationEntryPointTest {
     }
 
     @Test
-    @DisplayName("일반 요청 → 401 JSON 응답")
-    void 일반_요청_401_JSON() {
+    @DisplayName("명시적 JSON Accept 요청 → 401 JSON 응답")
+    void JSON_Accept_요청_401_JSON() {
+      var entryPoint = new KeycloakServerAuthenticationEntryPoint(objectMapper);
+
+      MockServerWebExchange exchange = MockServerWebExchange.from(
+          MockServerHttpRequest.get("/api/resource")
+              .header(HttpHeaders.ACCEPT, MediaType.APPLICATION_JSON_VALUE)
+              .build());
+
+      StepVerifier.create(entryPoint.commence(exchange, new BadCredentialsException("bad")))
+          .verifyComplete();
+
+      assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    @DisplayName("C-1: 비-AJAX 브라우저 요청 → 기본적으로 OAuth2 로그인으로 리다이렉트")
+    void 비_AJAX_브라우저_요청은_OAuth2_로그인으로_리다이렉트한다() {
       var entryPoint = new KeycloakServerAuthenticationEntryPoint(objectMapper);
 
       MockServerWebExchange exchange = MockServerWebExchange.from(
@@ -107,7 +124,9 @@ class KeycloakServerAuthenticationEntryPointTest {
       StepVerifier.create(entryPoint.commence(exchange, new BadCredentialsException("bad")))
           .verifyComplete();
 
-      assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+      assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.FOUND);
+      assertThat(exchange.getResponse().getHeaders().getFirst(HttpHeaders.LOCATION))
+          .isEqualTo("/oauth2/authorization/keycloak");
     }
   }
 

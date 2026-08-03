@@ -92,8 +92,36 @@ public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoin
             return;
         }
 
+        // C-1 (회귀 수정): redirectEnabled=false(API 모드, 기본값) 상태에서도, 이 EntryPoint가
+        // exceptionHandling에 등록되면 oauth2Login이 기본 제공하던 "브라우저 요청 → 로그인 페이지
+        // 리다이렉트" 동작이 완전히 가려진다. Authorization: Basic 헤더를 직접 실은 요청(이 기능이
+        // basicAuthEnabled=false로 꺼져 있어도 마찬가지)과 AJAX/명시적 JSON 요청이 아닌(즉 브라우저의
+        // HTML 네비게이션으로 보이는) 요청만 기본적으로 authorization endpoint로 리다이렉트해 기존 SSO
+        // 로그인 플로우를 그대로 유지한다. Authorization 헤더 보유 자체가 "프로그래밍적 클라이언트"의
+        // 근거이므로 basicAuthEnabled 토글과 무관하게 리다이렉트 대상에서 제외한다.
+        // oauth2LoginRedirectEnabled=false로 끄면 항상 401 JSON을 반환한다(순수 API 서버).
+        if (errorProperties.isOauth2LoginRedirectEnabled()
+            && !isBasicAuthRequest(request)
+            && !SecurityHandlerUtil.isAjaxRequest(request)) {
+            String authorizationUrl = buildOAuth2AuthorizationUrl();
+            log.debug("KeycloakAuthenticationEntryPoint: 인증 실패 - OAuth2 로그인으로 리다이렉트: {}", authorizationUrl);
+            response.sendRedirect(authorizationUrl);
+            return;
+        }
+
         // API 모드: 기본 401 JSON 응답
         SecurityHandlerUtil.sendJsonResponse(response, objectMapper, ErrorCode.AUTHENTICATION_FAILED);
+    }
+
+    /**
+     * OAuth2 로그인 authorization endpoint URL을 생성합니다 (C-1).
+     * <p>
+     * Spring Security {@code oauth2Login}의 기본 authorization endpoint 규약
+     * ({@code /oauth2/authorization/{registrationId}})을 그대로 따른다.
+     * </p>
+     */
+    private String buildOAuth2AuthorizationUrl() {
+        return "/oauth2/authorization/" + errorProperties.getOauth2LoginRegistrationId();
     }
 
     /**

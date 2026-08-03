@@ -52,7 +52,10 @@ class KeycloakAuthenticationEntryPointTest {
 
         @Test
         void 인증_실패_시_401_상태코드와_JSON_에러_응답을_반환한다() throws Exception {
-            // Given
+            // Given: AJAX 요청(JSON 클라이언트)이어야 401 JSON 분기를 탄다.
+            // (C-1: redirectEnabled=false 기본 상태에서 비-AJAX 요청은 오히려 OAuth2 로그인으로
+            // 리다이렉트된다 — 아래 AJAX_요청_처리, 리다이렉트_모드 참고)
+            lenient().when(request.getHeader("Accept")).thenReturn(MediaType.APPLICATION_JSON_VALUE);
             AuthenticationException authException = new BadCredentialsException("Invalid credentials");
 
             // When
@@ -66,6 +69,20 @@ class KeycloakAuthenticationEntryPointTest {
             assertThat(errorResponse.code()).isEqualTo("AUTHENTICATION_FAILED");
             assertThat(errorResponse.message()).isEqualTo("유효하지 않은 자격 증명 또는 토큰으로 인해 인증에 실패했습니다.");
         }
+
+        @Test
+        void 비_AJAX_브라우저_요청은_기본적으로_OAuth2_로그인으로_리다이렉트한다() throws Exception {
+            // Given: C-1 회귀 수정 — redirectEnabled=false(기본) 상태에서 브라우저의 HTML 네비게이션
+            // 요청은 401 JSON이 아니라 authorization endpoint로 리다이렉트되어야 기존 SSO 로그인
+            // 플로우가 유지된다.
+            AuthenticationException authException = new BadCredentialsException("Invalid credentials");
+
+            // When
+            entryPoint.commence(request, response, authException);
+
+            // Then
+            verify(response).sendRedirect("/oauth2/authorization/keycloak");
+        }
     }
 
     @Nested
@@ -73,7 +90,8 @@ class KeycloakAuthenticationEntryPointTest {
 
         @Test
         void KeycloakSecurityException이_cause인_경우에도_동일한_응답을_반환한다() throws Exception {
-            // Given
+            // Given: AJAX 요청이어야 401 JSON 분기를 탄다 (C-1, 위 정상_케이스 주석 참고)
+            lenient().when(request.getHeader("Accept")).thenReturn(MediaType.APPLICATION_JSON_VALUE);
             KeycloakSecurityException cause = new KeycloakSecurityException(ErrorCode.REFRESH_TOKEN_NOT_FOUND);
             AuthenticationException authException = new BadCredentialsException("Auth failed", cause);
 
@@ -90,7 +108,8 @@ class KeycloakAuthenticationEntryPointTest {
 
         @Test
         void cause가_null인_AuthenticationException도_정상_처리한다() throws Exception {
-            // Given
+            // Given: AJAX 요청이어야 401 JSON 분기를 탄다 (C-1, 위 정상_케이스 주석 참고)
+            lenient().when(request.getHeader("Accept")).thenReturn(MediaType.APPLICATION_JSON_VALUE);
             AuthenticationException authException = new BadCredentialsException("No cause");
 
             // When

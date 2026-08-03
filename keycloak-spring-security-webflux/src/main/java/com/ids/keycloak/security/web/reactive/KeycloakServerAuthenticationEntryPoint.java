@@ -28,6 +28,8 @@ import reactor.core.publisher.Mono;
  *   <li>Basic Auth 요청 ({@code Authorization: Basic}, basicAuthEnabled=true) → WWW-Authenticate: Basic realm 헤더</li>
  *   <li>redirect-enabled=true + AJAX 요청 + ajaxReturnsJson=true → 401 JSON</li>
  *   <li>redirect-enabled=true (비-AJAX) → 로그인/세션만료 URL로 리다이렉트</li>
+ *   <li>redirect-enabled=false(기본) + oauth2LoginRedirectEnabled=true(기본) + Basic Auth 아님 +
+ *       비-AJAX(HTML) → OAuth2 로그인 authorization endpoint로 리다이렉트 (C-1)</li>
  *   <li>그 외 (API 모드) → 401 JSON</li>
  * </ol>
  * </p>
@@ -121,12 +123,40 @@ public class KeycloakServerAuthenticationEntryPoint implements ServerAuthenticat
         return response.setComplete();
       }
 
+      // C-1: servlet 모듈(KeycloakAuthenticationEntryPoint)과 동일하게, redirect-enabled=false
+      // (API 모드, 기본값) 상태에서도 Authorization: Basic 헤더를 실은 요청(basicAuthEnabled=false로
+      // 꺼져 있어도 마찬가지 — Authorization 헤더 보유 자체가 "프로그래밍적 클라이언트"의 근거)이 아니고
+      // AJAX/명시적 JSON 요청이 아닌(즉 브라우저의 HTML 네비게이션으로 보이는) 요청은 기본적으로 OAuth2
+      // 로그인 authorization endpoint로 리다이렉트한다. oauth2LoginRedirectEnabled=false로 끄면 항상
+      // 401 JSON을 반환한다.
+      boolean basicAuthHeaderPresent = authHeader != null && authHeader.startsWith(BASIC_PREFIX);
+      if (errorProperties.isOauth2LoginRedirectEnabled()
+          && !basicAuthHeaderPresent
+          && !isAjaxRequest(exchange)) {
+        String authorizationUrl = buildOAuth2AuthorizationUrl();
+        log.debug("[EntryPoint] 인증 실패 — OAuth2 로그인으로 리다이렉트: {}", authorizationUrl);
+        response.setStatusCode(HttpStatus.FOUND);
+        response.getHeaders().setLocation(URI.create(authorizationUrl));
+        return response.setComplete();
+      }
+
       // 4. API 모드 기본: 401 JSON
       log.debug("[EntryPoint] 인증 실패 — 401 JSON 응답");
       response.setStatusCode(HttpStatus.UNAUTHORIZED);
       response.getHeaders().setContentType(MediaType.APPLICATION_JSON);
       return writeJsonError(response, resolveErrorCode(ex), ex.getMessage());
     });
+  }
+
+  /**
+   * OAuth2 로그인 authorization endpoint URL을 생성합니다 (C-1).
+   * <p>
+   * Spring Security {@code oauth2Login}의 기본 authorization endpoint 규약
+   * ({@code /oauth2/authorization/{registrationId}})을 그대로 따른다.
+   * </p>
+   */
+  private String buildOAuth2AuthorizationUrl() {
+    return "/oauth2/authorization/" + errorProperties.getOauth2LoginRegistrationId();
   }
 
   /**
