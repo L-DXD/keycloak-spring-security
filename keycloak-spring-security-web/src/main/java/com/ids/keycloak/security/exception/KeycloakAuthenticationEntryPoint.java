@@ -100,17 +100,21 @@ public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoin
         // C-1 (회귀 수정): redirectEnabled=false(API 모드, 기본값) 상태에서도, 이 EntryPoint가
         // exceptionHandling에 등록되면 oauth2Login이 기본 제공하던 "브라우저 요청 → 로그인 페이지
         // 리다이렉트" 동작이 완전히 가려진다. Authorization: Basic 헤더를 직접 실은 요청(이 기능이
-        // basicAuthEnabled=false로 꺼져 있어도 마찬가지)과 AJAX/명시적 JSON 요청이 아닌(즉 브라우저의
-        // HTML 네비게이션으로 보이는) 요청만 기본적으로 authorization endpoint로 리다이렉트해 기존 SSO
-        // 로그인 플로우를 그대로 유지한다. Authorization 헤더 보유 자체가 "프로그래밍적 클라이언트"의
-        // 근거이므로 basicAuthEnabled 토글과 무관하게 리다이렉트 대상에서 제외한다.
-        // oauth2LoginRedirectEnabled=false로 끄면 항상 401 JSON을 반환한다(순수 API 서버).
+        // basicAuthEnabled=false로 꺼져 있어도 마찬가지)과 Accept: text/html을 명시적으로 수용하는
+        // (즉 브라우저의 HTML 네비게이션으로 보이는, H-B) 요청만 기본적으로 authorization endpoint로
+        // 리다이렉트해 기존 SSO 로그인 플로우를 그대로 유지한다. Authorization 헤더 보유 자체가
+        // "프로그래밍적 클라이언트"의 근거이므로 basicAuthEnabled 토글과 무관하게 리다이렉트 대상에서
+        // 제외한다. oauth2LoginRedirectEnabled=false로 끄면 항상 401 JSON을 반환한다(순수 API 서버).
+        // H-B: 판정 기준은 SecurityHandlerUtil#isAjaxRequest("AJAX가 아니면 브라우저")가 아니라
+        // SecurityHandlerUtil#acceptsHtmlExplicitly("Accept: text/html을 실제로 명시했을 때만
+        // 브라우저")다 — Accept 헤더가 없거나 */* 단독인 curl·서버간 호출·일부 모바일 클라이언트가
+        // 리다이렉트(302) 대신 401 JSON을 받도록 하기 위함이다(2.0.2 대비 breaking 회귀 수정).
         // C-B: 실패한 요청 자체가 OAuth2 authorization/callback 경로면 리다이렉트하지 않는다
         // (자기참조 가드 — 무한 루프 방지).
         if (errorProperties.isOauth2LoginRedirectEnabled()
             && !isBasicAuthRequest(request)
             && !isOAuth2FlowPath(request)
-            && !SecurityHandlerUtil.isAjaxRequest(request)) {
+            && SecurityHandlerUtil.acceptsHtmlExplicitly(request)) {
             String authorizationUrl = buildOAuth2AuthorizationUrl(request);
             log.debug("KeycloakAuthenticationEntryPoint: 인증 실패 - OAuth2 로그인으로 리다이렉트: {}", authorizationUrl);
             response.sendRedirect(authorizationUrl);

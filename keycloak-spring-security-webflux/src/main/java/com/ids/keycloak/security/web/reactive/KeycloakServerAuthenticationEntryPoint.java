@@ -166,12 +166,16 @@ public class KeycloakServerAuthenticationEntryPoint implements ServerAuthenticat
       // 자체를 처리할 필터가 없어 그 경로도 미인증으로 남아 EntryPoint가 다시 호출되는 무한 302
       // 루프가 된다 — 이 경우 리다이렉트 대신 401 JSON을 반환한다. 또한 실패한 요청이 이미
       // authorization/callback 경로 자신이면(자기참조) 리다이렉트하지 않는다(무한 루프 가드).
+      // H-B: 판정 기준은 isAjaxRequest("AJAX가 아니면 브라우저")가 아니라
+      // acceptsHtmlExplicitly("Accept: text/html을 실제로 명시했을 때만 브라우저")다 — Accept
+      // 헤더가 없거나 */* 단독인 curl·서버간 호출·일부 모바일 클라이언트가 리다이렉트(302) 대신
+      // 401 JSON을 받도록 하기 위함이다(2.0.2 대비 breaking 회귀 수정).
       boolean basicAuthHeaderPresent = authHeader != null && authHeader.startsWith(BASIC_PREFIX);
       if (errorProperties.isOauth2LoginRedirectEnabled()
           && oauth2LoginAvailable
           && !basicAuthHeaderPresent
           && !isOAuth2FlowPath(exchange)
-          && !isAjaxRequest(exchange)) {
+          && acceptsHtmlExplicitly(exchange)) {
         String authorizationUrl = buildOAuth2AuthorizationUrl(exchange);
         log.debug("[EntryPoint] 인증 실패 — OAuth2 로그인으로 리다이렉트: {}", authorizationUrl);
         response.setStatusCode(HttpStatus.FOUND);
@@ -260,6 +264,24 @@ public class KeycloakServerAuthenticationEntryPoint implements ServerAuthenticat
     boolean explicitJson = accepts.stream()
         .anyMatch(mt -> "json".equals(mt.getSubtype()) || mt.getSubtype().endsWith("+json"));
     return explicitJson && !acceptsHtml;
+  }
+
+  /**
+   * Accept 헤더가 {@code text/html}을 명시적으로 수용하는지 확인합니다 (H-B).
+   * <p>
+   * servlet 모듈의 {@code SecurityHandlerUtil#acceptsHtmlExplicitly(HttpServletRequest)}와 동일한
+   * 규칙이다. {@link #isAjaxRequest(ServerWebExchange)}("AJAX가 아니면 브라우저")와 달리, Accept
+   * 헤더가 없거나 {@code *&#47;*} 단독인 경우를 브라우저 네비게이션으로 간주하지 않는다 — curl 기본
+   * 요청·서버간 호출·일부 모바일 클라이언트가 대부분 이런 형태의 Accept를 보내므로, 이를
+   * 브라우저로 오판하면 401 JSON 대신 OAuth2 로그인 302 리다이렉트를 받게 된다(2.0.2 대비
+   * breaking).
+   * </p>
+   */
+  private boolean acceptsHtmlExplicitly(ServerWebExchange exchange) {
+    List<MediaType> accepts = exchange.getRequest().getHeaders().getAccept();
+    return accepts.stream()
+        .anyMatch(mt -> !(mt.isWildcardType() && mt.isWildcardSubtype())
+            && mt.isCompatibleWith(MediaType.TEXT_HTML));
   }
 
   /**
