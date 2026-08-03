@@ -2,6 +2,7 @@ package com.ids.keycloak.security.session;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -174,6 +175,113 @@ class KeycloakSessionManagerTest {
 
             // Then
             assertThat(result).isEmpty();
+        }
+    }
+
+    /**
+     * H-3/H-C: {@code isDifferentUserReLogin}/{@code syncReLoginArtifacts}는
+     * {@code KeycloakLoginService#authenticate}와 {@code OidcLoginSuccessHandler}가 공유하는
+     * 재로그인 잔여물 방지 공통 헬퍼다.
+     */
+    @Nested
+    class isDifferentUserReLogin_판별 {
+
+        @Test
+        void 기존_세션이_없으면_false이다() {
+            boolean result = manager.isDifferentUserReLogin(null, PRINCIPAL_NAME);
+
+            assertThat(result).isFalse();
+        }
+
+        @Test
+        void 기존_세션의_Principal_Name과_새_인증이_같으면_false이다() {
+            when(session.getAttribute(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME))
+                .thenReturn(PRINCIPAL_NAME);
+
+            boolean result = manager.isDifferentUserReLogin(session, PRINCIPAL_NAME);
+
+            assertThat(result).isFalse();
+        }
+
+        @Test
+        void 기존_세션의_Principal_Name과_새_인증이_다르면_true이다() {
+            when(session.getAttribute(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME))
+                .thenReturn("previous-user");
+
+            boolean result = manager.isDifferentUserReLogin(session, PRINCIPAL_NAME);
+
+            assertThat(result).isTrue();
+        }
+
+        @Test
+        void 기존_세션에_Principal_Name이_없으면_false이다() {
+            // 세션은 있지만 이전에 Principal Name이 저장된 적이 없는 경우(예: 비정상 세션)까지
+            // "다른 사용자"로 오판해 무효화하지 않는다.
+            when(session.getAttribute(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME))
+                .thenReturn(null);
+
+            boolean result = manager.isDifferentUserReLogin(session, PRINCIPAL_NAME);
+
+            assertThat(result).isFalse();
+        }
+    }
+
+    @Nested
+    class syncReLoginArtifacts_동기화 {
+
+        @Test
+        void 세션이_null이면_아무_동작도_하지_않는다() {
+            assertDoesNotThrow(() ->
+                manager.syncReLoginArtifacts(null, PRINCIPAL_NAME, REFRESH_TOKEN, KEYCLOAK_SID));
+        }
+
+        @Test
+        void Principal_Name을_저장한다() {
+            manager.syncReLoginArtifacts(session, PRINCIPAL_NAME, REFRESH_TOKEN, KEYCLOAK_SID);
+
+            verify(session).setAttribute(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME, PRINCIPAL_NAME);
+        }
+
+        @Test
+        void RefreshToken이_제공되면_저장한다() {
+            manager.syncReLoginArtifacts(session, PRINCIPAL_NAME, REFRESH_TOKEN, KEYCLOAK_SID);
+
+            verify(session).setAttribute(KeycloakSessionManager.REFRESH_TOKEN_ATTR, REFRESH_TOKEN);
+        }
+
+        @Test
+        void RefreshToken이_제공되지_않으면_이전_값을_명시적으로_제거한다() {
+            // changeSessionId()는 세션 속성을 보존하므로, 이번 로그인에 refreshToken이 없다면
+            // 이전 호출의 값이 남아있지 않도록 명시적으로 제거해야 한다.
+            manager.syncReLoginArtifacts(session, PRINCIPAL_NAME, null, KEYCLOAK_SID);
+
+            verify(session).removeAttribute(KeycloakSessionManager.REFRESH_TOKEN_ATTR);
+            verify(session, never()).setAttribute(eq(KeycloakSessionManager.REFRESH_TOKEN_ATTR), org.mockito.ArgumentMatchers.any());
+        }
+
+        @Test
+        void KeycloakSid가_제공되면_저장한다() {
+            manager.syncReLoginArtifacts(session, PRINCIPAL_NAME, REFRESH_TOKEN, KEYCLOAK_SID);
+
+            verify(session).setAttribute(KeycloakSessionManager.KEYCLOAK_SESSION_ID_ATTR, KEYCLOAK_SID);
+        }
+
+        @Test
+        void KeycloakSid가_제공되지_않으면_이전_값을_명시적으로_제거한다() {
+            manager.syncReLoginArtifacts(session, PRINCIPAL_NAME, REFRESH_TOKEN, null);
+
+            verify(session).removeAttribute(KeycloakSessionManager.KEYCLOAK_SESSION_ID_ATTR);
+            verify(session, never())
+                .setAttribute(eq(KeycloakSessionManager.KEYCLOAK_SESSION_ID_ATTR), org.mockito.ArgumentMatchers.any());
+        }
+
+        @Test
+        void RefreshToken과_KeycloakSid가_모두_없으면_둘_다_제거하고_Principal_Name만_저장한다() {
+            manager.syncReLoginArtifacts(session, PRINCIPAL_NAME, null, null);
+
+            verify(session).setAttribute(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME, PRINCIPAL_NAME);
+            verify(session).removeAttribute(KeycloakSessionManager.REFRESH_TOKEN_ATTR);
+            verify(session).removeAttribute(KeycloakSessionManager.KEYCLOAK_SESSION_ID_ATTR);
         }
     }
 }

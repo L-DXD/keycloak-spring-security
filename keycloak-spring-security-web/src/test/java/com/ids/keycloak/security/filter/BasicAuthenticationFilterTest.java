@@ -23,8 +23,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.core.oidc.OidcIdToken;
 
@@ -161,6 +163,92 @@ class BasicAuthenticationFilterTest {
 
             verify(filterChain).doFilter(request, response);
             assertThat(SecurityContextHolder.getContext().getAuthentication()).isNotNull();
+        }
+    }
+
+    /**
+     * 23d36d6: 앞단 필터(핸드오프 필터 등)가 이미 인증된 컨텍스트를 세워둔 상태에서 이 필터의
+     * Basic 인증 시도가 실패(형식 오류/자격증명 실패/Base64 오류)해도, 그 인증을 지우면 안 된다.
+     * {@code clearContextUnlessAlreadyAuthenticated()}가 관여하는 3개 경로 모두 검증한다.
+     */
+    @Nested
+    class 이미_인증된_컨텍스트_보존 {
+
+        private TestingAuthenticationToken setExistingAuthentication() {
+            TestingAuthenticationToken existing = new TestingAuthenticationToken("front-user", "N/A");
+            existing.setAuthenticated(true);
+            SecurityContextHolder.getContext().setAuthentication(existing);
+            return existing;
+        }
+
+        @Test
+        void 콜론없는_형식오류에서도_이미인증된_컨텍스트는_유지된다() throws Exception {
+            TestingAuthenticationToken existing = setExistingAuthentication();
+            String credentials = Base64.getEncoder().encodeToString("invalidformat".getBytes(StandardCharsets.UTF_8));
+            when(request.getHeader("Authorization")).thenReturn("Basic " + credentials);
+
+            filter.doFilterInternal(request, response, filterChain);
+
+            verify(filterChain).doFilter(request, response);
+            verify(authenticationManager, never()).authenticate(any());
+            assertThat(SecurityContextHolder.getContext().getAuthentication()).isSameAs(existing);
+        }
+
+        @Test
+        void 자격증명_실패에서도_이미인증된_컨텍스트는_유지된다() throws Exception {
+            TestingAuthenticationToken existing = setExistingAuthentication();
+            String credentials = Base64.getEncoder().encodeToString("user:wrongpass".getBytes(StandardCharsets.UTF_8));
+            when(request.getHeader("Authorization")).thenReturn("Basic " + credentials);
+            when(authenticationManager.authenticate(any(BasicAuthenticationToken.class)))
+                .thenThrow(new BadCredentialsException("Invalid credentials"));
+
+            filter.doFilterInternal(request, response, filterChain);
+
+            verify(filterChain).doFilter(request, response);
+            assertThat(SecurityContextHolder.getContext().getAuthentication()).isSameAs(existing);
+        }
+
+        @Test
+        void 잘못된_Base64에서도_이미인증된_컨텍스트는_유지된다() throws Exception {
+            TestingAuthenticationToken existing = setExistingAuthentication();
+            when(request.getHeader("Authorization")).thenReturn("Basic !!!invalid-base64!!!");
+
+            filter.doFilterInternal(request, response, filterChain);
+
+            verify(filterChain).doFilter(request, response);
+            verify(authenticationManager, never()).authenticate(any());
+            assertThat(SecurityContextHolder.getContext().getAuthentication()).isSameAs(existing);
+        }
+
+        @Test
+        void Anonymous_인증만_있는_경우는_이미인증됨으로_보지_않고_그대로_비운다() throws Exception {
+            AnonymousAuthenticationToken anonymous = new AnonymousAuthenticationToken(
+                "key", "anonymousUser", Collections.singletonList(() -> "ROLE_ANONYMOUS"));
+            SecurityContextHolder.getContext().setAuthentication(anonymous);
+
+            String credentials = Base64.getEncoder().encodeToString("user:wrongpass".getBytes(StandardCharsets.UTF_8));
+            when(request.getHeader("Authorization")).thenReturn("Basic " + credentials);
+            when(authenticationManager.authenticate(any(BasicAuthenticationToken.class)))
+                .thenThrow(new BadCredentialsException("Invalid credentials"));
+
+            filter.doFilterInternal(request, response, filterChain);
+
+            verify(filterChain).doFilter(request, response);
+            assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        }
+
+        @Test
+        void 인증되지않은_컨텍스트만_있는_경우도_이미인증됨으로_보지_않고_그대로_비운다() throws Exception {
+            TestingAuthenticationToken notAuthenticated = new TestingAuthenticationToken("front-user", "N/A");
+            notAuthenticated.setAuthenticated(false);
+            SecurityContextHolder.getContext().setAuthentication(notAuthenticated);
+
+            when(request.getHeader("Authorization")).thenReturn("Basic !!!invalid-base64!!!");
+
+            filter.doFilterInternal(request, response, filterChain);
+
+            verify(filterChain).doFilter(request, response);
+            assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
         }
     }
 }

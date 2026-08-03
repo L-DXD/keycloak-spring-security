@@ -36,6 +36,13 @@ import lombok.Setter;
  * 필요하다면 반드시 {@code ignore-paths}에 해당 경로를 명시적으로 등록하세요. 브라우저에서 접근
  * 가능한 경로는 Basic Auth 사용 여부와 무관하게 CSRF 보호를 유지해야 합니다.
  * </p>
+ * <p>
+ * <b>{@code keycloak.security.matcher.exclude}와 CSRF 토큰:</b> {@code matcher.exclude}로 제외한
+ * 경로는 Keycloak {@code SecurityFilterChain} 자체가 적용되지 않아 {@code CsrfFilter}도 동작하지
+ * 않습니다. 기본 저장소({@link CsrfTokenRepositoryMode#SESSION})는 토큰을 서버 세션에만 저장하므로
+ * 그 경로에서는 CSRF 토큰을 읽거나 심을 수 없습니다. exclude된 경로에서도 CSRF 토큰이 필요하다면
+ * {@code token-repository: COOKIE}로 전환하세요. 자세한 내용은 {@link CsrfTokenRepositoryMode} 참고.
+ * </p>
  */
 @Getter
 @Setter
@@ -53,4 +60,14 @@ public class KeycloakCsrfProperties {
      * 기존 하드코딩 면제 경로(로그아웃, 토큰 발급 등)에 추가로 적용됩니다.
      */
     private List<String> ignorePaths = new ArrayList<>();
+
+    /**
+     * CSRF 토큰 저장소 종류. 기본값: {@link CsrfTokenRepositoryMode#SESSION}(기존 동작 유지).
+     * <p>
+     * {@code keycloak.security.matcher.exclude} 경로에서도 CSRF 토큰이 필요하면
+     * {@link CsrfTokenRepositoryMode#COOKIE}로 전환하세요. 자세한 배경은
+     * {@link CsrfTokenRepositoryMode} Javadoc 참고.
+     * </p>
+     */
+    private CsrfTokenRepositoryMode tokenRepository = CsrfTokenRepositoryMode.SESSION;
 }

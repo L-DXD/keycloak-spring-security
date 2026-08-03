@@ -114,6 +114,13 @@ public class KeycloakSecurityProperties implements InitializingBean {
     private KeycloakMatcherProperties matcher = new KeycloakMatcherProperties();
 
     /**
+     * 정적 리소스(CSS/JS/이미지/webjars/favicon) 인증·인가 기본 제외 설정 (항목 3).
+     * 기본값은 활성화되어 있으며, 담당 경로는 {@link KeycloakStaticResourceProperties} 참고.
+     */
+    @NestedConfigurationProperty
+    private KeycloakStaticResourceProperties staticResources = new KeycloakStaticResourceProperties();
+
+    /**
      * Keycloak 기본 {@code SecurityFilterChain} 자동 등록 여부 (기본값: {@code true}).
      * <p>
      * {@code false}로 설정하면 Keycloak 기본 체인이 등록되지 않으며, 사용자가 전체

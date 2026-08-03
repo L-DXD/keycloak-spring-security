@@ -35,8 +35,9 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
-import org.springframework.security.web.context.NullSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
+import org.springframework.security.web.context.SecurityContextRepository;
+import org.springframework.security.web.csrf.CsrfTokenRepository;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.session.FindByIndexNameSessionRepository;
@@ -110,6 +111,13 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
       if (this.sessionRepository == null) {
          this.sessionRepository = context.getBeanProvider(FindByIndexNameSessionRepository.class).getIfAvailable();
       }
+      // 항목 7 (Fail-Fast): Back-Channel 로그아웃(아래 4-2)은 이 sessionRepository로 principal의
+      // 세션을 찾아 무효화한다. memory 저장소(기본값)는 FindByIndexNameSessionRepository를 구현하지
+      // 않으므로 null이며, 이 경우 OidcBackChannelSessionLogoutHandler.logout()이 런타임에
+      // log.error 후 조용히 아무 일도 하지 않고 Keycloak에는 200을 반환한다(silent no-op) —
+      // 기동 시점에 명확히 경고해 이 사실을 조용히 지나치지 않게 한다.
+      KeycloakSecurityProperties earlySecurityProperties = context.getBean(KeycloakSecurityProperties.class);
+      warnOrFailIfBackChannelLogoutUnusable(this.sessionRepository, earlySecurityProperties);
 
       OAuth2AuthorizedClientRepository authorizedClientRepository = context.getBean(OAuth2AuthorizedClientRepository.class);
       OidcLoginSuccessHandler oidcLoginSuccessHandler = context.getBean(OidcLoginSuccessHandler.class);
@@ -151,9 +159,17 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
       http.setSharedObject(KeycloakAuthenticationProvider.class, provider);
       http.setSharedObject(KeycloakClient.class, keycloakClient);
 
-      // SecurityContext를 세션에 저장하지 않음 - 매 요청마다 KeycloakAuthenticationFilter가 인증 처리
+      // SecurityContext 저장 정책 (기본값 NULL = 세션에 저장하지 않음, 기존 동작 유지, 회귀 0).
+      // 매 요청마다 KeycloakAuthenticationFilter가 OIDC 쿠키로부터 인증을 재계산하므로 기본값(NULL)
+      // 상태에서도 OIDC 쿠키 인증 자체엔 영향이 없다. 다만 이 필터 체인보다 앞서 실행되는 필터
+      // (예: 애플리케이션이 직접 등록한 FilterRegistrationBean 기반 핸드오프 필터)가 세워둔 인증을
+      // 보존해야 하는 소비자는 keycloak.security.authentication.security-context-repository를
+      // HTTP_SESSION(또는 DELEGATING)으로 opt-in할 수 있다. 자세한 근거는
+      // SecurityContextRepositoryMode Javadoc 참고.
+      SecurityContextRepositoryMode securityContextRepositoryMode =
+          securityPropertiesForProvider.getAuthentication().getSecurityContextRepository();
       http.securityContext(securityContext -> securityContext
-          .securityContextRepository(new NullSecurityContextRepository())
+          .securityContextRepository(resolveSecurityContextRepository(securityContextRepositoryMode))
       );
 
       // === 3. OIDC 로그인 설정 ===
@@ -169,6 +185,29 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
                   ep.authorizationRequestResolver(authorizationRequestResolver));
           }
       });
+
+      // === 3-1. 예외 처리기 설정 (버그 수정: init() 단계에서 등록) ===
+      // 배경: http.oauth2Login(...) 호출은 내부적으로 OAuth2LoginConfigurer를 등록하고,
+      // 그 OAuth2LoginConfigurer#init()이 ExceptionHandlingConfigurer#defaultAuthenticationEntryPointFor(...)를
+      // 호출해 "기본 로그인 페이지로 리다이렉트하는 EntryPoint"를 defaultEntryPointMappings에 등록한다.
+      // Spring Security의 HttpSecurity(AbstractConfiguredSecurityBuilder)는 모든 Configurer의 init()이
+      // 끝난 뒤에야 모든 Configurer의 configure()를 실행하므로, 과거처럼 이 설정을 (아래 있던) configure()에서
+      // exceptionHandling(...).authenticationEntryPoint(...)로 설정하면, 그 시점엔 이미
+      // ExceptionHandlingConfigurer#configure()가 (Map 등록 순서상 훨씬 앞서) 실행되어
+      // ExceptionTranslationFilter가 defaultEntryPointMappings 기반 EntryPoint로 확정된 뒤였다
+      // (ExceptionHandlingConfigurer는 Spring Boot의 HttpSecurityConfiguration#httpSecurity()에서
+      // .exceptionHandling(withDefaults())로 아주 이른 시점에 등록되므로, configurers 맵 순서상
+      // 우리 KeycloakHttpConfigurer.configure()보다 먼저 자신의 configure()가 실행된다).
+      // ExceptionHandlingConfigurer#getAuthenticationEntryPoint(H)/#getAccessDeniedHandler(H)는
+      // authenticationEntryPoint/accessDeniedHandler 필드가 설정되어 있으면 defaultEntryPointMappings
+      // /defaultDeniedHandlerMappings를 무시하고 그 필드 값을 우선 사용한다. init() 단계는 모든 Configurer의
+      // configure()보다 항상 먼저 끝나므로, 여기서 필드를 설정해두면 등록 순서와 무관하게 항상 우리 값이 이긴다.
+      KeycloakAuthenticationEntryPoint authenticationEntryPoint = context.getBean(KeycloakAuthenticationEntryPoint.class);
+      KeycloakAccessDeniedHandler accessDeniedHandler = context.getBean(KeycloakAccessDeniedHandler.class);
+      http.exceptionHandling(customizer -> customizer
+          .authenticationEntryPoint(authenticationEntryPoint)
+          .accessDeniedHandler(accessDeniedHandler)
+      );
 
       // === 4. 로그아웃 설정 ===
       // 4-1. Front-Channel 로그아웃 (사용자가 직접 로그아웃)
@@ -238,10 +277,20 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
           // 머신 전용 API 등 CSRF 면제가 필요한 경로는 위 csrfProperties.ignorePaths에
           // 명시적으로 등록해야 한다(전면 면제 금지, 명시 allowlist만 허용).
 
-          http.csrf(csrf -> csrf
-              .ignoringRequestMatchers(ignoreMatchers.toArray(new RequestMatcher[0]))
-          );
-          log.info("CSRF 활성화 (면제 경로: {})", ignorePaths);
+          // 요구사항 4번: matcher.exclude 경로는 이 체인(CsrfFilter 포함) 자체가 적용되지 않아
+          // 기본 저장소(SESSION)로는 그 경로에서 CSRF 토큰을 읽거나 심을 수 없다. COOKIE로
+          // 전환하면 exclude 경로에서도 토큰 쿠키를 읽을 수 있다. 기본값(SESSION)은 null을 반환해
+          // csrfTokenRepository(...)를 호출하지 않으므로 Spring Security 기본 동작을 그대로 유지한다.
+          CsrfTokenRepository customCsrfTokenRepository =
+              CsrfTokenRepositoryFactory.create(csrfProperties.getTokenRepository());
+
+          http.csrf(csrf -> {
+              csrf.ignoringRequestMatchers(ignoreMatchers.toArray(new RequestMatcher[0]));
+              if (customCsrfTokenRepository != null) {
+                  csrf.csrfTokenRepository(customCsrfTokenRepository);
+              }
+          });
+          log.info("CSRF 활성화 (면제 경로: {}, 토큰 저장소: {})", ignorePaths, csrfProperties.getTokenRepository());
       }
 
       // === 6. Bearer Token Resource Server 설정 (Introspect 온라인 검증) ===
@@ -265,8 +314,6 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         AuthenticationManager authenticationManager = http.getSharedObject(AuthenticationManager.class);
         KeycloakAuthenticationProvider authenticationProvider = http.getSharedObject(KeycloakAuthenticationProvider.class);
         KeycloakClient keycloakClient = http.getSharedObject(KeycloakClient.class);
-        KeycloakAuthenticationEntryPoint authenticationEntryPoint = context.getBean(KeycloakAuthenticationEntryPoint.class);
-        KeycloakAccessDeniedHandler accessDeniedHandler = context.getBean(KeycloakAccessDeniedHandler.class);
         KeycloakSessionManager sessionManager = context.getBean(KeycloakSessionManager.class);
         KeycloakSecurityProperties securityProperties = context.getBean(KeycloakSecurityProperties.class);
 
@@ -274,11 +321,8 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         LoggingContextAccessor loggingContextAccessor = getBeanOrDefault(
             context, LoggingContextAccessor.class, new WebMdcContextAccessor());
 
-      // === 6. 예외 처리기 설정 ===
-      http.exceptionHandling(customizer -> customizer
-          .authenticationEntryPoint(authenticationEntryPoint)
-          .accessDeniedHandler(accessDeniedHandler)
-      );
+        // 예외 처리기(EntryPoint/AccessDeniedHandler) 등록은 init()의 "3-1. 예외 처리기 설정"으로 이동했다.
+        // (버그: configure()에서 등록하면 ExceptionHandlingConfigurer#configure()가 먼저 실행되어 무시됨)
 
         // 7. MDC 로깅 필터 등록
         // 7-1. MdcRequestFilter: 인증 전 (최상단) - traceId, httpMethod, requestUri, clientIp, query, userAgent
@@ -301,6 +345,18 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
             skipPaths.add(prefix + "/refresh");
             skipPaths.add(prefix + "/logout");
             log.debug("KeycloakAuthenticationFilter 스킵 경로 설정: {}", skipPaths);
+        }
+        // 항목 3 / C-2 / C-A: 정적 리소스는 필터 단계에서도 함께 제외해야 로그인 세션이 있는 사용자의
+        // 정적 리소스 요청마다 Introspect/UserInfo 원격 호출이 발생하는 문제(운영 실측 500/302
+        // 사고)가 근본적으로 해소된다(성능 목적). isFilterSkipEffective()는 이제 permitAll이 함께
+        // true일 때만 true를 반환한다(C-A) — permitAll=false(기본값)인 상태에서 필터만 스킵하면
+        // anyRequest().authenticated()에 의해 여전히 보호되는 경로에서 SecurityContext가 영구
+        // 미인증 상태로 고정되어 무한 리다이렉트 루프가 발생하기 때문이다
+        // (KeycloakStaticResourceProperties 클래스 Javadoc의 C-A 참고).
+        if (securityProperties.getStaticResources().isFilterSkipEffective()) {
+            List<String> staticResourcePatterns = securityProperties.getStaticResources().getPatterns();
+            skipPaths.addAll(staticResourcePatterns);
+            log.debug("KeycloakAuthenticationFilter 스킵 경로에 정적 리소스 패턴 추가: {}", staticResourcePatterns);
         }
 
         List<String> loginPaths = securityProperties.getAuthentication().getLoginPaths();
@@ -355,5 +411,52 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         } catch (Exception e) {
             return defaultValue;
         }
+    }
+
+    /**
+     * Back-Channel 로그아웃이 실질적으로 동작할 수 없는 상태(indexed session repository 부재)를
+     * 기동 시점에 알립니다 (항목 7, Fail-Fast).
+     *
+     * <p>기본값({@code keycloak.security.session.back-channel-logout-strict=false})에서는 WARN
+     * 로그로 원인과 해결 방법을 안내하고 기동을 계속합니다. {@code true}로 설정하면 기동 자체를
+     * {@link IllegalStateException}으로 막습니다.</p>
+     *
+     * @param sessionRepository   해석된 session repository (null이면 Back-Channel 로그아웃 미동작)
+     * @param securityProperties  Keycloak 보안 설정
+     */
+    private void warnOrFailIfBackChannelLogoutUnusable(
+        FindByIndexNameSessionRepository<? extends Session> sessionRepository,
+        KeycloakSecurityProperties securityProperties) {
+        if (sessionRepository != null) {
+            return;
+        }
+        String guidance = "Back-Channel 로그아웃(oidcLogout)이 설정되지만 FindByIndexNameSessionRepository "
+            + "빈이 없어 실질적으로 세션을 무효화할 수 없습니다 (Keycloak에는 200을 반환하지만 세션은 "
+            + "그대로 유지됨 — silent no-op). Redis 등 indexed session repository(예: "
+            + "keycloak.security.session.store-type=redis)를 구성하세요. 이 상태로 기동을 막으려면 "
+            + "keycloak.security.session.back-channel-logout-strict=true 를 설정하세요.";
+        if (securityProperties.getSession().isBackChannelLogoutStrict()) {
+            throw new IllegalStateException("[항목 7] " + guidance);
+        }
+        log.warn(guidance);
+    }
+
+    /**
+     * {@code keycloak.security.authentication.security-context-repository} 설정값에 해당하는
+     * {@link SecurityContextRepository} 인스턴스를 생성합니다.
+     *
+     * @param mode 저장 정책 (기본값 {@link SecurityContextRepositoryMode#NULL})
+     * @return 선택된 정책에 해당하는 {@link SecurityContextRepository}
+     * @see SecurityContextRepositoryMode
+     */
+    private SecurityContextRepository resolveSecurityContextRepository(SecurityContextRepositoryMode mode) {
+        SecurityContextRepositoryMode effectiveMode = mode != null ? mode : SecurityContextRepositoryMode.NULL;
+        switch (effectiveMode) {
+            case HTTP_SESSION -> log.info("SecurityContextRepository: HTTP_SESSION (앞단 필터·핸드오프 인증 보존)");
+            case DELEGATING -> log.info("SecurityContextRepository: DELEGATING (RequestAttribute + HttpSession)");
+            case NULL -> { /* 기본값, 로깅하지 않음(기존 동작) */ }
+        }
+        // KeycloakLoginService(프로그래밍 방식 로그인)와 동일한 생성 로직을 공유한다.
+        return SecurityContextRepositoryFactory.create(effectiveMode);
     }
 }

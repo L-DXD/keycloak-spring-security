@@ -33,7 +33,9 @@ import org.springframework.security.oauth2.client.web.server.ServerOAuth2Authori
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.security.web.server.authentication.AuthenticationWebFilter;
 import org.springframework.security.web.server.context.NoOpServerSecurityContextRepository;
+import org.springframework.security.web.server.csrf.CookieServerCsrfTokenRepository;
 import org.springframework.security.web.server.csrf.CsrfWebFilter;
+import org.springframework.security.web.server.csrf.ServerCsrfTokenRepository;
 import org.springframework.security.web.server.util.matcher.AndServerWebExchangeMatcher;
 import org.springframework.security.web.server.util.matcher.NegatedServerWebExchangeMatcher;
 import org.springframework.security.web.server.util.matcher.OrServerWebExchangeMatcher;
@@ -154,9 +156,30 @@ public final class KeycloakWebFluxSecurityConfigurer {
         keycloakClient,
         sessionManager,
         securityProperties.getCookie());
+    converter.setTrustedProxyCount(securityProperties.getTrustedProxyCount());
 
     AuthenticationWebFilter authFilter = new AuthenticationWebFilter(authenticationManager);
     authFilter.setServerAuthenticationConverter(converter);
+
+    // 항목 3 / C-2 / C-A: 정적 리소스는 AuthenticationWebFilter의 컨버터 실행 자체를 건너뛴다(성능
+    // 목적). permitAll(아래 configureAuthorization)만으로는 이 필터가 여전히 실행되어
+    // KeycloakServerAuthenticationConverter가 매 요청 introspect/UserInfo 원격 호출을 시도하므로
+    // (로그인 세션이 있는 사용자 기준), 필터 단계에서도 함께 제외해야 근본 원인이 해소된다(servlet
+    // 모듈의 KeycloakAuthenticationFilter skipPaths와 동일 개념). isFilterSkipEffective()는 이제
+    // permitAll이 함께 true일 때만 true를 반환한다(C-A) — permitAll=false(기본값)인 상태에서 필터만
+    // 스킵하면 anyExchange().authenticated()에 의해 여전히 보호되는 경로에서 SecurityContext가 영구
+    // 미인증 상태로 고정되어 무한 리다이렉트 루프가 발생하기 때문이다(KeycloakStaticResourceProperties
+    // 클래스 Javadoc의 C-A 참고).
+    KeycloakStaticResourceProperties staticResourceProperties = securityProperties.getStaticResources();
+    if (staticResourceProperties.isFilterSkipEffective() && !staticResourceProperties.getPatterns().isEmpty()) {
+      ServerWebExchangeMatcher staticResourceMatcher = toOrMatcher(staticResourceProperties.getPatterns());
+      authFilter.setRequiresAuthenticationMatcher(new AndServerWebExchangeMatcher(
+          ServerWebExchangeMatchers.anyExchange(),
+          new NegatedServerWebExchangeMatcher(staticResourceMatcher)));
+      log.info("[Configurer] 정적 리소스는 AuthenticationWebFilter 처리 대상에서 제외: {}",
+          staticResourceProperties.getPatterns());
+    }
+
     http.addFilterAt(authFilter, SecurityWebFiltersOrder.AUTHENTICATION);
     log.debug("[Configurer] AuthenticationWebFilter (OIDC Cookie) 등록 완료.");
 
@@ -291,7 +314,8 @@ public final class KeycloakWebFluxSecurityConfigurer {
         + "(Bearer Token 활성 여부와 무관, 면제 목록에서 제외)");
 
     ignorePaths.addAll(csrfProperties.getIgnorePaths());
-    log.info("[Configurer] CSRF 활성화 (면제 경로: {})", ignorePaths);
+    log.info("[Configurer] CSRF 활성화 (면제 경로: {}, 토큰 저장소: {})",
+        ignorePaths, csrfProperties.getTokenRepository());
 
     List<ServerWebExchangeMatcher> exemptMatchers = new ArrayList<>();
     for (String path : ignorePaths) {
@@ -316,7 +340,46 @@ public final class KeycloakWebFluxSecurityConfigurer {
         new NegatedServerWebExchangeMatcher(exemptMatcher)
     );
 
-    http.csrf(csrf -> csrf.requireCsrfProtectionMatcher(csrfMatcher));
+    // 요구사항 4번: matcher.exclude 경로는 이 체인(CsrfWebFilter 포함) 자체가 적용되지 않아
+    // 기본 저장소(SESSION)로는 그 경로에서 CSRF 토큰을 읽거나 심을 수 없다. COOKIE로 전환하면
+    // exclude 경로에서도 토큰 쿠키를 읽을 수 있다. 기본값(SESSION)은 null을 반환해
+    // csrfTokenRepository(...)를 호출하지 않으므로 Spring Security 기본 동작을 그대로 유지한다.
+    ServerCsrfTokenRepository customCsrfTokenRepository =
+        resolveCsrfTokenRepository(csrfProperties.getTokenRepository());
+
+    http.csrf(csrf -> {
+      csrf.requireCsrfProtectionMatcher(csrfMatcher);
+      if (customCsrfTokenRepository != null) {
+        csrf.csrfTokenRepository(customCsrfTokenRepository);
+      }
+    });
+  }
+
+  /**
+   * {@link CsrfTokenRepositoryMode} 설정값에 해당하는 {@link ServerCsrfTokenRepository}를 생성합니다.
+   *
+   * @param mode 저장 정책 ({@code null}이면 {@link CsrfTokenRepositoryMode#SESSION}로 처리)
+   * @return {@link CsrfTokenRepositoryMode#COOKIE}면 {@code CookieServerCsrfTokenRepository.withHttpOnlyFalse()},
+   *     {@link CsrfTokenRepositoryMode#SESSION}(기본값)이면 {@code null}(Spring Security 기본값인
+   *     {@code WebSessionServerCsrfTokenRepository} 유지)
+   */
+  private static ServerCsrfTokenRepository resolveCsrfTokenRepository(CsrfTokenRepositoryMode mode) {
+    CsrfTokenRepositoryMode effectiveMode = mode != null ? mode : CsrfTokenRepositoryMode.SESSION;
+    if (effectiveMode == CsrfTokenRepositoryMode.COOKIE) {
+      return CookieServerCsrfTokenRepository.withHttpOnlyFalse();
+    }
+    return null;
+  }
+
+  /**
+   * Ant 패턴 목록을 OR로 결합한 {@link ServerWebExchangeMatcher}로 변환합니다(항목 3).
+   */
+  private static ServerWebExchangeMatcher toOrMatcher(List<String> patterns) {
+    List<ServerWebExchangeMatcher> matchers = new ArrayList<>();
+    for (String pattern : patterns) {
+      matchers.add(new PathPatternParserServerWebExchangeMatcher(pattern));
+    }
+    return matchers.size() == 1 ? matchers.get(0) : new OrServerWebExchangeMatcher(matchers);
   }
 
   /**
@@ -338,6 +401,15 @@ public final class KeycloakWebFluxSecurityConfigurer {
       allPermitPaths.add(prefix + "/logout");
     }
     allPermitPaths.add(KeycloakWebFluxConstants.LOGOUT_URL);
+
+    // C-2: 정적 리소스 permitAll은 명시적 opt-in일 때만 적용한다(KeycloakStaticResourceProperties
+    // #permitAll, 기본값 false). 기본값에서는 AuthenticationWebFilter 스킵(성능, configure()의
+    // requiresAuthenticationMatcher 참고)만 적용되고 인가는 유지되므로, 이 경로에 컨트롤러로
+    // 매핑된 보호 리소스가 있어도 업그레이드만으로 공개되지 않는다.
+    KeycloakStaticResourceProperties staticResourceProperties = securityProperties.getStaticResources();
+    if (staticResourceProperties.isPermitAllEffective()) {
+      allPermitPaths.addAll(staticResourceProperties.getPatterns());
+    }
 
     if (authorizationProps.isEnabled()) {
       KeycloakReactiveAuthorizationManager authorizationManager =

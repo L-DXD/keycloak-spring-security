@@ -9,6 +9,34 @@
 
 ## [Unreleased]
 
+## [2.0.3] - 2026-07-16
+### Fixed
+- **`keycloak.security.error.*` 프로퍼티가 전혀 적용되지 않던 버그**: `KeycloakHttpConfigurer`가 `exceptionHandling`의 EntryPoint/AccessDeniedHandler를 `configure()`에서 등록해, 그보다 뒤에 실행되는 `oauth2Login`이 심는 기본 EntryPoint에 덮어씌워지고 있었음. 그 결과 `error.redirect-enabled`, `error.authentication-failed-redirect-url`, `error.access-denied-redirect-url` 등 에러 처리 설정이 무시되고 항상 Spring Security 기본 동작이 나갔음. 등록 시점을 `init()`으로 옮겨 라이브러리 핸들러가 최종 필터 체인에 반영되도록 수정. **1.9.0 ~ 2.0.2 공통 결함**이며, 이 수정으로 `error.*` 설정이 처음으로 실제 적용된다.
+- **Basic Auth 실패 시 앞단 필터가 세운 인증까지 지우던 문제**: `BasicAuthenticationFilter`가 인증 실패·스킵 경로에서 `SecurityContextHolder.clearContext()`를 무조건 호출해, 앞단 필터(OIDC 쿠키 인증 등)가 이미 세워 둔 인증까지 함께 소거됐음. 자신이 세우지 않은 기존 인증은 보존하도록 조건부 clear로 변경.
+- **정적 리소스 요청마다 Introspect/UserInfo 원격 호출이 발생하던 문제**: `matcher.include` 기본값 `/**` + `anyRequest().authenticated()` 조합에서 `/css/**`, `/js/**`, `/images/**`, `/webjars/**`, `/favicon.ico` 요청도 인증 대상이 되어, 로그인 세션이 있는 사용자는 정적 파일 하나당 Keycloak 원격 호출이 1회씩 발생했음(운영 실측 지연·장애 전파 원인). `static-resources.*` 설정으로 인증 필터·인가에서 제외할 수 있게 함(기본 패턴은 Spring Boot `StaticResourceLocation` 4종과 동일).
+- **Redis 세션 손상 시 HTTP 500이 나던 문제**: `session.store-type=redis` 환경에서 세션 데이터가 손상(`creationTime` 누락 등)되면 역직렬화 예외가 그대로 전파되어 해당 사용자가 500으로 막히고 스스로 복구할 수 없었음. 폴백 매퍼로 손상 세션을 감지해 미인증으로 처리하여 정상적인 재로그인이 유도되도록 수정. 손상 세션의 Redis 키 삭제는 롤링 배포 중 직렬화 불일치를 손상으로 오인해 대량 강제 로그아웃을 유발할 수 있으므로 기본 비활성화(`session.cleanup-corrupted`, 기본 `false`)이며, 키는 `session.timeout` 경과 후 Redis TTL로 자연 만료된다.
+- **인증 실패 사유가 로그에 남지 않던 문제**: 인증 실패 시 어떤 검증에서 떨어졌는지 로그로 확인할 수 없어 운영 장애 분석이 불가능했음. `ErrorCode` 기반의 구조화된 감사 로그(`AuthenticationEventLogger`)로 실패 사유를 남기도록 하고, servlet에만 있던 감사 로그를 webflux에도 신설해 두 스택의 격차를 해소.
+- **백채널 로그아웃이 조용히 무동작하던 문제**: Back-Channel 로그아웃은 indexed session repository(`FindByIndexNameSessionRepository` / `ReactiveFindByIndexNameSessionRepository`)가 있어야 세션을 무효화할 수 있는데, 기본 `session.store-type=memory`는 이를 구현하지 않아 servlet은 200을 반환하면서도 세션이 남고(silent no-op) webflux는 404가 났음. 기동 시점에 원인과 해결 방법을 WARN 로그로 안내하며, `session.back-channel-logout-strict=true`로 기동 자체를 실패시킬 수 있다.
+- `KeycloakAuthenticationFilter`가 principal이 `null`인 인증 객체를 로깅하다 NPE를 던지던 문제.
+- context-path로 배포된 애플리케이션에서 OAuth2 로그인 authorization endpoint 리다이렉트에 context-path가 빠져 404가 되던 문제(Spring Security `LoginUrlAuthenticationEntryPoint`와 동일하게 `getContextPath()`를 prefix로 부여).
+- webflux에서 `oauth2Login`이 구성되지 않은 상태로 authorization endpoint 리다이렉트가 발생해 무한 302 루프가 생기던 문제(자기참조 가드 포함).
+- `matcher.include`/`exclude` 매칭 시 경로를 정규화(context-path 제거, traversal 방지)하도록 수정.
+
+### Added
+- **`KeycloakLoginService`** (servlet, `com.ids.keycloak.security.authentication`) — 외부에서 이미 획득한 토큰으로 인증 세션을 세우는 **프로그래밍 방식 로그인 API**. Token Exchange, 커스텀 SSO 핸드오프, 테스트 등 OIDC 리다이렉트 흐름 밖에서 로그인을 성립시켜야 할 때 사용한다. 토큰 검증은 `KeycloakAuthenticationProvider#createAuthenticatedToken` 단일 진입점을 반드시 경유하므로 검증 우회가 없고, 성공 시 세션 고정 방지(다른 사용자로 재로그인이면 세션 신규 생성, 동일 사용자면 세션 ID 회전) → `SecurityContext` 저장 → 토큰 쿠키 발급 → Refresh Token/Principal Name/Keycloak Session ID 세션 저장까지 OIDC 로그인 성공과 동등한 결과를 만든다. 토큰 묶음 값 객체 `KeycloakTokens`(`of(idToken, accessToken)` / `of(idToken, accessToken, refreshToken)`)를 함께 추가. 사용법은 [docs/GUIDE.md](docs/GUIDE.md) 4.11 참고.
+- `keycloak.security.authentication.security-context-repository` — 인증 `SecurityContext`를 어디에 영속화할지 선택(`NULL` 기본값/`HTTP_SESSION`/`DELEGATING`). 기본값 `NULL`은 기존 동작(매 요청 재검증, 세션 미저장) 유지이며, 세션을 통해 인증을 이어받아야 하면 opt-in 한다.
+- `keycloak.security.static-resources.enabled`(기본 `true`) / `.filter-skip`(기본 `true`) / `.permit-all`(기본 `false`) / `.patterns`(기본 `[/css/**, /js/**, /images/**, /webjars/**, /favicon.ico]`) — 정적 리소스를 인증 필터·인가에서 제외. `filter-skip`(인증 계산 스킵, 성능)과 `permit-all`(인가 면제)은 축이 분리되어 있으며, `filter-skip`은 `permit-all=true`일 때만 실제로 적용된다(둘을 독립적으로 켜면 정적 리소스가 영구 미인증으로 고정되어 무한 리다이렉트 루프가 발생하기 때문).
+- `keycloak.security.csrf.token-repository` — CSRF 토큰 저장소 선택(`SESSION` 기본값/`COOKIE`). `matcher.exclude`로 제외한 경로는 Keycloak 체인이 적용되지 않아 세션 저장소로는 토큰을 읽거나 심을 수 없으므로, 그 경로에서도 CSRF 토큰이 필요하면 `COOKIE`로 전환한다.
+- `keycloak.security.session.back-channel-logout-strict`(기본 `false`) — indexed session repository 부재로 Back-Channel 로그아웃이 무동작하는 상태를 기동 실패(`IllegalStateException`)로 막을지 여부. 기본값에서는 WARN 로그만 남기고 기동한다.
+- `keycloak.security.session.cleanup-corrupted`(기본 `false`) — (redis 전용) 손상 세션 감지 시 Redis 키를 실제로 삭제할지 여부. 기본값에서도 손상 세션은 미인증으로 처리되며(500 없음), 키만 TTL로 자연 만료된다.
+- `keycloak.security.error.oauth2-login-redirect-enabled`(기본 `true`) / `keycloak.security.error.oauth2-login-registration-id`(기본 `keycloak`) — `redirect-enabled=false`(API 모드, 기본값)에서 브라우저 HTML 네비게이션 요청을 `/oauth2/authorization/{registrationId}`로 위임할지 여부와 그 registrationId. 순수 API 서버는 `false`로 꺼서 항상 401 JSON을 받을 수 있다.
+
+### Changed (Breaking)
+- **미인증 응답 동작 변경 — `Accept: text/html`을 명시 수용하는 요청만 302, 나머지는 401 JSON**: 위 EntryPoint 수정으로 이 라이브러리의 EntryPoint가 처음으로 실제 적용되면서, 미인증 요청의 응답을 무엇으로 줄지가 `Accept` 헤더 기준으로 결정된다. **`Accept`에 `text/html`이 명시된 요청만** `/oauth2/authorization/{registrationId}`로 302되고, `Accept` 헤더가 없거나 `*/*` 단독인 요청(curl 기본 요청, 서버간 호출, 일부 모바일 클라이언트)은 **401 JSON**을 받는다(`*/*` 순수 와일드카드는 브라우저 네비게이션의 신뢰 가능한 신호가 아니므로 제외, `text/*`는 포함). 2.0.2까지는 이런 요청도 대부분 302를 받았으므로, 미인증 시 302를 기대하고 리다이렉트를 따라가도록 구현된 API 클라이언트는 동작이 바뀐다. **조치**: 브라우저 흐름은 그대로 두고, 302가 필요한 클라이언트는 `Accept: text/html`을 명시하거나 401을 처리하도록 변경한다. 순수 API 서버라면 `keycloak.security.error.oauth2-login-redirect-enabled=false`로 항상 401 JSON을 받도록 고정할 수 있다.
+- **정적 리소스 `permit-all` 기본값 `false`**: `static-resources.permit-all`은 명시적 opt-in만 허용한다. `/images/**` 등에 컨트롤러로 보호 리소스를 서빙하는 애플리케이션이 업그레이드만으로 그 경로를 공개해버리는 인가 확대를 막기 위한 기본값이다. **조치**: 해당 패턴에 순수 정적 파일(CSS/JS/이미지 등)만 있고 컨트롤러로 매핑된 보호 리소스가 없다는 것을 확인한 뒤 `keycloak.security.static-resources.permit-all=true`로 켠다(정적 파일만 서빙하는 일반적인 풀스택 앱은 켜야 로그인 없이 자산이 로드된다). 켜지 않아도 정적 리소스는 필터가 OIDC 쿠키로 정상 재검증하므로 로그인 사용자에게는 문제가 없다.
+- `OidcLoginSuccessHandler` 생성자에 `SecurityContextRepository` 파라미터가 추가됨(4-arg). 기존 3-arg 생성자는 `NullSecurityContextRepository`를 사용하는 하위 호환 생성자로 유지되므로, Starter 자동 구성만 사용하거나 3-arg로 직접 인스턴스화하던 코드는 컴파일이 깨지지 않는다. `security-context-repository`를 `NULL` 외의 값으로 opt-in 하려면 4-arg 생성자를 써야 한다.
+- `KeycloakAuthenticationFilter`가 기존 인증이 `KeycloakPrincipal`이면 매 요청 재검증한다. 앞단 필터가 세운 **다른 타입의** 인증은 그대로 보존되므로(위 Basic Auth 조건부 clear와 동일한 원칙), 커스텀 필터로 인증을 세우고 Keycloak 필터를 통과시키던 구성은 오히려 정상화된다. 반대로 stale OIDC 컨텍스트가 세션에 남아 재검증이 영구히 스킵되던 동작에는 의존할 수 없다.
+
 ## [2.0.2] - 2026-07-15
 ### Fixed
 - **Redis 세션 사용 시 인증 요청이 500으로 실패하던 회귀 수정**: `session.store-type=redis` + `GenericJackson2JsonRedisSerializer`(Jackson 세션 직렬화) 조합에서 세션에 저장된 `SecurityContext`(OIDC 인증 정보)를 역직렬화할 때마다 예외가 발생해 이후 모든 요청이 인증 실패로 처리되던 문제. 원인 2가지를 함께 수정.
@@ -126,7 +154,8 @@
 ### Added
 - `@EnableMethodSecurity` 적용, 초기 OIDC 로그인/세션/로그아웃/Redis 세션 등 기반 기능
 
-[Unreleased]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.2...HEAD
+[Unreleased]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.3...HEAD
+[2.0.3]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/L-DXD/keycloak-spring-security/compare/v1.10.2...v2.0.0

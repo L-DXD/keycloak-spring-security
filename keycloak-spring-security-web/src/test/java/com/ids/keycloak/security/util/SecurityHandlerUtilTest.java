@@ -170,4 +170,75 @@ class SecurityHandlerUtilTest {
       assertThat(SecurityHandlerUtil.isAjaxRequest(request)).isFalse();
     }
   }
+
+  // =========================================================
+  // H-B: acceptsHtmlExplicitly() 판정
+  // =========================================================
+  @Nested
+  @DisplayName("H-B: acceptsHtmlExplicitly() — Accept: text/html 명시적 수용 여부")
+  class AcceptsHtmlExplicitly_판정 {
+
+    @Test
+    @DisplayName("Accept: text/html 단독 → true")
+    void text_html_단독_true() {
+      MockHttpServletRequest request = new MockHttpServletRequest();
+      request.addHeader("Accept", "text/html");
+
+      assertThat(SecurityHandlerUtil.acceptsHtmlExplicitly(request)).isTrue();
+    }
+
+    @Test
+    @DisplayName("Accept: text/html,application/xhtml+xml,*/*;q=0.8 (브라우저 표준) → true")
+    void 브라우저_표준_Accept_true() {
+      MockHttpServletRequest request = new MockHttpServletRequest();
+      request.addHeader("Accept",
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
+
+      assertThat(SecurityHandlerUtil.acceptsHtmlExplicitly(request)).isTrue();
+    }
+
+    @Test
+    @DisplayName("Accept: */* 단독 → false (와일드카드는 명시적 신호가 아님)")
+    void wildcard_단독_false() {
+      MockHttpServletRequest request = new MockHttpServletRequest();
+      request.addHeader("Accept", "*/*");
+
+      assertThat(SecurityHandlerUtil.acceptsHtmlExplicitly(request)).isFalse();
+    }
+
+    @Test
+    @DisplayName("Accept 헤더 없음 → false")
+    void Accept_헤더_없음_false() {
+      MockHttpServletRequest request = new MockHttpServletRequest();
+
+      assertThat(SecurityHandlerUtil.acceptsHtmlExplicitly(request)).isFalse();
+    }
+
+    @Test
+    @DisplayName("Accept: application/json 단독 → false")
+    void application_json_단독_false() {
+      MockHttpServletRequest request = new MockHttpServletRequest();
+      request.addHeader("Accept", "application/json");
+
+      assertThat(SecurityHandlerUtil.acceptsHtmlExplicitly(request)).isFalse();
+    }
+
+    @Test
+    @DisplayName("Accept: text/* (서브타입만 와일드카드, 타입은 구체적) → true")
+    void text_wildcard_subtype_true() {
+      MockHttpServletRequest request = new MockHttpServletRequest();
+      request.addHeader("Accept", "text/*");
+
+      assertThat(SecurityHandlerUtil.acceptsHtmlExplicitly(request)).isTrue();
+    }
+
+    @Test
+    @DisplayName("Accept 빈 값 → false")
+    void Accept_빈값_false() {
+      MockHttpServletRequest request = new MockHttpServletRequest();
+      request.addHeader("Accept", "");
+
+      assertThat(SecurityHandlerUtil.acceptsHtmlExplicitly(request)).isFalse();
+    }
+  }
 }

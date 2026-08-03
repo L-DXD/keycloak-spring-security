@@ -383,4 +383,64 @@ class KeycloakHttpConfigurerCsrfTest {
       assertThat(reached).isTrue();
     }
   }
+
+  // ==========================================================================
+  // 항목 4 (f5d82de): keycloak.security.csrf.token-repository — SESSION(기본)/COOKIE.
+  // 실제 빌드된 CsrfFilter에 요청을 흘려보내 실제 발급되는 쿠키로 검증한다(로직 복제 금지).
+  // ==========================================================================
+
+  @Nested
+  class 항목4_CSRF_토큰_저장소_선택 {
+
+    @Test
+    void 기본값_SESSION_모드에서는_XSRF_TOKEN_쿠키가_발급되지_않는다() throws Exception {
+      CsrfFilter csrfFilter = buildRealCsrfFilter(baseProperties());
+
+      MockHttpServletRequest request = newRequest("POST", "/api/resource");
+      MockHttpServletResponse response = new MockHttpServletResponse();
+
+      runThroughRealFilter(csrfFilter, request, response);
+
+      assertThat(response.getCookie("XSRF-TOKEN"))
+          .as("기본값(SESSION)은 csrfTokenRepository(...)를 호출하지 않아 쿠키 저장소로 전환되지 않아야 한다")
+          .isNull();
+    }
+
+    @Test
+    void COOKIE_모드로_전환하면_실제_체인에서_XSRF_TOKEN_쿠키가_httpOnly_false로_발급된다() throws Exception {
+      KeycloakSecurityProperties props = baseProperties();
+      props.getCsrf().setTokenRepository(CsrfTokenRepositoryMode.COOKIE);
+      CsrfFilter csrfFilter = buildRealCsrfFilter(props);
+
+      MockHttpServletRequest request = newRequest("POST", "/api/resource");
+      MockHttpServletResponse response = new MockHttpServletResponse();
+
+      runThroughRealFilter(csrfFilter, request, response);
+
+      jakarta.servlet.http.Cookie xsrfCookie = response.getCookie("XSRF-TOKEN");
+      assertThat(xsrfCookie)
+          .as("COOKIE 모드에서는 matcher.exclude 경로에서도 토큰을 읽을 수 있도록 쿠키로 발급되어야 한다")
+          .isNotNull();
+      assertThat(xsrfCookie.isHttpOnly())
+          .as("CSRF 토큰 쿠키는 JavaScript로 읽어 헤더에 실어야 하므로 httpOnly=false여야 한다")
+          .isFalse();
+    }
+
+    @Test
+    void COOKIE_모드에서도_ignore_path는_여전히_CSRF_면제이다() throws Exception {
+      KeycloakSecurityProperties props = baseProperties();
+      props.getCsrf().setTokenRepository(CsrfTokenRepositoryMode.COOKIE);
+      props.getCsrf().setIgnorePaths(List.of("/webhook/**"));
+      CsrfFilter csrfFilter = buildRealCsrfFilter(props);
+
+      MockHttpServletRequest request = newRequest("POST", "/webhook/event");
+      MockHttpServletResponse response = new MockHttpServletResponse();
+
+      boolean reached = runThroughRealFilter(csrfFilter, request, response);
+
+      assertThat(reached)
+          .as("토큰 저장소 선택은 ignore-paths 판단(면제 로직)과 무관해야 한다")
+          .isTrue();
+    }
+  }
 }

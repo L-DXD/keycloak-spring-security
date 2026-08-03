@@ -23,6 +23,14 @@ import java.util.List;
  * RequestMatcher 조합은 spring-security-web 의존성이 있는 web-starter에서 수행합니다.
  * (core 모듈은 순수 로직 모듈로 Servlet/Web 의존성을 갖지 않으므로 Properties에 변환 로직을 두지 않습니다.)
  * </p>
+ * <p>
+ * <b>주의(요구사항 4번):</b> 이 매처가 {@code false}를 반환하는 요청(즉 exclude에 매칭된 경로)은
+ * {@code http.securityMatcher(this.from(...))}에 의해 Keycloak {@code SecurityFilterChain} 자체가
+ * 적용되지 않는다. 인증뿐 아니라 이 체인이 등록하는 CSRF·예외 처리·MDC 로깅 등도 전부 미적용되므로,
+ * "인증만 제외"가 필요하다면 이 매처(exclude)가 아니라
+ * {@code keycloak.security.authentication.permit-all-paths}(authorizeHttpRequests permitAll)를
+ * 사용해야 한다. 자세한 배경은 {@link KeycloakMatcherProperties#getExclude()} Javadoc 참고.
+ * </p>
  */
 final class KeycloakSecurityMatcherFactory {
 

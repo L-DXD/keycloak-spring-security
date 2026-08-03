@@ -129,4 +129,26 @@ public class KeycloakAuthenticationProperties {
      * </pre>
      */
     private String issuerUri;
+
+    /**
+     * {@code HttpSecurity#securityContext(...)}에 등록할 {@code SecurityContextRepository} 종류
+     * (기본값: {@link SecurityContextRepositoryMode#NULL}, 기존 동작 유지, 회귀 없음).
+     *
+     * <p>
+     * OIDC 쿠키 인증은 {@code KeycloakAuthenticationFilter}가 매 요청 재계산하므로 기본값({@code NULL})
+     * 상태에서도 영향이 없습니다. 다만 이 라이브러리의 필터 체인보다 <b>앞서 실행되는 필터</b>(예:
+     * 애플리케이션이 직접 등록한 {@code FilterRegistrationBean} 기반 핸드오프 필터)가 세워둔 인증을
+     * 보존해야 한다면 {@link SecurityContextRepositoryMode#HTTP_SESSION}을 사용하세요.
+     * </p>
+     *
+     * <pre>
+     * keycloak:
+     *   security:
+     *     authentication:
+     *       security-context-repository: HTTP_SESSION  # 앞단 필터·핸드오프 인증 보존
+     * </pre>
+     *
+     * @see SecurityContextRepositoryMode
+     */
+    private SecurityContextRepositoryMode securityContextRepository = SecurityContextRepositoryMode.NULL;
 }

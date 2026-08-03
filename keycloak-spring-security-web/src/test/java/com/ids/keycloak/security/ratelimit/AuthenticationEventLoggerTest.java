@@ -92,18 +92,19 @@ class AuthenticationEventLoggerTest {
     }
 
     // ======================================================================
-    // 2. logNoSession - DEBUG 레벨, 포맷 검증
+    // 2. logNoSession - INFO 레벨, 포맷 검증
     // ======================================================================
 
     @Nested
     class logNoSession_신규_메서드 {
 
         @Test
-        void logNoSession은_DEBUG_레벨로_기록된다() {
+        void logNoSession은_INFO_레벨로_기록된다() {
+            // 항목 6: 운영 기본 로그 레벨(INFO)에서도 추적 가능해야 하므로 DEBUG에서 INFO로 상향.
             AuthenticationEventLogger.logNoSession("OIDC_COOKIE", "10.0.0.1");
 
             assertThat(listAppender.list).hasSize(1);
-            assertThat(listAppender.list.get(0).getLevel()).isEqualTo(Level.DEBUG);
+            assertThat(listAppender.list.get(0).getLevel()).isEqualTo(Level.INFO);
         }
 
         @Test

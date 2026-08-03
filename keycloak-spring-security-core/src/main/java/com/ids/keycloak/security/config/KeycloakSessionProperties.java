@@ -74,4 +74,65 @@ public class KeycloakSessionProperties {
      * 기본값: 5분
      */
     private Duration cleanupInterval = Duration.ofMinutes(5);
+
+    /**
+     * Back-Channel 로그아웃이 실질적으로 동작할 수 없는 상태(indexed session repository 부재)일 때
+     * 애플리케이션 기동을 실패시킬지 여부 (기본값: {@code false}).
+     * <p>
+     * <b>배경(항목 7):</b> Back-Channel 로그아웃은 {@code FindByIndexNameSessionRepository}(servlet)
+     * / {@code ReactiveFindByIndexNameSessionRepository}(webflux) 구현체가 있어야 세션을 principal
+     * 기준으로 찾아 무효화할 수 있습니다. 기본 {@code store-type: memory}는 이 인터페이스를 구현하지
+     * 않으므로, 이 저장소를 쓰는 대부분의 소비자에게는 Back-Channel 로그아웃이 겉보기에는 설정되어도
+     * 실제로는 세션을 무효화하지 못합니다.
+     * <ul>
+     *   <li>servlet: Keycloak의 back-channel logout 요청에 200을 반환하지만 세션은 그대로 남습니다
+     *       (silent no-op).</li>
+     *   <li>webflux: 관련 빈 자체가 조건부로 등록되지 않아 엔드포인트가 404를 반환합니다.</li>
+     * </ul>
+     * <b>기본값(false)에서의 동작:</b> 기동 시 WARN 로그로 원인과 해결 방법(indexed session repository
+     * 구성 또는 이 옵션 인지)을 안내하되, 기동은 계속 진행합니다(memory 세션 기본값 환경이 다수이므로
+     * 무조건 예외로 막는 것은 과할 수 있음).
+     * </p>
+     * <p>
+     * <b>{@code true}로 설정 시:</b> Back-Channel 로그아웃을 반드시 사용해야 하는 배포(예: 강제
+     * 로그아웃이 컴플라이언스 요구사항인 경우)에서, indexed session repository 없이 기동되는 것을
+     * {@code IllegalStateException}으로 즉시 막습니다.
+     * </p>
+     *
+     * <pre>
+     * keycloak:
+     *   security:
+     *     session:
+     *       back-channel-logout-strict: true
+     * </pre>
+     */
+    private boolean backChannelLogoutStrict = false;
+
+    /**
+     * (redis 저장소 전용) 손상된 세션을 감지했을 때 Redis 키를 실제로 삭제할지 여부
+     * (기본값: {@code false}).
+     * <p>
+     * <b>배경(M-C, M-6 후속):</b> Redis 세션 폴백 매퍼는 손상된 세션을 감지하면 미인증(재로그인
+     * 유도)으로 처리한다 — 이 동작 자체는 항상 안전하며 이 옵션과 무관하게 유지된다. 문제는 M-6에서
+     * catch 범위를 {@code RuntimeException} 전체로 넓히면서, 이 매퍼가 감지한 모든 손상 세션의
+     * Redis 키를 곧바로 삭제하도록 되어 있었다는 점이다. 롤링 배포 중 인스턴스마다 클래스(직렬화
+     * 포맷)가 다른 상태에서, 신버전 인스턴스가 구버전이 쓴 <b>정상 세션</b>을 읽다가
+     * {@code SerializationException}을 만나면 이를 "손상"으로 오인해 삭제해버려, 배포 도중 다수의
+     * 정상 사용자가 전체 강제 로그아웃되는 운영 사고 위험이 있었다.
+     * </p>
+     * <p>
+     * <b>기본값({@code false})에서의 동작:</b> 손상 세션은 여전히 미인증으로 처리되어 HTTP 500은
+     * 발생하지 않지만, Redis 키 자체는 삭제하지 않는다(세션은 {@code timeout} 경과 후 Redis TTL로
+     * 자연 만료된다). {@code true}로 설정하면 감지 즉시 키를 삭제한다 — 배포 파이프라인이 롤링
+     * 배포 중 일시적 직렬화 불일치를 겪지 않는다고 확신하는 환경에서만 켜라.
+     * </p>
+     *
+     * <pre>
+     * keycloak:
+     *   security:
+     *     session:
+     *       cleanup-corrupted: false
+     * </pre>
+     */
+    private boolean cleanupCorrupted = false;
 }

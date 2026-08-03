@@ -3,6 +3,7 @@ package com.ids.keycloak.security.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ids.keycloak.security.authentication.BasicAuthenticationProvider;
 import com.ids.keycloak.security.authentication.KeycloakAuthenticationProvider;
+import com.ids.keycloak.security.authentication.KeycloakLoginService;
 import com.ids.keycloak.security.authentication.KeycloakLogoutHandler;
 import com.ids.keycloak.security.authentication.KeycloakOpaqueTokenIntrospector;
 import com.ids.keycloak.security.authentication.OidcLoginSuccessHandler;
@@ -58,6 +59,7 @@ import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -262,6 +264,32 @@ public class KeycloakServletAutoConfiguration {
             return decoder;
         }
 
+        /**
+         * 프로그래밍 방식 로그인({@code KeycloakLoginService})이 검증 파이프라인의 단일 진입점
+         * ({@code createAuthenticatedToken})을 경유할 수 있도록 {@link KeycloakAuthenticationProvider}를
+         * 독립된 Bean으로도 등록합니다.
+         *
+         * <p>{@link #authenticationManager}가 내부적으로 구성하는 provider와 동일한 입력값
+         * (KeycloakClient, client-id, JwtDecoder, requireUserInfo, roleMapping)으로 별도 인스턴스를
+         * 생성합니다 — {@code KeycloakHttpConfigurer.init()}이 SecurityFilterChain용 provider를 별도로
+         * 구성하는 것과 동일한 기존 패턴이며, 두 인스턴스 모두 상태를 갖지 않으므로 동작은 동일합니다.</p>
+         */
+        @Bean
+        @ConditionalOnMissingBean(KeycloakAuthenticationProvider.class)
+        public KeycloakAuthenticationProvider keycloakAuthenticationProvider(
+            KeycloakClient keycloakClient,
+            KeycloakInfrastructureConfiguration.KeycloakConfig keycloakConfig,
+            KeycloakSecurityProperties securityProperties,
+            @Qualifier("keycloakOidcJwtDecoder") JwtDecoder jwtDecoder
+        ) {
+            log.debug("지원 Bean을 등록합니다: [KeycloakAuthenticationProvider] (KeycloakLoginService용)");
+            KeycloakAuthenticationProvider provider =
+                new KeycloakAuthenticationProvider(keycloakClient, keycloakConfig.getClientId(), jwtDecoder);
+            provider.setRequireUserInfo(securityProperties.getAuthentication().isRequireUserInfo());
+            provider.setRoleMapping(securityProperties.getRoleMapping());
+            return provider;
+        }
+
         @Bean
         @ConditionalOnMissingBean(AuthenticationManager.class)
         public AuthenticationManager authenticationManager(
@@ -340,11 +368,53 @@ public class KeycloakServletAutoConfiguration {
         public OidcLoginSuccessHandler oidcLoginSuccessHandler(
             OAuth2AuthorizedClientRepository authorizedClientRepository,
             KeycloakSessionManager sessionManager,
-            KeycloakSecurityProperties securityProperties
+            KeycloakSecurityProperties securityProperties,
+            SecurityContextRepository keycloakLoginSecurityContextRepository
         ) {
             log.debug("지원 Bean을 등록합니다: [OidcLoginSuccessHandler]");
             String defaultSuccessUrl = securityProperties.getAuthentication().getDefaultSuccessUrl();
-            return new OidcLoginSuccessHandler(authorizedClientRepository, sessionManager, defaultSuccessUrl);
+            // H-2: KeycloakHttpConfigurer/KeycloakLoginService와 동일한 SecurityContextRepository를
+            // 주입해, principal 교체(OidcUser -> KeycloakPrincipal) 후 재저장이 실제 필터체인 설정
+            // (security-context-repository 모드)과 항상 일치하도록 한다.
+            return new OidcLoginSuccessHandler(
+                authorizedClientRepository, sessionManager, defaultSuccessUrl, keycloakLoginSecurityContextRepository);
+        }
+
+        /**
+         * {@code KeycloakLoginService}가 사용할 {@link SecurityContextRepository}를 등록합니다.
+         *
+         * <p>{@code keycloak.security.authentication.security-context-repository} 정책(기본값
+         * {@code NULL})에 따라 {@code KeycloakHttpConfigurer}의 SecurityFilterChain과 동일한 종류의
+         * 저장소를 생성합니다(생성 로직은 {@link SecurityContextRepositoryFactory}로 공유되어 정책이
+         * 어긋나지 않습니다). 기본값({@code NULL})에서는 {@code SecurityContext}가 세션에 저장되지
+         * 않으므로, {@code KeycloakLoginService.authenticate(...)} 호출 이후에도 다음 요청부터는
+         * {@code KeycloakAuthenticationFilter}가 쿠키+세션의 Refresh Token으로 인증을 재계산해야
+         * 유지됩니다.</p>
+         */
+        @Bean
+        @ConditionalOnMissingBean(name = "keycloakLoginSecurityContextRepository")
+        public SecurityContextRepository keycloakLoginSecurityContextRepository(
+            KeycloakSecurityProperties securityProperties
+        ) {
+            SecurityContextRepositoryMode mode = securityProperties.getAuthentication().getSecurityContextRepository();
+            log.debug("지원 Bean을 등록합니다: [SecurityContextRepository] (KeycloakLoginService용, mode={})", mode);
+            return SecurityContextRepositoryFactory.create(mode);
+        }
+
+        /**
+         * 프로그래밍 방식 로그인(OIDC 리다이렉트 없이 이미 발급받은 토큰으로 인증 세션을 세우는) 파사드
+         * Bean입니다. 소비자는 주입만 받아 {@code authenticate(request, response, tokens)}를 호출하면
+         * 됩니다. 자세한 검증·세션 정책은 {@link KeycloakLoginService} Javadoc 참고.
+         */
+        @Bean
+        @ConditionalOnMissingBean
+        public KeycloakLoginService keycloakLoginService(
+            KeycloakAuthenticationProvider keycloakAuthenticationProvider,
+            KeycloakSessionManager sessionManager,
+            @Qualifier("keycloakLoginSecurityContextRepository") SecurityContextRepository securityContextRepository
+        ) {
+            log.debug("지원 Bean을 등록합니다: [KeycloakLoginService]");
+            return new KeycloakLoginService(keycloakAuthenticationProvider, sessionManager, securityContextRepository);
         }
 
         @Bean
@@ -503,6 +573,20 @@ public class KeycloakServletAutoConfiguration {
                     String[] permitAllPaths = securityProperties.getAuthentication().getPermitAllPaths().toArray(new String[0]);
                     authorize.requestMatchers(permitAllPaths).permitAll();
                     log.info("인증 제외 경로 설정: {}", securityProperties.getAuthentication().getPermitAllPaths());
+                }
+
+                // C-2: 정적 리소스(css/js/images/webjars/favicon) permitAll은 명시적 opt-in일 때만
+                // 적용한다(KeycloakStaticResourceProperties#permitAll, 기본값 false). 기본값에서는
+                // 인증 필터 스킵(성능, KeycloakHttpConfigurer 참고)만 적용되고 인가는 유지되므로,
+                // 이 경로에 컨트롤러로 매핑된 보호 리소스가 있어도 업그레이드만으로 공개되지 않는다.
+                // 순수 정적 파일만 서빙하는 소비자는 static-resources.permit-all=true를 명시해야
+                // 실제로 인증 없이 로드된다.
+                if (securityProperties.getStaticResources().isPermitAllEffective()) {
+                    String[] staticResourcePatterns =
+                        securityProperties.getStaticResources().getPatterns().toArray(new String[0]);
+                    authorize.requestMatchers(staticResourcePatterns).permitAll();
+                    log.info("정적 리소스 인증 제외 경로 설정: {}",
+                        securityProperties.getStaticResources().getPatterns());
                 }
 
                 // 에러 페이지는 인증 없이 접근 허용 (정적 리소스 누락 시 로그인 리디렉션 방지)
