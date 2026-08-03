@@ -29,6 +29,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -510,6 +511,95 @@ class KeycloakAuthenticationFilterTest {
         }
     }
 
+    /**
+     * 항목 6 (a08082a): 인증 실패 사유를 원문 예외 메시지 대신 {@code ErrorCode} 기반으로
+     * 구조화된 감사 로그에 남겨야 한다(코드 기반 집계 가능, 로그 노이즈 정리).
+     */
+    @Nested
+    class 항목6_구조화된_실패_사유_로깅 {
+
+        @Test
+        void Refresh_Token이_없으면_reason에_REFRESH_TOKEN_NOT_FOUND가_기록된다() throws Exception {
+            Logger eventLogger = (Logger) LoggerFactory.getLogger(AuthenticationEventLogger.class);
+            ListAppender<ILoggingEvent> logAppender = new ListAppender<>();
+            logAppender.start();
+            eventLogger.addAppender(logAppender);
+            eventLogger.setLevel(Level.ALL);
+
+            when(request.getSession(false)).thenReturn(session);
+            when(sessionManager.getRefreshToken(session)).thenReturn(Optional.empty());
+
+            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class)) {
+                cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ID_TOKEN_NAME))
+                    .thenReturn(Optional.of(ID_TOKEN_VALUE));
+                cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ACCESS_TOKEN_NAME))
+                    .thenReturn(Optional.of(ACCESS_TOKEN_VALUE));
+
+                try {
+                    filter.doFilterInternal(request, response, filterChain);
+
+                    boolean hasReasonLog = logAppender.list.stream()
+                        .anyMatch(e -> e.getFormattedMessage().contains("result=FAILURE")
+                            && e.getFormattedMessage().contains("reason=REFRESH_TOKEN_NOT_FOUND"));
+                    assertThat(hasReasonLog)
+                        .as("세션은 있지만 Refresh Token이 없는 상태는 구조화된 사유로 감사 로그에 남아야 한다")
+                        .isTrue();
+                } finally {
+                    eventLogger.detachAppender(logAppender);
+                    logAppender.stop();
+                }
+            }
+        }
+
+        @Test
+        void TokenBindingException_발생시_reason에_ErrorCode가_기록되고_원문_메시지는_남지_않는다() throws Exception {
+            Logger eventLogger = (Logger) LoggerFactory.getLogger(AuthenticationEventLogger.class);
+            ListAppender<ILoggingEvent> logAppender = new ListAppender<>();
+            logAppender.start();
+            eventLogger.addAppender(logAppender);
+            eventLogger.setLevel(Level.ALL);
+
+            String rawMessage = "ID Token의 subject와 UserInfo의 subject가 일치하지 않습니다.";
+            when(request.getSession(false)).thenReturn(session);
+            when(request.getSession()).thenReturn(session);
+            when(sessionManager.getRefreshToken(session)).thenReturn(Optional.of(REFRESH_TOKEN_VALUE));
+            when(authenticationManager.authenticate(any()))
+                .thenThrow(new com.ids.keycloak.security.exception.TokenBindingException(rawMessage));
+
+            try (MockedStatic<CookieUtil> cookieUtil = mockStatic(CookieUtil.class);
+                 MockedStatic<JwtUtil> jwtUtil = mockStatic(JwtUtil.class)) {
+
+                cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ID_TOKEN_NAME))
+                    .thenReturn(Optional.of(ID_TOKEN_VALUE));
+                cookieUtil.when(() -> CookieUtil.getCookieValue(request, CookieUtil.ACCESS_TOKEN_NAME))
+                    .thenReturn(Optional.of(ACCESS_TOKEN_VALUE));
+                jwtUtil.when(() -> JwtUtil.parseSubjectWithoutValidation(anyString()))
+                    .thenReturn(USER_SUB);
+
+                try {
+                    filter.doFilterInternal(request, response, filterChain);
+
+                    boolean hasErrorCodeLog = logAppender.list.stream()
+                        .anyMatch(e -> e.getFormattedMessage().contains("result=FAILURE")
+                            && e.getFormattedMessage().contains("reason=TOKEN_BINDING_FAILED"));
+                    assertThat(hasErrorCodeLog)
+                        .as("TokenBindingException은 ErrorCode(TOKEN_BINDING_FAILED)로 감사 로그에 남아야 한다")
+                        .isTrue();
+
+                    boolean hasRawMessageInAuditLog = logAppender.list.stream()
+                        .anyMatch(e -> e.getFormattedMessage().contains("result=FAILURE")
+                            && e.getFormattedMessage().contains(rawMessage));
+                    assertThat(hasRawMessageInAuditLog)
+                        .as("감사 로그의 reason은 코드 기반 집계를 위해 원문 예외 메시지를 담지 않아야 한다")
+                        .isFalse();
+                } finally {
+                    eventLogger.detachAppender(logAppender);
+                    logAppender.stop();
+                }
+            }
+        }
+    }
+
     // ======================================================================
     // Phase 4 핵심 회귀 시나리오
     // ======================================================================
@@ -919,6 +1009,117 @@ class KeycloakAuthenticationFilterTest {
             // Then — 세션 검사 없이 pass-through
             verify(filterChain).doFilter(request, response);
             verify(authenticationManager, never()).authenticate(any());
+        }
+    }
+
+    /**
+     * 항목 3 (ca351c5): skipPaths가 완전일치 외에 Ant 패턴({@code /css/**} 등)도 지원해야 한다.
+     * {@code KeycloakHttpConfigurer}가 {@code static-resources.enabled=true}(기본값)일 때 이
+     * 패턴들을 skipPaths에 추가하므로, 필터 단위로는 "그 패턴이 skipPaths에 있을 때 매칭되는지"와
+     * "완전일치 skipPaths(토큰 발급 API 등)가 Ant 매칭 도입 이후에도 그대로 동작하는지(회귀 없음)"를
+     * 검증한다.
+     */
+    @Nested
+    class 항목3_정적_리소스_Ant_패턴_스킵 {
+
+        private static final List<String> STATIC_RESOURCE_PATTERNS =
+            List.of("/css/**", "/js/**", "/images/**", "/webjars/**", "/favicon.ico");
+
+        private KeycloakAuthenticationFilter filterWithStaticResourcePatterns() {
+            return new KeycloakAuthenticationFilter(
+                authenticationManager, authenticationProvider, sessionManager, keycloakClient,
+                STATIC_RESOURCE_PATTERNS
+            );
+        }
+
+        @Test
+        void css_경로는_Ant_패턴에_매칭되어_필터를_스킵한다() {
+            when(request.getRequestURI()).thenReturn("/css/main.css");
+
+            boolean result = filterWithStaticResourcePatterns().shouldNotFilter(request);
+
+            assertThat(result).isTrue();
+        }
+
+        @Test
+        void js_하위_경로도_Ant_패턴에_매칭되어_필터를_스킵한다() {
+            when(request.getRequestURI()).thenReturn("/js/vendor/lib.js");
+
+            boolean result = filterWithStaticResourcePatterns().shouldNotFilter(request);
+
+            assertThat(result).isTrue();
+        }
+
+        @Test
+        void images_경로는_Ant_패턴에_매칭되어_필터를_스킵한다() {
+            when(request.getRequestURI()).thenReturn("/images/logo.png");
+
+            boolean result = filterWithStaticResourcePatterns().shouldNotFilter(request);
+
+            assertThat(result).isTrue();
+        }
+
+        @Test
+        void webjars_경로는_Ant_패턴에_매칭되어_필터를_스킵한다() {
+            when(request.getRequestURI()).thenReturn("/webjars/bootstrap/bootstrap.min.js");
+
+            boolean result = filterWithStaticResourcePatterns().shouldNotFilter(request);
+
+            assertThat(result).isTrue();
+        }
+
+        @Test
+        void favicon_ico는_완전일치_패턴으로_필터를_스킵한다() {
+            when(request.getRequestURI()).thenReturn("/favicon.ico");
+
+            boolean result = filterWithStaticResourcePatterns().shouldNotFilter(request);
+
+            assertThat(result).isTrue();
+        }
+
+        @Test
+        void 정적_리소스가_아닌_일반_API_경로는_스킵하지_않는다() {
+            when(request.getRequestURI()).thenReturn("/api/x");
+
+            boolean result = filterWithStaticResourcePatterns().shouldNotFilter(request);
+
+            assertThat(result).isFalse();
+        }
+
+        @Test
+        void static_resources_enabled_false에_해당하는_skipPaths_미등록_상태에서는_css_경로도_스킵하지_않는다() {
+            // static-resources.enabled=false이면 KeycloakHttpConfigurer가 패턴을 skipPaths에
+            // 추가하지 않으므로, 필터에 패턴이 전혀 주입되지 않은 상태와 동일하다.
+            KeycloakAuthenticationFilter filterWithoutStaticPatterns = filter; // 기본 skipPaths=List.of()
+            when(request.getRequestURI()).thenReturn("/css/main.css");
+
+            boolean result = filterWithoutStaticPatterns.shouldNotFilter(request);
+
+            assertThat(result).isFalse();
+        }
+
+        @Test
+        void 정적_리소스_패턴과_기존_완전일치_skipPaths가_함께_있어도_회귀가_없다() {
+            List<String> combined = new ArrayList<>(STATIC_RESOURCE_PATTERNS);
+            combined.add("/auth/token");
+            combined.add("/auth/refresh");
+            combined.add("/auth/logout");
+            KeycloakAuthenticationFilter filterWithCombinedSkipPaths = new KeycloakAuthenticationFilter(
+                authenticationManager, authenticationProvider, sessionManager, keycloakClient, combined
+            );
+
+            when(request.getRequestURI()).thenReturn("/auth/token");
+            assertThat(filterWithCombinedSkipPaths.shouldNotFilter(request)).isTrue();
+        }
+
+        @Test
+        void 정적_리소스_패턴이_있어도_유사하지만_다른_완전일치_경로는_스킵하지_않는다() {
+            // /auth/token은 skipPaths에 없으므로(정적 리소스 패턴과 무관), Ant 매칭도 실패해야 한다.
+            when(request.getRequestURI()).thenReturn("/auth/token");
+
+            boolean result = filterWithStaticResourcePatterns().shouldNotFilter(request);
+
+            assertThat(result).isFalse();
         }
     }
 }
