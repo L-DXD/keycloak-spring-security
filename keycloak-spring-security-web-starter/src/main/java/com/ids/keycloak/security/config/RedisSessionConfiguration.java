@@ -692,12 +692,25 @@ public class RedisSessionConfiguration {
   }
 
   /**
-   * 기본 {@link org.springframework.session.data.redis.RedisSessionMapper}를 감싸, 필수 필드
-   * 누락으로 인한 {@link IllegalStateException}을 손상 세션으로 간주해 warn 로그 + Redis 키 정리
-   * 후 {@code null}(= 세션 없음, 정상 재로그인 유도)로 변환하는 폴백 매퍼를 생성한다.
+   * 기본 {@link org.springframework.session.data.redis.RedisSessionMapper}를 감싸, 손상되거나
+   * 역직렬화할 수 없는 세션 데이터로 인한 예외를 손상 세션으로 간주해 warn 로그 + Redis 키 정리 후
+   * {@code null}(= 세션 없음, 정상 재로그인 유도)로 변환하는 폴백 매퍼를 생성한다.
    *
-   * <p>세션ID는 추적·식별 목적의 값이므로 {@link LogMaskingUtil}로 마스킹해서만 로그에 남긴다
-   * (조용한 데이터 손실 방지 — 손상 사실과 정리 결과를 반드시 로그로 남긴다).</p>
+   * <p><b>M-6 (catch 범위 확대):</b> 기존에는 필수 필드 누락으로 인한
+   * {@link IllegalStateException}만 잡았다. 그러나 손상 원인은 그 외에도 다양하다 — 예를 들어
+   * {@code IllegalArgumentException}(값 파싱 실패), {@code ClassCastException}(직렬화 포맷이 바뀐
+   * 뒤 남은 구버전 데이터), {@code org.springframework.data.redis.serializer.SerializationException}
+   * (역직렬화 자체 실패) 등은 여전히 이 매퍼를 통과해 {@code RedisIndexedSessionRepository.getSession()}
+   * 에서 그대로 전파되어 HTTP 500을 유발했다. {@link RuntimeException} 전체로 catch 범위를 넓혀
+   * 이런 손상 유형도 동일하게 warn 로그 + 정리 시도 후 {@code null}로 처리한다.</p>
+   *
+   * <p><b>한계:</b> 여기서 처리하는 것은 세션 데이터(Redis Hash) 자체의 손상뿐이다. Spring Session의
+   * Principal Name 인덱스({@code spring:session:index:...})처럼 별도 키에 보관되는 보조 인덱스
+   * 엔트리는 이 매퍼가 관여하지 않는 경로로 생성/삭제되므로, 손상된 세션의 원본 키를 정리해도(아래
+   * {@link #cleanupCorruptedSession}) 그 세션을 가리키던 인덱스 엔트리가 즉시 함께 정리되는 것은
+   * 보장되지 않는다(다음 만료/스캔 시점에 자연 정리됨). 세션ID는 추적·식별 목적의 값이므로
+   * {@link LogMaskingUtil}로 마스킹해서만 로그에 남긴다(조용한 데이터 손실 방지 — 손상 사실과
+   * 정리 결과를 반드시 로그로 남긴다).</p>
    */
   private static java.util.function.BiFunction<String, java.util.Map<String, Object>,
       org.springframework.session.MapSession> createFallbackSessionMapper(
@@ -708,11 +721,11 @@ public class RedisSessionConfiguration {
     return (sessionId, sessionMap) -> {
       try {
         return delegate.apply(sessionId, sessionMap);
-      } catch (IllegalStateException e) {
+      } catch (RuntimeException e) {
         log.warn(
-            "Keycloak Session: 손상된 Redis 세션을 감지했습니다(필수 필드 누락: {}). 세션ID={} 을 "
+            "Keycloak Session: 손상된 Redis 세션을 감지했습니다(원인: {}: {}). 세션ID={} 을 "
                 + "미인증(재로그인 필요)으로 처리하고 정리를 시도합니다.",
-            e.getMessage(), LogMaskingUtil.maskIdentifier(sessionId));
+            e.getClass().getSimpleName(), e.getMessage(), LogMaskingUtil.maskIdentifier(sessionId));
         cleanupCorruptedSession(repository, sessionId);
         return null;
       }
