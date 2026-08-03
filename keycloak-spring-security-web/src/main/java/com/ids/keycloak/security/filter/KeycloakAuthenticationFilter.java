@@ -34,6 +34,7 @@ import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.util.AntPathMatcher;
+import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -145,10 +146,24 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
      * 항목 3: 완전일치 외에 Ant 패턴({@code /css/**} 등)도 지원한다. 완전일치 경로(예:
      * {@code /auth/token})는 Ant 패턴으로도 자기 자신과 그대로 일치하므로 기존 동작과 회귀가 없다.
      * </p>
+     * <p>
+     * <b>M-1 (context-path 불일치):</b> {@link HttpServletRequest#getRequestURI()}는 context-path가
+     * 배포된 환경에서 그 context-path를 포함한다({@code /myapp/css/a.css}). skipPaths 패턴은
+     * context-path 없는 형태({@code /css/**})로 작성되므로 이 환경에서는 매칭이 실패해 인증은
+     * permitAll로 통과하지만 필터 자체(원격 호출)는 스킵되지 않는 불일치가 생긴다.
+     * {@link HttpServletRequest#getContextPath()}를 제거한 경로를 사용해 이를 바로잡는다
+     * (context-path가 없는 환경에서는 결과가 {@code getRequestURI()}와 동일하므로 회귀가 없다).
+     * </p>
+     * <p>
+     * <b>M-2 (경로 조작 우회):</b> 정규화되지 않은 원시 경로({@code /css/../api/secret})가
+     * {@code /css/**} 패턴에 매칭될 수 있다. {@code StrictHttpFirewall}이 기본적으로 이런 요청을
+     * 막지만, 방어 계층을 하나만 신뢰하지 않기 위해 여기서도
+     * {@link StringUtils#cleanPath(String)}로 {@code ..}/{@code .} 세그먼트를 해석한 뒤 매칭한다.
+     * </p>
      */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String path = request.getRequestURI();
+        String path = resolveNormalizedPath(request);
         for (String skipPath : skipPaths) {
             if (SKIP_PATH_MATCHER.match(skipPath, path)) {
                 log.debug("[Filter] 경로 '{}' — skipPaths 패턴 '{}' 매칭, 필터 스킵", path, skipPath);
@@ -156,6 +171,29 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
             }
         }
         return false;
+    }
+
+    /**
+     * skipPaths 매칭에 사용할 경로를 정규화합니다 (M-1: context-path 제거, M-2: {@code ..}/{@code .}
+     * 세그먼트 해석).
+     * <p>
+     * {@code UrlPathHelper}는 {@code getContextPath()}가 절대 {@code null}이 아니라는 서블릿 컨테이너
+     * 계약에 의존하므로, 직접 문자열 비교로 context-path를 제거해 그 계약이 성립하지 않는 환경(테스트
+     * 더블 등)에서도 안전하게 동작하도록 한다.
+     * </p>
+     */
+    private String resolveNormalizedPath(HttpServletRequest request) {
+        String requestUri = request.getRequestURI();
+        if (requestUri == null || requestUri.isEmpty()) {
+            requestUri = "/";
+        }
+        String contextPath = request.getContextPath();
+        String pathWithinApplication = requestUri;
+        if (StringUtils.hasLength(contextPath) && requestUri.startsWith(contextPath)) {
+            pathWithinApplication = requestUri.substring(contextPath.length());
+        }
+        String cleaned = StringUtils.cleanPath(pathWithinApplication);
+        return cleaned.isEmpty() ? "/" : cleaned;
     }
 
     @Override
