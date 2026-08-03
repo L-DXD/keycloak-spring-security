@@ -96,7 +96,22 @@ public class OidcLoginSuccessHandler extends SavedRequestAwareAuthenticationSucc
         log.debug("OIDC 로그인 성공 principal Name = {}", authentication.getName());
         log.debug("OIDC 로그인 성공. 토큰을 쿠키에 저장하고 KeycloakPrincipal을 생성합니다.");
 
-        HttpSession session = request.getSession(false);
+        // H-C: 재로그인 잔여물 방지 — KeycloakLoginService#authenticate와 동일한 로직
+        // (KeycloakSessionManager로 추출된 공통 헬퍼)을 공유한다. OAuth2LoginAuthenticationFilter는
+        // 이 핸들러를 호출하기 "전"에 이미 ChangeSessionIdAuthenticationStrategy로 세션 ID를
+        // 회전시킨다(changeSessionId()는 속성을 보존). 따라서 세션 고정 방지 자체는 이미 끝난
+        // 상태이며, 여기서는 그 changeSessionId()가 보존한 이전 사용자의 잔여물(다른 사용자가
+        // 로그아웃 없이 재로그인한 경우의 Refresh Token/Keycloak Session ID)만 판별·정리한다.
+        String newPrincipalName = oidcUser.getName();
+        HttpSession existingSession = request.getSession(false);
+        boolean differentUser = sessionManager.isDifferentUserReLogin(existingSession, newPrincipalName);
+        if (differentUser) {
+            log.warn("[OidcLoginSuccessHandler] 이전 세션의 Principal('{}')과 새 인증('{}')이 달라 "
+                    + "세션을 무효화하고 새 세션을 생성합니다(재로그인 잔여물 방지).",
+                sessionManager.getPrincipalName(existingSession).orElse(null), newPrincipalName);
+            sessionManager.invalidateSession(existingSession);
+        }
+        HttpSession session = differentUser ? request.getSession(true) : existingSession;
 
         // AuthorizedClient에서 Access Token과 Refresh Token 조회
         OAuth2AuthorizedClient authorizedClient = authorizedClientRepository.loadAuthorizedClient(
@@ -105,6 +120,7 @@ public class OidcLoginSuccessHandler extends SavedRequestAwareAuthenticationSucc
             request
         );
 
+        String refreshTokenValue = null;
         if (authorizedClient != null && authorizedClient.getAccessToken() != null) {
             String accessTokenValue = authorizedClient.getAccessToken().getTokenValue();
 
@@ -113,10 +129,8 @@ public class OidcLoginSuccessHandler extends SavedRequestAwareAuthenticationSucc
             CookieUtil.addCookie(response, CookieUtil.ACCESS_TOKEN_NAME, accessTokenValue, accessTokenExpiresIn);
             log.debug("access_token 쿠키를 생성했습니다.");
 
-            // Refresh Token을 세션에 저장
-            if (session != null && authorizedClient.getRefreshToken() != null) {
-                log.debug("HTTP Session에 Refresh Token을 저장합니다.");
-                sessionManager.saveRefreshToken(session, authorizedClient.getRefreshToken().getTokenValue());
+            if (authorizedClient.getRefreshToken() != null) {
+                refreshTokenValue = authorizedClient.getRefreshToken().getTokenValue();
             }
         } else {
             log.warn("AuthorizedClient 또는 Access Token을 찾을 수 없어 access_token 쿠키를 생성하지 못했습니다.");
@@ -148,14 +162,13 @@ public class OidcLoginSuccessHandler extends SavedRequestAwareAuthenticationSucc
         securityContextRepository.saveContext(securityContext, request, response);
         log.debug("SecurityContextRepository에 갱신된 Authentication을 재저장했습니다.");
 
-        // Back-Channel Logout을 위해 세션에 Principal Name과 Keycloak Session ID 저장
+        // Back-Channel Logout을 위해 세션에 Principal Name/Refresh Token/Keycloak Session ID 동기화
+        // (H-C: KeycloakLoginService#authenticate와 공유하는 KeycloakSessionManager 헬퍼 — 이번
+        // 로그인에 refreshToken/sid가 제공되지 않았다면 이전 값을 명시적으로 제거해 잔여물을
+        // 남기지 않는다).
+        String keycloakSid = oidcUser.getIdToken().getClaimAsString("sid");
         if (session != null) {
-            sessionManager.savePrincipalName(session, keycloakPrincipal.getName());
-
-            String keycloakSid = oidcUser.getIdToken().getClaimAsString("sid");
-            if (keycloakSid != null) {
-                sessionManager.saveKeycloakSessionId(session, keycloakSid);
-            }
+            sessionManager.syncReLoginArtifacts(session, keycloakPrincipal.getName(), refreshTokenValue, keycloakSid);
         }
 
         redirectToTarget(request, response, newAuthToken);

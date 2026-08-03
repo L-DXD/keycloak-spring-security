@@ -148,7 +148,8 @@ public class KeycloakLoginService {
         Authentication authentication =
             authenticationProvider.createAuthenticatedToken(tokens.idToken(), tokens.accessToken());
 
-        // 2. 세션 고정 방지 + 재로그인 잔여물 방지 (H-3).
+        // 2. 세션 고정 방지 + 재로그인 잔여물 방지 (H-3, 판별/동기화 로직은 KeycloakSessionManager로
+        //    추출되어 OidcLoginSuccessHandler(H-C)와 공유된다).
         //    changeSessionId()는 세션 ID만 회전하고 기존 속성(Refresh Token/sid 등)은 그대로
         //    보존한다. 따라서 이전 세션이 "다른 사용자"의 것이라면(예: 로그아웃 없이 다른 계정으로
         //    재로그인) changeSessionId()만으로는 이전 사용자의 Refresh Token/Keycloak Session ID가
@@ -157,13 +158,12 @@ public class KeycloakLoginService {
         //    인증의 Principal Name이 다르면 이전 세션을 통째로 무효화하고 완전히 새 세션을
         //    생성한다 — 이 경로에서는 잔여물이 원천적으로 존재할 수 없다.
         HttpSession existingSession = request.getSession(false);
+        boolean differentUser = sessionManager.isDifferentUserReLogin(existingSession, authentication.getName());
         if (existingSession != null) {
-            String previousPrincipalName = sessionManager.getPrincipalName(existingSession).orElse(null);
-            boolean differentUser = previousPrincipalName != null && !previousPrincipalName.equals(authentication.getName());
             if (differentUser) {
                 log.warn("[LoginService] 이전 세션의 Principal('{}')과 새 인증('{}')이 달라 세션을 무효화하고 "
                         + "새 세션을 생성합니다(재로그인 잔여물 방지).",
-                    previousPrincipalName, authentication.getName());
+                    sessionManager.getPrincipalName(existingSession).orElse(null), authentication.getName());
                 sessionManager.invalidateSession(existingSession);
             } else {
                 request.changeSessionId();
@@ -186,21 +186,13 @@ public class KeycloakLoginService {
 
         // 5. Refresh Token / Principal Name / Keycloak Session ID를 세션에 저장.
         //    Principal Name 저장은 Back-Channel 로그아웃 인덱스 조회에 필수다.
-        //    H-3: 이번 호출에 refreshToken/sid가 제공되지 않았다면(위에서 무효화하지 않은 동일 사용자
-        //    재로그인 케이스 포함) 이전 값이 남아있지 않도록 명시적으로 제거한다 — changeSessionId()는
-        //    속성을 보존하므로 이 명시적 제거가 없으면 이전 호출의 값이 계속 유효하게 남는다.
-        if (tokens.refreshToken() != null) {
-            sessionManager.saveRefreshToken(session, tokens.refreshToken());
-        } else {
-            sessionManager.removeRefreshToken(session);
-        }
-        sessionManager.savePrincipalName(session, authentication.getName());
+        //    H-3 / H-C: 이번 호출에 refreshToken/sid가 제공되지 않았다면(위에서 무효화하지 않은
+        //    동일 사용자 재로그인 케이스 포함) 이전 값이 남아있지 않도록 명시적으로 제거한다 —
+        //    changeSessionId()는 속성을 보존하므로 이 명시적 제거가 없으면 이전 호출의 값이 계속
+        //    유효하게 남는다. OidcLoginSuccessHandler(H-C)와 동일한 로직을 공유한다.
         Optional<String> keycloakSid = extractKeycloakSessionId(authentication);
-        if (keycloakSid.isPresent()) {
-            sessionManager.saveKeycloakSessionId(session, keycloakSid.get());
-        } else {
-            sessionManager.removeKeycloakSessionId(session);
-        }
+        sessionManager.syncReLoginArtifacts(
+            session, authentication.getName(), tokens.refreshToken(), keycloakSid.orElse(null));
 
         log.debug("[LoginService] 프로그래밍 방식 로그인 완료: {}", authentication.getName());
         return authentication;
