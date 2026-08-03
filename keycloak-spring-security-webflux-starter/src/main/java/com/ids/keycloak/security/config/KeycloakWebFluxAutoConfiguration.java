@@ -567,6 +567,45 @@ public class KeycloakWebFluxAutoConfiguration {
     }
   }
 
+  /**
+   * {@link KeycloakBackChannelLogoutConfiguration}과 정확히 반대 조건(항목 7, Fail-Fast)입니다.
+   *
+   * <p>{@code ReactiveFindByIndexNameSessionRepository} 빈이 없으면(클래스가 클래스패스에
+   * 없는 경우 포함 — {@code type} 문자열 조건은 클래스 로딩 없이 평가되므로 안전함)
+   * {@code KeycloakBackChannelLogoutConfiguration}이 통째로 스킵되어 Back-Channel 로그아웃 관련
+   * 빈(핸들러/필터)이 전혀 등록되지 않는다. 그 결과 Keycloak이 호출하는 Back-Channel 로그아웃
+   * 엔드포인트가 <b>404</b>를 반환한다 — 아무 로그도 없이 조용히 미동작하는 상태다.</p>
+   *
+   * <p>기본값({@code keycloak.security.session.back-channel-logout-strict=false})에서는 WARN
+   * 로그로 원인과 해결 방법을 안내하고 기동을 계속한다(memory 세션 등 Back-Channel 로그아웃을 쓰지
+   * 않는 환경이 다수이므로 무조건 예외로 막는 것은 과할 수 있음). {@code true}로 설정하면 기동
+   * 자체를 {@link IllegalStateException}으로 막는다.</p>
+   */
+  @Configuration(proxyBeanMethods = false)
+  @ConditionalOnMissingBean(type = "org.springframework.session.ReactiveFindByIndexNameSessionRepository")
+  @Slf4j
+  protected static class KeycloakBackChannelLogoutFailFastConfiguration {
+
+    private final KeycloakSecurityProperties securityProperties;
+
+    public KeycloakBackChannelLogoutFailFastConfiguration(KeycloakSecurityProperties securityProperties) {
+      this.securityProperties = securityProperties;
+    }
+
+    @PostConstruct
+    public void warnOrFailIfBackChannelLogoutUnusable() {
+      String guidance = "Back-Channel 로그아웃 관련 빈이 등록되지 않았습니다 "
+          + "(ReactiveFindByIndexNameSessionRepository 빈이 없음) — Keycloak이 Back-Channel "
+          + "로그아웃을 호출하면 404를 반환하며 세션이 무효화되지 않습니다(silent no-op). Redis "
+          + "Reactive indexed session repository를 구성하세요. 이 상태로 기동을 막으려면 "
+          + "keycloak.security.session.back-channel-logout-strict=true 를 설정하세요.";
+      if (securityProperties.getSession().isBackChannelLogoutStrict()) {
+        throw new IllegalStateException("[항목 7] " + guidance);
+      }
+      log.warn(guidance);
+    }
+  }
+
   // ==========================================================================
   // Rate Limiting (조건부)
   // ==========================================================================

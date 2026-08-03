@@ -110,6 +110,13 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
       if (this.sessionRepository == null) {
          this.sessionRepository = context.getBeanProvider(FindByIndexNameSessionRepository.class).getIfAvailable();
       }
+      // 항목 7 (Fail-Fast): Back-Channel 로그아웃(아래 4-2)은 이 sessionRepository로 principal의
+      // 세션을 찾아 무효화한다. memory 저장소(기본값)는 FindByIndexNameSessionRepository를 구현하지
+      // 않으므로 null이며, 이 경우 OidcBackChannelSessionLogoutHandler.logout()이 런타임에
+      // log.error 후 조용히 아무 일도 하지 않고 Keycloak에는 200을 반환한다(silent no-op) —
+      // 기동 시점에 명확히 경고해 이 사실을 조용히 지나치지 않게 한다.
+      KeycloakSecurityProperties earlySecurityProperties = context.getBean(KeycloakSecurityProperties.class);
+      warnOrFailIfBackChannelLogoutUnusable(this.sessionRepository, earlySecurityProperties);
 
       OAuth2AuthorizedClientRepository authorizedClientRepository = context.getBean(OAuth2AuthorizedClientRepository.class);
       OidcLoginSuccessHandler oidcLoginSuccessHandler = context.getBean(OidcLoginSuccessHandler.class);
@@ -381,6 +388,34 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         } catch (Exception e) {
             return defaultValue;
         }
+    }
+
+    /**
+     * Back-Channel 로그아웃이 실질적으로 동작할 수 없는 상태(indexed session repository 부재)를
+     * 기동 시점에 알립니다 (항목 7, Fail-Fast).
+     *
+     * <p>기본값({@code keycloak.security.session.back-channel-logout-strict=false})에서는 WARN
+     * 로그로 원인과 해결 방법을 안내하고 기동을 계속합니다. {@code true}로 설정하면 기동 자체를
+     * {@link IllegalStateException}으로 막습니다.</p>
+     *
+     * @param sessionRepository   해석된 session repository (null이면 Back-Channel 로그아웃 미동작)
+     * @param securityProperties  Keycloak 보안 설정
+     */
+    private void warnOrFailIfBackChannelLogoutUnusable(
+        FindByIndexNameSessionRepository<? extends Session> sessionRepository,
+        KeycloakSecurityProperties securityProperties) {
+        if (sessionRepository != null) {
+            return;
+        }
+        String guidance = "Back-Channel 로그아웃(oidcLogout)이 설정되지만 FindByIndexNameSessionRepository "
+            + "빈이 없어 실질적으로 세션을 무효화할 수 없습니다 (Keycloak에는 200을 반환하지만 세션은 "
+            + "그대로 유지됨 — silent no-op). Redis 등 indexed session repository(예: "
+            + "keycloak.security.session.store-type=redis)를 구성하세요. 이 상태로 기동을 막으려면 "
+            + "keycloak.security.session.back-channel-logout-strict=true 를 설정하세요.";
+        if (securityProperties.getSession().isBackChannelLogoutStrict()) {
+            throw new IllegalStateException("[항목 7] " + guidance);
+        }
+        log.warn(guidance);
     }
 
     /**
