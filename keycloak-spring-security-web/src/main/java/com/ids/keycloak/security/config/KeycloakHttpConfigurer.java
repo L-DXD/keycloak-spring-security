@@ -35,10 +35,6 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
-import org.springframework.security.web.context.DelegatingSecurityContextRepository;
-import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
-import org.springframework.security.web.context.NullSecurityContextRepository;
-import org.springframework.security.web.context.RequestAttributeSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
@@ -398,18 +394,11 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
     private SecurityContextRepository resolveSecurityContextRepository(SecurityContextRepositoryMode mode) {
         SecurityContextRepositoryMode effectiveMode = mode != null ? mode : SecurityContextRepositoryMode.NULL;
         switch (effectiveMode) {
-            case HTTP_SESSION:
-                log.info("SecurityContextRepository: HTTP_SESSION (앞단 필터·핸드오프 인증 보존)");
-                return new HttpSessionSecurityContextRepository();
-            case DELEGATING:
-                log.info("SecurityContextRepository: DELEGATING (RequestAttribute + HttpSession)");
-                return new DelegatingSecurityContextRepository(
-                    new RequestAttributeSecurityContextRepository(),
-                    new HttpSessionSecurityContextRepository()
-                );
-            case NULL:
-            default:
-                return new NullSecurityContextRepository();
+            case HTTP_SESSION -> log.info("SecurityContextRepository: HTTP_SESSION (앞단 필터·핸드오프 인증 보존)");
+            case DELEGATING -> log.info("SecurityContextRepository: DELEGATING (RequestAttribute + HttpSession)");
+            case NULL -> { /* 기본값, 로깅하지 않음(기존 동작) */ }
         }
+        // KeycloakLoginService(프로그래밍 방식 로그인)와 동일한 생성 로직을 공유한다.
+        return SecurityContextRepositoryFactory.create(effectiveMode);
     }
 }
