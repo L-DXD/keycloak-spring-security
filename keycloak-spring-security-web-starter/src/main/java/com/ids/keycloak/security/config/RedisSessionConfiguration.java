@@ -656,7 +656,10 @@ public class RedisSessionConfiguration {
       // Spring Session의 기본 RedisSessionMapper가 IllegalStateException을 던지고, 이를
       // RedisIndexedSessionRepository.getSession()이 try/catch 없이 그대로 전파해 HTTP 500이
       // 발생한다(그 브라우저는 영구적으로 재로그인조차 못 하게 됨).
-      repository.setRedisSessionMapper(createFallbackSessionMapper(repository));
+      // M-C: 키 삭제 여부는 properties.getSession().isCleanupCorrupted()(기본 false)로 분리한다 —
+      // "손상 세션 → 미인증 처리"와 "Redis 키 삭제"는 안전성이 다른 별개의 결정이다.
+      repository.setRedisSessionMapper(
+          createFallbackSessionMapper(repository, properties.getSession().isCleanupCorrupted()));
 
       log.info(
           "Keycloak Session: Redis 세션 저장소가 활성화되었습니다. (만료 시간: {}초, Namespace: {})",
@@ -693,7 +696,7 @@ public class RedisSessionConfiguration {
 
   /**
    * 기본 {@link org.springframework.session.data.redis.RedisSessionMapper}를 감싸, 손상되거나
-   * 역직렬화할 수 없는 세션 데이터로 인한 예외를 손상 세션으로 간주해 warn 로그 + Redis 키 정리 후
+   * 역직렬화할 수 없는 세션 데이터로 인한 예외를 손상 세션으로 간주해 warn 로그 후
    * {@code null}(= 세션 없음, 정상 재로그인 유도)로 변환하는 폴백 매퍼를 생성한다.
    *
    * <p><b>M-6 (catch 범위 확대):</b> 기존에는 필수 필드 누락으로 인한
@@ -702,7 +705,16 @@ public class RedisSessionConfiguration {
    * 뒤 남은 구버전 데이터), {@code org.springframework.data.redis.serializer.SerializationException}
    * (역직렬화 자체 실패) 등은 여전히 이 매퍼를 통과해 {@code RedisIndexedSessionRepository.getSession()}
    * 에서 그대로 전파되어 HTTP 500을 유발했다. {@link RuntimeException} 전체로 catch 범위를 넓혀
-   * 이런 손상 유형도 동일하게 warn 로그 + 정리 시도 후 {@code null}로 처리한다.</p>
+   * 이런 손상 유형도 동일하게 warn 로그 후 {@code null}로 처리한다.</p>
+   *
+   * <p><b>M-C (Redis 키 삭제와 미인증 처리 분리):</b> M-6이 catch 범위를 넓히면서, 감지된 모든
+   * "손상"에 대해 Redis 키를 곧바로 삭제하도록 했었다. 그러나 롤링 배포 중에는 인스턴스마다 클래스
+   * (직렬화 포맷)가 달라, 신버전 인스턴스가 구버전이 쓴 <b>정상 세션</b>을 읽다가
+   * {@code SerializationException}을 만날 수 있다 — 이를 손상으로 오인해 삭제하면 배포 도중 다수의
+   * 정상 세션이 무더기로 삭제되어 전체 강제 로그아웃 사고로 이어진다. "미인증 처리"(이 메서드가 항상
+   * 수행하는 안전한 폴백)와 "Redis 키 삭제"(파괴적 동작)를 분리해, 삭제는
+   * {@code cleanupCorrupted}가 {@code true}일 때만 수행한다(기본값 {@code false} = 삭제 안 함,
+   * 세션은 Redis TTL로 자연 만료).</p>
    *
    * <p><b>한계:</b> 여기서 처리하는 것은 세션 데이터(Redis Hash) 자체의 손상뿐이다. Spring Session의
    * Principal Name 인덱스({@code spring:session:index:...})처럼 별도 키에 보관되는 보조 인덱스
@@ -711,10 +723,14 @@ public class RedisSessionConfiguration {
    * 보장되지 않는다(다음 만료/스캔 시점에 자연 정리됨). 세션ID는 추적·식별 목적의 값이므로
    * {@link LogMaskingUtil}로 마스킹해서만 로그에 남긴다(조용한 데이터 손실 방지 — 손상 사실과
    * 정리 결과를 반드시 로그로 남긴다).</p>
+   *
+   * @param repository        Redis 키 정리(삭제)에 사용할 저장소
+   * @param cleanupCorrupted  손상 감지 시 Redis 키를 실제로 삭제할지 여부(기본값 false)
    */
   private static java.util.function.BiFunction<String, java.util.Map<String, Object>,
       org.springframework.session.MapSession> createFallbackSessionMapper(
-      org.springframework.session.data.redis.RedisIndexedSessionRepository repository) {
+      org.springframework.session.data.redis.RedisIndexedSessionRepository repository,
+      boolean cleanupCorrupted) {
     org.springframework.session.data.redis.RedisSessionMapper delegate =
         new org.springframework.session.data.redis.RedisSessionMapper();
 
@@ -722,11 +738,19 @@ public class RedisSessionConfiguration {
       try {
         return delegate.apply(sessionId, sessionMap);
       } catch (RuntimeException e) {
-        log.warn(
-            "Keycloak Session: 손상된 Redis 세션을 감지했습니다(원인: {}: {}). 세션ID={} 을 "
-                + "미인증(재로그인 필요)으로 처리하고 정리를 시도합니다.",
-            e.getClass().getSimpleName(), e.getMessage(), LogMaskingUtil.maskIdentifier(sessionId));
-        cleanupCorruptedSession(repository, sessionId);
+        if (cleanupCorrupted) {
+          log.warn(
+              "Keycloak Session: 손상된 Redis 세션을 감지했습니다(원인: {}: {}). 세션ID={} 을 "
+                  + "미인증(재로그인 필요)으로 처리하고 정리를 시도합니다.",
+              e.getClass().getSimpleName(), e.getMessage(), LogMaskingUtil.maskIdentifier(sessionId));
+          cleanupCorruptedSession(repository, sessionId);
+        } else {
+          log.warn(
+              "Keycloak Session: 손상된 Redis 세션을 감지했습니다(원인: {}: {}). 세션ID={} 을 "
+                  + "미인증(재로그인 필요)으로 처리합니다(cleanup-corrupted=false — Redis 키는 "
+                  + "삭제하지 않고 TTL로 자연 만료됩니다. 롤링 배포 중 정상 세션 오인 삭제 방지, M-C).",
+              e.getClass().getSimpleName(), e.getMessage(), LogMaskingUtil.maskIdentifier(sessionId));
+        }
         return null;
       }
     };

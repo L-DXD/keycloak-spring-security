@@ -107,4 +107,32 @@ public class KeycloakSessionProperties {
      * </pre>
      */
     private boolean backChannelLogoutStrict = false;
+
+    /**
+     * (redis 저장소 전용) 손상된 세션을 감지했을 때 Redis 키를 실제로 삭제할지 여부
+     * (기본값: {@code false}).
+     * <p>
+     * <b>배경(M-C, M-6 후속):</b> Redis 세션 폴백 매퍼는 손상된 세션을 감지하면 미인증(재로그인
+     * 유도)으로 처리한다 — 이 동작 자체는 항상 안전하며 이 옵션과 무관하게 유지된다. 문제는 M-6에서
+     * catch 범위를 {@code RuntimeException} 전체로 넓히면서, 이 매퍼가 감지한 모든 손상 세션의
+     * Redis 키를 곧바로 삭제하도록 되어 있었다는 점이다. 롤링 배포 중 인스턴스마다 클래스(직렬화
+     * 포맷)가 다른 상태에서, 신버전 인스턴스가 구버전이 쓴 <b>정상 세션</b>을 읽다가
+     * {@code SerializationException}을 만나면 이를 "손상"으로 오인해 삭제해버려, 배포 도중 다수의
+     * 정상 사용자가 전체 강제 로그아웃되는 운영 사고 위험이 있었다.
+     * </p>
+     * <p>
+     * <b>기본값({@code false})에서의 동작:</b> 손상 세션은 여전히 미인증으로 처리되어 HTTP 500은
+     * 발생하지 않지만, Redis 키 자체는 삭제하지 않는다(세션은 {@code timeout} 경과 후 Redis TTL로
+     * 자연 만료된다). {@code true}로 설정하면 감지 즉시 키를 삭제한다 — 배포 파이프라인이 롤링
+     * 배포 중 일시적 직렬화 불일치를 겪지 않는다고 확신하는 환경에서만 켜라.
+     * </p>
+     *
+     * <pre>
+     * keycloak:
+     *   security:
+     *     session:
+     *       cleanup-corrupted: false
+     * </pre>
+     */
+    private boolean cleanupCorrupted = false;
 }
