@@ -44,6 +44,16 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * OIDC 쿠키 방식 전용 필터입니다. Bearer/Basic/Credential-Login 등 stateless 인증 방식은
  * {@link AuthenticationMethodDetector}가 감지하여 pass-through 처리하므로 세션을 요구하지 않습니다.
  * </p>
+ * <p>
+ * <b>H-2 트레이드오프:</b> {@code security-context-repository}가 {@code HTTP_SESSION}/
+ * {@code DELEGATING}이면, 이 필터는 principal이 {@link KeycloakPrincipal}인 기존 Authentication을
+ * 만나도 "이미 인증됨"으로 스킵하지 않고 매 요청 OIDC 쿠키+세션의 Refresh Token으로 재검증한다
+ * (stale 권한 방지, 토큰 폐기·만료·재발급 반영). 반대로 이는 HTTP_SESSION 모드를 쓰더라도 이
+ * 필터가 담당하는 요청에서는 매 요청 재검증 비용(토큰 파싱/검증, 필요 시 Keycloak 재발급 호출)을
+ * 그대로 지불한다는 뜻이다 — HTTP_SESSION 모드가 기대하는 "세션에 있으면 재계산 생략"의 성능 이점은
+ * (원리상) 이 라이브러리 자신의 인증에는 적용되지 않으며, 오직 이 필터 체인보다 앞서 실행되는
+ * 애플리케이션 자체 핸드오프 필터의 인증을 보존하는 데만 쓰인다.
+ * </p>
  */
 @Slf4j
 public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
@@ -182,11 +192,27 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
         FilterChain filterChain
     ) throws ServletException, IOException {
 
-        // 이미 인증된 경우 스킵 (Basic Auth 등 선행 필터에서 인증 완료)
+        // H-2: 이 라이브러리가 만들지 않은 인증(비-KeycloakPrincipal 기반)일 때만 스킵한다.
+        // 배경: SecurityContextRepositoryMode.HTTP_SESSION(또는 DELEGATING)을 사용하면
+        // OAuth2LoginAuthenticationFilter가 OidcLoginSuccessHandler 호출 "전"에 SecurityContext를
+        // 세션에 저장하므로, 세션에는 (principal 교체 전) DefaultOidcUser 기반 OAuth2AuthenticationToken이
+        // 남아 있을 수 있다. 과거에는 "인증됨 + 비-Anonymous"만으로 스킵했기 때문에, 이런 stale
+        // Authentication이 세션에서 복원될 때마다 이 필터가 항상 "이미 인증됨" 판단을 내려 OIDC 쿠키
+        // 재검증(introspect 등)이 영구적으로 스킵되고 ROLE_REALM_*/ROLE_CLIENT_* 권한이 절대
+        // 부여되지 않는 문제가 있었다. 이제는 principal이 이 라이브러리의 {@link KeycloakPrincipal}
+        // 인 경우(=이 필터 또는 OidcLoginSuccessHandler가 만든 인증)라면 스킵하지 않고 항상 OIDC 쿠키로
+        // 재계산한다 — 이 필터의 나머지 로직 자체가 매 요청 쿠키/세션 기반으로 새로 인증을 도출하므로
+        // stale 상태가 고착되지 않는다. Basic Auth(BasicAuthenticationFilter)/Bearer Token처럼
+        // 완전히 다른 인증 방식은 이 필터 이전에 AuthenticationMethodDetector가 별도 분기로 처리해
+        // 이 메서드(OIDC_COOKIE 분기) 자체에 진입하지 않으므로, 여기서 만나는 "우리가 만들지 않은
+        // 인증"은 애플리케이션이 직접 등록한 핸드오프 필터가 세운 인증(SecurityContextRepositoryMode
+        // Javadoc 참고)뿐이며, 그 경우에만 보존을 위해 스킵한다.
         Authentication existingAuth = SecurityContextHolder.getContext().getAuthentication();
         if (existingAuth != null && existingAuth.isAuthenticated()
-                && !(existingAuth instanceof org.springframework.security.authentication.AnonymousAuthenticationToken)) {
-            log.debug("[Filter] 이미 인증된 사용자 '{}' — OIDC 쿠키 인증 스킵.", existingAuth.getName());
+                && !(existingAuth instanceof org.springframework.security.authentication.AnonymousAuthenticationToken)
+                && !(existingAuth.getPrincipal() instanceof KeycloakPrincipal)) {
+            log.debug("[Filter] 이 라이브러리가 만들지 않은 인증 '{}'(principal={}) 보존 — OIDC 쿠키 인증 스킵.",
+                existingAuth.getName(), existingAuth.getPrincipal().getClass().getSimpleName());
             filterChain.doFilter(request, response);
             return;
         }

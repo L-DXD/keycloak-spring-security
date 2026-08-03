@@ -368,11 +368,16 @@ public class KeycloakServletAutoConfiguration {
         public OidcLoginSuccessHandler oidcLoginSuccessHandler(
             OAuth2AuthorizedClientRepository authorizedClientRepository,
             KeycloakSessionManager sessionManager,
-            KeycloakSecurityProperties securityProperties
+            KeycloakSecurityProperties securityProperties,
+            SecurityContextRepository keycloakLoginSecurityContextRepository
         ) {
             log.debug("지원 Bean을 등록합니다: [OidcLoginSuccessHandler]");
             String defaultSuccessUrl = securityProperties.getAuthentication().getDefaultSuccessUrl();
-            return new OidcLoginSuccessHandler(authorizedClientRepository, sessionManager, defaultSuccessUrl);
+            // H-2: KeycloakHttpConfigurer/KeycloakLoginService와 동일한 SecurityContextRepository를
+            // 주입해, principal 교체(OidcUser -> KeycloakPrincipal) 후 재저장이 실제 필터체인 설정
+            // (security-context-repository 모드)과 항상 일치하도록 한다.
+            return new OidcLoginSuccessHandler(
+                authorizedClientRepository, sessionManager, defaultSuccessUrl, keycloakLoginSecurityContextRepository);
         }
 
         /**

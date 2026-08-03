@@ -15,7 +15,10 @@ import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
 import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
 import org.springframework.security.oauth2.core.oidc.user.OidcUser;
+import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.web.authentication.SavedRequestAwareAuthenticationSuccessHandler;
+import org.springframework.security.web.context.NullSecurityContextRepository;
+import org.springframework.security.web.context.SecurityContextRepository;
 
 /**
  * OIDC 로그인 성공 후, Access Token과 ID Token을 쿠키에 저장하는 커스텀 핸들러입니다.
@@ -30,14 +33,44 @@ public class OidcLoginSuccessHandler extends SavedRequestAwareAuthenticationSucc
 
     private final OAuth2AuthorizedClientRepository authorizedClientRepository;
     private final KeycloakSessionManager sessionManager;
+    private final SecurityContextRepository securityContextRepository;
 
+    /**
+     * 하위 호환 생성자입니다. {@link SecurityContextRepository}를 지정하지 않으면
+     * {@link NullSecurityContextRepository}(no-op)를 사용합니다 — 기존 동작과 동일합니다.
+     * <p>
+     * {@code security-context-repository}를 {@code HTTP_SESSION}/{@code DELEGATING}으로 설정한
+     * 소비자는 (H-2) {@link #OidcLoginSuccessHandler(OAuth2AuthorizedClientRepository,
+     * KeycloakSessionManager, String, SecurityContextRepository)} 생성자로 실제 저장소를 주입해야
+     * principal 교체 후 재검증 stale 문제가 발생하지 않습니다. Auto-Configuration 경로는 이미 이
+     * 4-arg 생성자를 사용합니다.
+     * </p>
+     */
     public OidcLoginSuccessHandler(
         OAuth2AuthorizedClientRepository authorizedClientRepository,
         KeycloakSessionManager sessionManager,
         String defaultSuccessUrl
     ) {
+        this(authorizedClientRepository, sessionManager, defaultSuccessUrl, new NullSecurityContextRepository());
+    }
+
+    /**
+     * {@code security-context-repository} 정책에 맞는 {@link SecurityContextRepository}를 주입받는
+     * 생성자입니다 (H-2).
+     *
+     * @param securityContextRepository {@code KeycloakHttpConfigurer}/{@code KeycloakLoginService}와
+     *     동일한 정책으로 생성된 저장소({@code SecurityContextRepositoryFactory} 참고). {@code NULL}
+     *     모드에서는 {@link NullSecurityContextRepository}(no-op)로 기존 동작과 동일합니다.
+     */
+    public OidcLoginSuccessHandler(
+        OAuth2AuthorizedClientRepository authorizedClientRepository,
+        KeycloakSessionManager sessionManager,
+        String defaultSuccessUrl,
+        SecurityContextRepository securityContextRepository
+    ) {
         this.authorizedClientRepository = authorizedClientRepository;
         this.sessionManager = sessionManager;
+        this.securityContextRepository = securityContextRepository;
         setDefaultTargetUrl(defaultSuccessUrl);
     }
 
@@ -102,8 +135,18 @@ public class OidcLoginSuccessHandler extends SavedRequestAwareAuthenticationSucc
             keycloakPrincipal.getAuthorities(),
             oauthToken.getAuthorizedClientRegistrationId()
         );
-        SecurityContextHolder.getContext().setAuthentication(newAuthToken);
+        SecurityContext securityContext = SecurityContextHolder.getContext();
+        securityContext.setAuthentication(newAuthToken);
         log.debug("SecurityContext에 KeycloakPrincipal 기반 Authentication을 설정했습니다.");
+
+        // H-2: OAuth2LoginAuthenticationFilter는 이 성공 핸들러를 호출하기 "전"에 이미
+        // securityContextRepository.saveContext(...)를 호출해, principal 교체 전(DefaultOidcUser
+        // 기반) SecurityContext를 세션에 저장해둔다. security-context-repository가 HTTP_SESSION/
+        // DELEGATING이면 위에서 교체한 KeycloakPrincipal 기반 Authentication을 다시 저장해야
+        // 다음 요청부터 stale한 DefaultOidcUser 기반 Authentication이 복원되지 않는다. NULL
+        // 모드(기본값)에서는 NullSecurityContextRepository가 주입되어 있어 이 호출은 no-op이다.
+        securityContextRepository.saveContext(securityContext, request, response);
+        log.debug("SecurityContextRepository에 갱신된 Authentication을 재저장했습니다.");
 
         // Back-Channel Logout을 위해 세션에 Principal Name과 Keycloak Session ID 저장
         if (session != null) {
