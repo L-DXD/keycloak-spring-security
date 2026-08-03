@@ -170,6 +170,29 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
           }
       });
 
+      // === 3-1. 예외 처리기 설정 (버그 수정: init() 단계에서 등록) ===
+      // 배경: http.oauth2Login(...) 호출은 내부적으로 OAuth2LoginConfigurer를 등록하고,
+      // 그 OAuth2LoginConfigurer#init()이 ExceptionHandlingConfigurer#defaultAuthenticationEntryPointFor(...)를
+      // 호출해 "기본 로그인 페이지로 리다이렉트하는 EntryPoint"를 defaultEntryPointMappings에 등록한다.
+      // Spring Security의 HttpSecurity(AbstractConfiguredSecurityBuilder)는 모든 Configurer의 init()이
+      // 끝난 뒤에야 모든 Configurer의 configure()를 실행하므로, 과거처럼 이 설정을 (아래 있던) configure()에서
+      // exceptionHandling(...).authenticationEntryPoint(...)로 설정하면, 그 시점엔 이미
+      // ExceptionHandlingConfigurer#configure()가 (Map 등록 순서상 훨씬 앞서) 실행되어
+      // ExceptionTranslationFilter가 defaultEntryPointMappings 기반 EntryPoint로 확정된 뒤였다
+      // (ExceptionHandlingConfigurer는 Spring Boot의 HttpSecurityConfiguration#httpSecurity()에서
+      // .exceptionHandling(withDefaults())로 아주 이른 시점에 등록되므로, configurers 맵 순서상
+      // 우리 KeycloakHttpConfigurer.configure()보다 먼저 자신의 configure()가 실행된다).
+      // ExceptionHandlingConfigurer#getAuthenticationEntryPoint(H)/#getAccessDeniedHandler(H)는
+      // authenticationEntryPoint/accessDeniedHandler 필드가 설정되어 있으면 defaultEntryPointMappings
+      // /defaultDeniedHandlerMappings를 무시하고 그 필드 값을 우선 사용한다. init() 단계는 모든 Configurer의
+      // configure()보다 항상 먼저 끝나므로, 여기서 필드를 설정해두면 등록 순서와 무관하게 항상 우리 값이 이긴다.
+      KeycloakAuthenticationEntryPoint authenticationEntryPoint = context.getBean(KeycloakAuthenticationEntryPoint.class);
+      KeycloakAccessDeniedHandler accessDeniedHandler = context.getBean(KeycloakAccessDeniedHandler.class);
+      http.exceptionHandling(customizer -> customizer
+          .authenticationEntryPoint(authenticationEntryPoint)
+          .accessDeniedHandler(accessDeniedHandler)
+      );
+
       // === 4. 로그아웃 설정 ===
       // 4-1. Front-Channel 로그아웃 (사용자가 직접 로그아웃)
       http.logout(logout -> logout
@@ -265,8 +288,6 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         AuthenticationManager authenticationManager = http.getSharedObject(AuthenticationManager.class);
         KeycloakAuthenticationProvider authenticationProvider = http.getSharedObject(KeycloakAuthenticationProvider.class);
         KeycloakClient keycloakClient = http.getSharedObject(KeycloakClient.class);
-        KeycloakAuthenticationEntryPoint authenticationEntryPoint = context.getBean(KeycloakAuthenticationEntryPoint.class);
-        KeycloakAccessDeniedHandler accessDeniedHandler = context.getBean(KeycloakAccessDeniedHandler.class);
         KeycloakSessionManager sessionManager = context.getBean(KeycloakSessionManager.class);
         KeycloakSecurityProperties securityProperties = context.getBean(KeycloakSecurityProperties.class);
 
@@ -274,11 +295,8 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
         LoggingContextAccessor loggingContextAccessor = getBeanOrDefault(
             context, LoggingContextAccessor.class, new WebMdcContextAccessor());
 
-      // === 6. 예외 처리기 설정 ===
-      http.exceptionHandling(customizer -> customizer
-          .authenticationEntryPoint(authenticationEntryPoint)
-          .accessDeniedHandler(accessDeniedHandler)
-      );
+        // 예외 처리기(EntryPoint/AccessDeniedHandler) 등록은 init()의 "3-1. 예외 처리기 설정"으로 이동했다.
+        // (버그: configure()에서 등록하면 ExceptionHandlingConfigurer#configure()가 먼저 실행되어 무시됨)
 
         // 7. MDC 로깅 필터 등록
         // 7-1. MdcRequestFilter: 인증 전 (최상단) - traceId, httpMethod, requestUri, clientIp, query, userAgent
