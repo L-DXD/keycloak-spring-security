@@ -33,6 +33,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.util.AntPathMatcher;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -53,6 +54,19 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
     private final KeycloakClient keycloakClient;
     private final List<String> skipPaths;
     private final AuthenticationMethodDetector methodDetector;
+
+    /**
+     * skipPaths의 Ant 패턴(예: {@code /css/**})을 지원하기 위한 매처(항목 3).
+     * <p>
+     * {@link org.springframework.security.web.util.matcher.AntPathRequestMatcher}가 아닌 순수
+     * 문자열 매칭기({@code org.springframework.util.AntPathMatcher})를 사용한다 —
+     * {@code AntPathRequestMatcher}는 기본적으로 {@code getServletPath()}/{@code getPathInfo()}
+     * 기반으로 경로를 계산해, 기존에 {@code getRequestURI()}만으로 정확히 동작하던 exact-match
+     * skipPaths(토큰 발급 API 등)의 동작을 바꿔버릴 위험이 있다. 순수 문자열 매칭으로 기존
+     * {@code getRequestURI()} 기반 동작을 그대로 유지하면서 와일드카드만 추가로 지원한다.
+     * </p>
+     */
+    private static final AntPathMatcher SKIP_PATH_MATCHER = new AntPathMatcher();
 
     /**
      * 신뢰 프록시 홉 수. 기본값 0 = XFF 무시, remoteAddr 사용.
@@ -117,13 +131,17 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
     /**
      * 명시적으로 등록된 skipPaths에 해당하는 경로만 필터를 건너뜁니다.
      * 인증 방식별 분기는 {@link #doFilterInternal}의 {@link AuthenticationMethodDetector}가 담당합니다.
+     * <p>
+     * 항목 3: 완전일치 외에 Ant 패턴({@code /css/**} 등)도 지원한다. 완전일치 경로(예:
+     * {@code /auth/token})는 Ant 패턴으로도 자기 자신과 그대로 일치하므로 기존 동작과 회귀가 없다.
+     * </p>
      */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
         for (String skipPath : skipPaths) {
-            if (path.equals(skipPath)) {
-                log.debug("[Filter] 토큰 API 경로 '{}' — 필터 스킵", path);
+            if (SKIP_PATH_MATCHER.match(skipPath, path)) {
+                log.debug("[Filter] 경로 '{}' — skipPaths 패턴 '{}' 매칭, 필터 스킵", path, skipPath);
                 return true;
             }
         }

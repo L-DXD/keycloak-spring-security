@@ -335,6 +335,15 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
             skipPaths.add(prefix + "/logout");
             log.debug("KeycloakAuthenticationFilter 스킵 경로 설정: {}", skipPaths);
         }
+        // 항목 3: 정적 리소스는 필터 단계에서도 함께 제외해야 로그인 세션이 있는 사용자의 정적
+        // 리소스 요청마다 Introspect/UserInfo 원격 호출이 발생하는 문제(운영 실측 500/302 사고)가
+        // 근본적으로 해소된다. authorizeHttpRequests의 permitAll만으로는 필터 자체가 여전히
+        // 실행되므로 원격 호출은 막지 못한다.
+        if (securityProperties.getStaticResources().isEnabled()) {
+            List<String> staticResourcePatterns = securityProperties.getStaticResources().getPatterns();
+            skipPaths.addAll(staticResourcePatterns);
+            log.debug("KeycloakAuthenticationFilter 스킵 경로에 정적 리소스 패턴 추가: {}", staticResourcePatterns);
+        }
 
         List<String> loginPaths = securityProperties.getAuthentication().getLoginPaths();
 

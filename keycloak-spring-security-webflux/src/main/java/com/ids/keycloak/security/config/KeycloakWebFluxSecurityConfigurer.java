@@ -158,6 +158,21 @@ public final class KeycloakWebFluxSecurityConfigurer {
 
     AuthenticationWebFilter authFilter = new AuthenticationWebFilter(authenticationManager);
     authFilter.setServerAuthenticationConverter(converter);
+
+    // 항목 3: 정적 리소스는 AuthenticationWebFilter의 컨버터 실행 자체를 건너뛴다. permitAll(아래
+    // configureAuthorization)만으로는 이 필터가 여전히 실행되어 KeycloakServerAuthenticationConverter가
+    // 매 요청 introspect/UserInfo 원격 호출을 시도하므로(로그인 세션이 있는 사용자 기준), 필터 단계에서도
+    // 함께 제외해야 근본 원인이 해소된다(servlet 모듈의 KeycloakAuthenticationFilter skipPaths와 동일 개념).
+    KeycloakStaticResourceProperties staticResourceProperties = securityProperties.getStaticResources();
+    if (staticResourceProperties.isEnabled() && !staticResourceProperties.getPatterns().isEmpty()) {
+      ServerWebExchangeMatcher staticResourceMatcher = toOrMatcher(staticResourceProperties.getPatterns());
+      authFilter.setRequiresAuthenticationMatcher(new AndServerWebExchangeMatcher(
+          ServerWebExchangeMatchers.anyExchange(),
+          new NegatedServerWebExchangeMatcher(staticResourceMatcher)));
+      log.info("[Configurer] 정적 리소스는 AuthenticationWebFilter 처리 대상에서 제외: {}",
+          staticResourceProperties.getPatterns());
+    }
+
     http.addFilterAt(authFilter, SecurityWebFiltersOrder.AUTHENTICATION);
     log.debug("[Configurer] AuthenticationWebFilter (OIDC Cookie) 등록 완료.");
 
@@ -321,6 +336,17 @@ public final class KeycloakWebFluxSecurityConfigurer {
   }
 
   /**
+   * Ant 패턴 목록을 OR로 결합한 {@link ServerWebExchangeMatcher}로 변환합니다(항목 3).
+   */
+  private static ServerWebExchangeMatcher toOrMatcher(List<String> patterns) {
+    List<ServerWebExchangeMatcher> matchers = new ArrayList<>();
+    for (String pattern : patterns) {
+      matchers.add(new PathPatternParserServerWebExchangeMatcher(pattern));
+    }
+    return matchers.size() == 1 ? matchers.get(0) : new OrServerWebExchangeMatcher(matchers);
+  }
+
+  /**
    * 인가 설정을 적용합니다.
    */
   private static void configureAuthorization(
@@ -339,6 +365,13 @@ public final class KeycloakWebFluxSecurityConfigurer {
       allPermitPaths.add(prefix + "/logout");
     }
     allPermitPaths.add(KeycloakWebFluxConstants.LOGOUT_URL);
+
+    // 항목 3: 정적 리소스는 기본적으로 인증 없이 접근 허용 (AuthenticationWebFilter 단계의 스킵은
+    // configure()의 requiresAuthenticationMatcher 설정 참고).
+    KeycloakStaticResourceProperties staticResourceProperties = securityProperties.getStaticResources();
+    if (staticResourceProperties.isEnabled()) {
+      allPermitPaths.addAll(staticResourceProperties.getPatterns());
+    }
 
     if (authorizationProps.isEnabled()) {
       KeycloakReactiveAuthorizationManager authorizationManager =

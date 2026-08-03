@@ -570,6 +570,17 @@ public class KeycloakServletAutoConfiguration {
                     log.info("인증 제외 경로 설정: {}", securityProperties.getAuthentication().getPermitAllPaths());
                 }
 
+                // 항목 3: 정적 리소스(css/js/images/webjars/favicon)는 기본적으로 인증 없이 접근 허용.
+                // (KeycloakAuthenticationFilter의 skipPaths에도 동일 패턴이 추가되어, permitAll만으로는
+                // 막지 못하는 "필터 자체의 원격 호출"까지 함께 제거된다 — KeycloakHttpConfigurer 참고.)
+                if (securityProperties.getStaticResources().isEnabled()) {
+                    String[] staticResourcePatterns =
+                        securityProperties.getStaticResources().getPatterns().toArray(new String[0]);
+                    authorize.requestMatchers(staticResourcePatterns).permitAll();
+                    log.info("정적 리소스 인증 제외 경로 설정: {}",
+                        securityProperties.getStaticResources().getPatterns());
+                }
+
                 // 에러 페이지는 인증 없이 접근 허용 (정적 리소스 누락 시 로그인 리디렉션 방지)
                 authorize.requestMatchers("/error").permitAll();
 
