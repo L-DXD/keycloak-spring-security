@@ -161,12 +161,15 @@ public final class KeycloakWebFluxSecurityConfigurer {
     AuthenticationWebFilter authFilter = new AuthenticationWebFilter(authenticationManager);
     authFilter.setServerAuthenticationConverter(converter);
 
-    // 항목 3: 정적 리소스는 AuthenticationWebFilter의 컨버터 실행 자체를 건너뛴다. permitAll(아래
-    // configureAuthorization)만으로는 이 필터가 여전히 실행되어 KeycloakServerAuthenticationConverter가
-    // 매 요청 introspect/UserInfo 원격 호출을 시도하므로(로그인 세션이 있는 사용자 기준), 필터 단계에서도
-    // 함께 제외해야 근본 원인이 해소된다(servlet 모듈의 KeycloakAuthenticationFilter skipPaths와 동일 개념).
+    // 항목 3 / C-2: 정적 리소스는 AuthenticationWebFilter의 컨버터 실행 자체를 건너뛴다(성능
+    // 목적). permitAll(아래 configureAuthorization)만으로는 이 필터가 여전히 실행되어
+    // KeycloakServerAuthenticationConverter가 매 요청 introspect/UserInfo 원격 호출을 시도하므로
+    // (로그인 세션이 있는 사용자 기준), 필터 단계에서도 함께 제외해야 근본 원인이 해소된다(servlet
+    // 모듈의 KeycloakAuthenticationFilter skipPaths와 동일 개념). 인가에는 영향이 없다 —
+    // permitAll 여부와는 별도 축(filterSkip)으로 판단하므로, 이 경로가 실제 보호 리소스라면
+    // anyExchange().authenticated()에 의해 여전히 차단된다.
     KeycloakStaticResourceProperties staticResourceProperties = securityProperties.getStaticResources();
-    if (staticResourceProperties.isEnabled() && !staticResourceProperties.getPatterns().isEmpty()) {
+    if (staticResourceProperties.isFilterSkipEffective() && !staticResourceProperties.getPatterns().isEmpty()) {
       ServerWebExchangeMatcher staticResourceMatcher = toOrMatcher(staticResourceProperties.getPatterns());
       authFilter.setRequiresAuthenticationMatcher(new AndServerWebExchangeMatcher(
           ServerWebExchangeMatchers.anyExchange(),
@@ -397,10 +400,12 @@ public final class KeycloakWebFluxSecurityConfigurer {
     }
     allPermitPaths.add(KeycloakWebFluxConstants.LOGOUT_URL);
 
-    // 항목 3: 정적 리소스는 기본적으로 인증 없이 접근 허용 (AuthenticationWebFilter 단계의 스킵은
-    // configure()의 requiresAuthenticationMatcher 설정 참고).
+    // C-2: 정적 리소스 permitAll은 명시적 opt-in일 때만 적용한다(KeycloakStaticResourceProperties
+    // #permitAll, 기본값 false). 기본값에서는 AuthenticationWebFilter 스킵(성능, configure()의
+    // requiresAuthenticationMatcher 참고)만 적용되고 인가는 유지되므로, 이 경로에 컨트롤러로
+    // 매핑된 보호 리소스가 있어도 업그레이드만으로 공개되지 않는다.
     KeycloakStaticResourceProperties staticResourceProperties = securityProperties.getStaticResources();
-    if (staticResourceProperties.isEnabled()) {
+    if (staticResourceProperties.isPermitAllEffective()) {
       allPermitPaths.addAll(staticResourceProperties.getPatterns());
     }
 
