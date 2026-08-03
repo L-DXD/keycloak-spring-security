@@ -33,7 +33,9 @@ import org.springframework.security.oauth2.client.web.server.ServerOAuth2Authori
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.security.web.server.authentication.AuthenticationWebFilter;
 import org.springframework.security.web.server.context.NoOpServerSecurityContextRepository;
+import org.springframework.security.web.server.csrf.CookieServerCsrfTokenRepository;
 import org.springframework.security.web.server.csrf.CsrfWebFilter;
+import org.springframework.security.web.server.csrf.ServerCsrfTokenRepository;
 import org.springframework.security.web.server.util.matcher.AndServerWebExchangeMatcher;
 import org.springframework.security.web.server.util.matcher.NegatedServerWebExchangeMatcher;
 import org.springframework.security.web.server.util.matcher.OrServerWebExchangeMatcher;
@@ -307,7 +309,8 @@ public final class KeycloakWebFluxSecurityConfigurer {
         + "(Bearer Token 활성 여부와 무관, 면제 목록에서 제외)");
 
     ignorePaths.addAll(csrfProperties.getIgnorePaths());
-    log.info("[Configurer] CSRF 활성화 (면제 경로: {})", ignorePaths);
+    log.info("[Configurer] CSRF 활성화 (면제 경로: {}, 토큰 저장소: {})",
+        ignorePaths, csrfProperties.getTokenRepository());
 
     List<ServerWebExchangeMatcher> exemptMatchers = new ArrayList<>();
     for (String path : ignorePaths) {
@@ -332,7 +335,35 @@ public final class KeycloakWebFluxSecurityConfigurer {
         new NegatedServerWebExchangeMatcher(exemptMatcher)
     );
 
-    http.csrf(csrf -> csrf.requireCsrfProtectionMatcher(csrfMatcher));
+    // 요구사항 4번: matcher.exclude 경로는 이 체인(CsrfWebFilter 포함) 자체가 적용되지 않아
+    // 기본 저장소(SESSION)로는 그 경로에서 CSRF 토큰을 읽거나 심을 수 없다. COOKIE로 전환하면
+    // exclude 경로에서도 토큰 쿠키를 읽을 수 있다. 기본값(SESSION)은 null을 반환해
+    // csrfTokenRepository(...)를 호출하지 않으므로 Spring Security 기본 동작을 그대로 유지한다.
+    ServerCsrfTokenRepository customCsrfTokenRepository =
+        resolveCsrfTokenRepository(csrfProperties.getTokenRepository());
+
+    http.csrf(csrf -> {
+      csrf.requireCsrfProtectionMatcher(csrfMatcher);
+      if (customCsrfTokenRepository != null) {
+        csrf.csrfTokenRepository(customCsrfTokenRepository);
+      }
+    });
+  }
+
+  /**
+   * {@link CsrfTokenRepositoryMode} 설정값에 해당하는 {@link ServerCsrfTokenRepository}를 생성합니다.
+   *
+   * @param mode 저장 정책 ({@code null}이면 {@link CsrfTokenRepositoryMode#SESSION}로 처리)
+   * @return {@link CsrfTokenRepositoryMode#COOKIE}면 {@code CookieServerCsrfTokenRepository.withHttpOnlyFalse()},
+   *     {@link CsrfTokenRepositoryMode#SESSION}(기본값)이면 {@code null}(Spring Security 기본값인
+   *     {@code WebSessionServerCsrfTokenRepository} 유지)
+   */
+  private static ServerCsrfTokenRepository resolveCsrfTokenRepository(CsrfTokenRepositoryMode mode) {
+    CsrfTokenRepositoryMode effectiveMode = mode != null ? mode : CsrfTokenRepositoryMode.SESSION;
+    if (effectiveMode == CsrfTokenRepositoryMode.COOKIE) {
+      return CookieServerCsrfTokenRepository.withHttpOnlyFalse();
+    }
+    return null;
   }
 
   /**

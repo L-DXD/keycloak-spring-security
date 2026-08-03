@@ -37,6 +37,7 @@ import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.context.SecurityContextRepository;
+import org.springframework.security.web.csrf.CsrfTokenRepository;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.session.FindByIndexNameSessionRepository;
@@ -276,10 +277,20 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
           // 머신 전용 API 등 CSRF 면제가 필요한 경로는 위 csrfProperties.ignorePaths에
           // 명시적으로 등록해야 한다(전면 면제 금지, 명시 allowlist만 허용).
 
-          http.csrf(csrf -> csrf
-              .ignoringRequestMatchers(ignoreMatchers.toArray(new RequestMatcher[0]))
-          );
-          log.info("CSRF 활성화 (면제 경로: {})", ignorePaths);
+          // 요구사항 4번: matcher.exclude 경로는 이 체인(CsrfFilter 포함) 자체가 적용되지 않아
+          // 기본 저장소(SESSION)로는 그 경로에서 CSRF 토큰을 읽거나 심을 수 없다. COOKIE로
+          // 전환하면 exclude 경로에서도 토큰 쿠키를 읽을 수 있다. 기본값(SESSION)은 null을 반환해
+          // csrfTokenRepository(...)를 호출하지 않으므로 Spring Security 기본 동작을 그대로 유지한다.
+          CsrfTokenRepository customCsrfTokenRepository =
+              CsrfTokenRepositoryFactory.create(csrfProperties.getTokenRepository());
+
+          http.csrf(csrf -> {
+              csrf.ignoringRequestMatchers(ignoreMatchers.toArray(new RequestMatcher[0]));
+              if (customCsrfTokenRepository != null) {
+                  csrf.csrfTokenRepository(customCsrfTokenRepository);
+              }
+          });
+          log.info("CSRF 활성화 (면제 경로: {}, 토큰 저장소: {})", ignorePaths, csrfProperties.getTokenRepository());
       }
 
       // === 6. Bearer Token Resource Server 설정 (Introspect 온라인 검증) ===

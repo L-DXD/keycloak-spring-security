@@ -42,6 +42,21 @@ public class KeycloakMatcherProperties {
 
     /**
      * Keycloak 체인에서 제외할 경로 (Ant 패턴). 제외된 경로는 사용자가 등록한 다른 체인이 담당합니다.
+     * <p>
+     * <b>주의(요구사항 4번):</b> 이 값은 {@code securityMatcher}에 사용되어 <b>SecurityFilterChain
+     * 자체가 적용되지 않게</b> 만듭니다. 인증(Authentication)만 빠지는 것이 아니라, 이 라이브러리가
+     * 이 체인에 등록하는 CSRF 보호({@code CsrfFilter}), 예외 처리({@code ExceptionTranslationFilter}
+     * + Keycloak EntryPoint/AccessDeniedHandler), MDC 로깅 필터, Rate Limit 필터 등이 <b>전부</b>
+     * 미적용됩니다. 그 경로는 사용자가 등록한 다른 {@code SecurityFilterChain}(또는 체인 밖)이 전적으로
+     * 책임집니다.
+     * </p>
+     * <p>
+     * "인증만" 제외하고 싶다면(즉 이 체인의 CSRF/MDC/예외 처리는 그대로 유지한 채 해당 경로만
+     * 인증 없이 접근을 허용하려면) 이 값이 아니라
+     * {@code keycloak.security.authentication.permit-all-paths}를 사용하세요. permit-all-paths는
+     * {@code authorizeHttpRequests}에서만 해당 경로를 permitAll로 허용할 뿐, 체인 자체(CSRF 필터 등)는
+     * 그대로 적용된 채 유지됩니다.
+     * </p>
      */
     private List<String> exclude = new ArrayList<>();
 }
