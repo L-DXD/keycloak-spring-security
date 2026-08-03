@@ -35,8 +35,12 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.server.resource.introspection.OpaqueTokenIntrospector;
 import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.context.DelegatingSecurityContextRepository;
+import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.NullSecurityContextRepository;
+import org.springframework.security.web.context.RequestAttributeSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextHolderFilter;
+import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.session.FindByIndexNameSessionRepository;
@@ -151,9 +155,17 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
       http.setSharedObject(KeycloakAuthenticationProvider.class, provider);
       http.setSharedObject(KeycloakClient.class, keycloakClient);
 
-      // SecurityContext를 세션에 저장하지 않음 - 매 요청마다 KeycloakAuthenticationFilter가 인증 처리
+      // SecurityContext 저장 정책 (기본값 NULL = 세션에 저장하지 않음, 기존 동작 유지, 회귀 0).
+      // 매 요청마다 KeycloakAuthenticationFilter가 OIDC 쿠키로부터 인증을 재계산하므로 기본값(NULL)
+      // 상태에서도 OIDC 쿠키 인증 자체엔 영향이 없다. 다만 이 필터 체인보다 앞서 실행되는 필터
+      // (예: 애플리케이션이 직접 등록한 FilterRegistrationBean 기반 핸드오프 필터)가 세워둔 인증을
+      // 보존해야 하는 소비자는 keycloak.security.authentication.security-context-repository를
+      // HTTP_SESSION(또는 DELEGATING)으로 opt-in할 수 있다. 자세한 근거는
+      // SecurityContextRepositoryMode Javadoc 참고.
+      SecurityContextRepositoryMode securityContextRepositoryMode =
+          securityPropertiesForProvider.getAuthentication().getSecurityContextRepository();
       http.securityContext(securityContext -> securityContext
-          .securityContextRepository(new NullSecurityContextRepository())
+          .securityContextRepository(resolveSecurityContextRepository(securityContextRepositoryMode))
       );
 
       // === 3. OIDC 로그인 설정 ===
@@ -372,6 +384,32 @@ public final class KeycloakHttpConfigurer extends AbstractHttpConfigurer<Keycloa
             return context.getBean(beanClass);
         } catch (Exception e) {
             return defaultValue;
+        }
+    }
+
+    /**
+     * {@code keycloak.security.authentication.security-context-repository} 설정값에 해당하는
+     * {@link SecurityContextRepository} 인스턴스를 생성합니다.
+     *
+     * @param mode 저장 정책 (기본값 {@link SecurityContextRepositoryMode#NULL})
+     * @return 선택된 정책에 해당하는 {@link SecurityContextRepository}
+     * @see SecurityContextRepositoryMode
+     */
+    private SecurityContextRepository resolveSecurityContextRepository(SecurityContextRepositoryMode mode) {
+        SecurityContextRepositoryMode effectiveMode = mode != null ? mode : SecurityContextRepositoryMode.NULL;
+        switch (effectiveMode) {
+            case HTTP_SESSION:
+                log.info("SecurityContextRepository: HTTP_SESSION (앞단 필터·핸드오프 인증 보존)");
+                return new HttpSessionSecurityContextRepository();
+            case DELEGATING:
+                log.info("SecurityContextRepository: DELEGATING (RequestAttribute + HttpSession)");
+                return new DelegatingSecurityContextRepository(
+                    new RequestAttributeSecurityContextRepository(),
+                    new HttpSessionSecurityContextRepository()
+                );
+            case NULL:
+            default:
+                return new NullSecurityContextRepository();
         }
     }
 }

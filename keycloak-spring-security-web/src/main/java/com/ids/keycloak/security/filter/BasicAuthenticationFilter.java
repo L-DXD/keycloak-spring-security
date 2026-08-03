@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
@@ -26,6 +27,11 @@ import org.springframework.web.filter.OncePerRequestFilter;
  * </p>
  * <p>
  * Basic Auth는 stateless로 동작합니다. 매 요청마다 인증하며 세션을 생성하지 않습니다.
+ * </p>
+ * <p>
+ * Basic 인증 시도(형식 오류/자격증명 실패/Base64 디코딩 실패)가 실패해도, 이 필터가 실행되기 전에
+ * 이미 다른 인증(선행 필터·핸드오프)이 SecurityContext에 세워져 있다면 그 인증을 지우지 않습니다.
+ * {@link #clearContextUnlessAlreadyAuthenticated()} 참고.
  * </p>
  */
 @Slf4j
@@ -84,7 +90,7 @@ public class BasicAuthenticationFilter extends OncePerRequestFilter {
 
             if (colonIndex < 0) {
                 log.warn("[BasicAuthFilter] 잘못된 Basic 인증 형식 (콜론 없음).");
-                SecurityContextHolder.clearContext();
+                clearContextUnlessAlreadyAuthenticated();
                 filterChain.doFilter(request, response);
                 return;
             }
@@ -103,13 +109,13 @@ public class BasicAuthenticationFilter extends OncePerRequestFilter {
                 AuthenticationEventLogger.METHOD_BASIC, getClientIp(request), parsedUsername);
 
         } catch (AuthenticationException | com.ids.keycloak.security.exception.KeycloakSecurityException e) {
-            SecurityContextHolder.clearContext();
+            clearContextUnlessAlreadyAuthenticated();
             log.warn("[BasicAuthFilter] Basic Auth 인증 실패: {}", e.getMessage());
             AuthenticationEventLogger.logFailure(
                 AuthenticationEventLogger.METHOD_BASIC, getClientIp(request), parsedUsername, "invalid_credentials");
             // 인증 실패 시에도 filterChain을 진행하여 EntryPoint가 401 처리
         } catch (IllegalArgumentException e) {
-            SecurityContextHolder.clearContext();
+            clearContextUnlessAlreadyAuthenticated();
             log.warn("[BasicAuthFilter] Base64 디코딩 실패: {}", e.getMessage());
         }
 
@@ -122,5 +128,28 @@ public class BasicAuthenticationFilter extends OncePerRequestFilter {
             request.getRemoteAddr(),
             trustedProxyCount
         );
+    }
+
+    /**
+     * Basic 인증 시도가 실패했을 때만 SecurityContext를 비웁니다.
+     * <p>
+     * 앞단 필터(예: 요청 파이프라인 상 이 필터보다 먼저 실행되는 인증 필터, 혹은 선행 핸드오프 필터)가
+     * 이미 유효한 인증을 세워둔 상태라면, 이 필터에서의 Basic 인증 형식 오류·실패는 그 인증과 무관한
+     * 시도이므로 기존 인증을 지우지 않습니다. {@code KeycloakAuthenticationFilter#handleOidcCookieAuth}의
+     * "이미 인증됨" 판정(비-Anonymous {@link Authentication} 존재 여부)과 동일한 기준을 사용합니다.
+     * </p>
+     */
+    private void clearContextUnlessAlreadyAuthenticated() {
+        Authentication existingAuth = SecurityContextHolder.getContext().getAuthentication();
+        boolean alreadyAuthenticated = existingAuth != null
+            && existingAuth.isAuthenticated()
+            && !(existingAuth instanceof AnonymousAuthenticationToken);
+        if (alreadyAuthenticated) {
+            log.debug(
+                "[BasicAuthFilter] 이미 인증된 사용자 '{}'가 있어 Basic 인증 실패에도 SecurityContext를 유지합니다.",
+                existingAuth.getName());
+            return;
+        }
+        SecurityContextHolder.clearContext();
     }
 }
