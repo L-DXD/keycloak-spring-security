@@ -154,6 +154,7 @@ public final class KeycloakWebFluxSecurityConfigurer {
         keycloakClient,
         sessionManager,
         securityProperties.getCookie());
+    converter.setTrustedProxyCount(securityProperties.getTrustedProxyCount());
 
     AuthenticationWebFilter authFilter = new AuthenticationWebFilter(authenticationManager);
     authFilter.setServerAuthenticationConverter(converter);

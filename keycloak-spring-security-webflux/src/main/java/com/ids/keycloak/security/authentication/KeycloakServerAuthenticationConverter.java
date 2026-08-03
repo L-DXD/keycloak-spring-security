@@ -1,9 +1,12 @@
 package com.ids.keycloak.security.authentication;
 
 import com.ids.keycloak.security.config.KeycloakCookieProperties;
+import com.ids.keycloak.security.exception.ErrorCode;
 import com.ids.keycloak.security.exception.RefreshTokenException;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
+import com.ids.keycloak.security.ratelimit.AuthenticationEventLogger;
 import com.ids.keycloak.security.session.ReactiveSessionManager;
+import com.ids.keycloak.security.util.ClientIpResolver;
 import com.ids.keycloak.security.util.ReactiveCookieUtil;
 import com.sd.KeycloakClient.dto.auth.KeycloakTokenInfo;
 import com.sd.KeycloakClient.factory.KeycloakClient;
@@ -49,6 +52,13 @@ public class KeycloakServerAuthenticationConverter implements ServerAuthenticati
   private final ReactiveSessionManager sessionManager;
   private final KeycloakCookieProperties cookieProperties;
 
+  /**
+   * X-Forwarded-For 헤더에서 신뢰할 프록시 홉 수 (기본값 0: XFF 무시, remoteAddress 사용).
+   * {@code KeycloakWebFluxSecurityConfigurer}에서 {@code keycloak.security.trusted-proxy-count} 값을
+   * 주입합니다. 감사 로그({@link AuthenticationEventLogger})의 클라이언트 IP 계산에 사용됩니다.
+   */
+  private int trustedProxyCount = 0;
+
   public KeycloakServerAuthenticationConverter(
       KeycloakReactiveAuthenticationManager authManager,
       KeycloakClient keycloakClient,
@@ -58,6 +68,23 @@ public class KeycloakServerAuthenticationConverter implements ServerAuthenticati
     this.keycloakClient = keycloakClient;
     this.sessionManager = sessionManager;
     this.cookieProperties = cookieProperties;
+  }
+
+  /**
+   * 신뢰 프록시 홉 수를 설정합니다.
+   *
+   * @param trustedProxyCount 신뢰 프록시 홉 수 (0: XFF 무시, -1: 레거시 동작, N&gt;0: 홉 기반 파싱)
+   */
+  public void setTrustedProxyCount(int trustedProxyCount) {
+    this.trustedProxyCount = trustedProxyCount;
+  }
+
+  private String getClientIp(ServerWebExchange exchange) {
+    String xff = exchange.getRequest().getHeaders().getFirst("X-Forwarded-For");
+    String remoteAddr = exchange.getRequest().getRemoteAddress() != null
+        ? exchange.getRequest().getRemoteAddress().getAddress().getHostAddress()
+        : null;
+    return ClientIpResolver.resolve(xff, remoteAddr, trustedProxyCount);
   }
 
   @Override
@@ -76,17 +103,37 @@ public class KeycloakServerAuthenticationConverter implements ServerAuthenticati
       // WebSession을 비동기로 가져온 뒤, Refresh Token 확인
       return exchange.getSession()
           .flatMap(session -> handleWithSession(exchange, session, idToken, accessToken))
+          .doOnNext(authentication -> AuthenticationEventLogger.logSuccess(
+              AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(exchange), authentication.getName()))
           .onErrorResume(
               e -> !(e instanceof org.springframework.security.core.AuthenticationException),
               e -> {
                 // convert()에서 AuthenticationException이 아닌 예외가 전파되면
                 // AuthenticationWebFilter.onErrorResume(AuthenticationException.class)가 잡지 못해
                 // HTTP 500이 발생한다. 여기서 최종 방어막으로 미인증(empty)으로 처리한다.
+                // 항목 6: servlet 모듈(KeycloakAuthenticationFilter)과 달리 이 컨버터는 실패 감사
+                // 이벤트(AuthenticationEventLogger.logFailure) 호출이 전혀 없었다 — 감사 공백을 메운다.
                 log.error("[Converter] 예상치 못한 오류로 인증 불가 ({}). 미인증으로 처리.", e.getMessage());
+                AuthenticationEventLogger.logFailure(
+                    AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(exchange), "unknown",
+                    resolveErrorCode(e));
                 ReactiveCookieUtil.deleteAllTokenCookies(exchange.getResponse(), cookieProperties);
                 return Mono.empty();
               });
     });
+  }
+
+  /**
+   * 예외로부터 감사 로그({@link AuthenticationEventLogger#logFailure})에 남길 구조화된 사유 코드를
+   * 계산합니다. {@link com.ids.keycloak.security.exception.KeycloakSecurityException} 계열이면
+   * {@link ErrorCode}의 code를 그대로 사용하고, 그 외에는 일반 실패 코드로 통일합니다.
+   * (원문 예외 메시지 대신 코드를 남겨 ELK 등에서 사유별 집계/검색이 가능해진다.)
+   */
+  private String resolveErrorCode(Throwable e) {
+    if (e instanceof com.ids.keycloak.security.exception.KeycloakSecurityException kse) {
+      return kse.getErrorCode().getCode();
+    }
+    return ErrorCode.AUTHENTICATION_FAILED.getCode();
   }
 
   /**
@@ -101,7 +148,12 @@ public class KeycloakServerAuthenticationConverter implements ServerAuthenticati
     Optional<String> refreshTokenOpt = sessionManager.getRefreshToken(session);
 
     if (refreshTokenOpt.isEmpty()) {
+      // 항목 6: 세션(WebSession)은 있으나 Refresh Token이 없는 상태는 세션 자체가 없는 상태보다
+      // 이례적이므로(세션 스토어 정리/수동 삭제 등) 감사 로그를 남긴다(servlet 모듈과 동일 정책).
       log.debug("[Converter] WebSession에 Refresh Token 없음 — 쿠키 삭제 후 인증 스킵.");
+      AuthenticationEventLogger.logFailure(
+          AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(exchange), "unknown",
+          ErrorCode.REFRESH_TOKEN_NOT_FOUND.getCode());
       ReactiveCookieUtil.deleteAllTokenCookies(exchange.getResponse(), cookieProperties);
       return Mono.empty();
     }
@@ -196,6 +248,9 @@ public class KeycloakServerAuthenticationConverter implements ServerAuthenticati
             // AuthenticationWebFilter.switchIfEmpty → 체인 계속 → authorizeExchange 거부
             // → ExceptionTranslationWebFilter → 사용처가 등록한 EntryPoint(리다이렉트/401)
             log.warn("[Converter] Refresh Token 만료 또는 유효하지 않음 ({}). 미인증(empty)으로 처리.", status);
+            AuthenticationEventLogger.logFailure(
+                AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(exchange), "unknown",
+                ErrorCode.REFRESH_TOKEN_NOT_FOUND.getCode());
             ReactiveCookieUtil.deleteAllTokenCookies(exchange.getResponse(), cookieProperties);
             return sessionManager.invalidateSession(session)
                 .then(Mono.empty());
@@ -206,6 +261,9 @@ public class KeycloakServerAuthenticationConverter implements ServerAuthenticati
             // 전환하면 AuthenticationWebFilter.onErrorResume(AuthenticationException.class)에서
             // failureHandler가 처리하도록 변경 가능.
             log.error("[Converter] 토큰 재발급 중 예상치 못한 응답 (status={}). 미인증으로 처리.", status);
+            AuthenticationEventLogger.logFailure(
+                AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(exchange), "unknown",
+                ErrorCode.CONFIGURATION_ERROR.getCode());
             ReactiveCookieUtil.deleteAllTokenCookies(exchange.getResponse(), cookieProperties);
             return sessionManager.invalidateSession(session)
                 .then(Mono.empty());
@@ -219,6 +277,9 @@ public class KeycloakServerAuthenticationConverter implements ServerAuthenticati
               // 이 경로에서 RuntimeException을 그대로 전파하면 AuthenticationWebFilter가
               // onErrorResume(AuthenticationException.class) 로 잡지 못해 HTTP 500이 발생함.
               log.error("[Converter] 토큰 재발급 중 오류 발생 ({}). 미인증으로 처리.", e.getMessage());
+              AuthenticationEventLogger.logFailure(
+                  AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(exchange), "unknown",
+                  resolveErrorCode(e));
               ReactiveCookieUtil.deleteAllTokenCookies(exchange.getResponse(), cookieProperties);
               return sessionManager.invalidateSession(session)
                   .then(Mono.empty());

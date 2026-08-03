@@ -6,9 +6,10 @@ import com.ids.keycloak.security.authentication.KeycloakAuthentication;
 import com.ids.keycloak.security.authentication.KeycloakAuthenticationProvider;
 import com.ids.keycloak.security.exception.AuthenticationFailedException;
 import com.ids.keycloak.security.ratelimit.AuthenticationEventLogger;
+import com.ids.keycloak.security.exception.ErrorCode;
 import com.ids.keycloak.security.exception.IntrospectionFailedException;
+import com.ids.keycloak.security.exception.KeycloakSecurityException;
 import com.ids.keycloak.security.exception.RefreshTokenException;
-import com.ids.keycloak.security.exception.TokenBindingException;
 import com.ids.keycloak.security.exception.UserInfoFetchException;
 import com.ids.keycloak.security.model.KeycloakPrincipal;
 import com.ids.keycloak.security.session.KeycloakSessionManager;
@@ -188,7 +189,12 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
 
             String refreshToken = sessionManager.getRefreshToken(session).orElse(null);
             if (refreshToken == null) {
+                // 세션은 있으나 Refresh Token이 없는 상태 — 세션 없음(logNoSession)보다 이례적인
+                // 상황(세션 스토어 정리/수동 삭제 등)이므로 감사 로그를 남긴다(항목 6).
                 log.debug("[Filter] HTTP Session에 Refresh Token이 없음 - 쿠키 삭제 후 다음 필터로 진행");
+                AuthenticationEventLogger.logFailure(
+                    AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(request), "unknown",
+                    ErrorCode.REFRESH_TOKEN_NOT_FOUND.getCode());
                 CookieUtil.deleteAllTokenCookies(response);
                 filterChain.doFilter(request, response);
                 return;
@@ -218,14 +224,17 @@ public class KeycloakAuthenticationFilter extends OncePerRequestFilter {
             AuthenticationEventLogger.logSuccess(
                 AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(request), successfulAuthentication.getName());
 
-        } catch (TokenBindingException e) {
-            // ID Token/Access Token 결합 검증 실패는 오설정·재발급으로 해소되지 않는 예상된 인증
-            // 실패 사유이므로(Advisory 1), generic catch(Exception)의 "예상치 못한 오류"
-            // 스택트레이스 로깅 대신 원인 메시지만 warn으로 남긴다(로그 노이즈 정리).
+        } catch (KeycloakSecurityException e) {
+            // 이 라이브러리가 던지는 구조화된 인증 실패(TokenBindingException/RefreshTokenException/
+            // AuthenticationFailedException 등)는 오설정·재발급으로 해소되지 않는 예상된 인증 실패
+            // 사유이므로(Advisory 1, 항목 6), generic catch(Exception)의 "예상치 못한 오류" 스택트레이스
+            // 로깅 대신 ErrorCode(사유 코드)를 감사 로그에 남긴다(로그 노이즈 정리 + ELK 등에서
+            // reason=TOKEN_BINDING_FAILED 처럼 코드 기반 검색/집계가 가능해짐).
             SecurityContextHolder.clearContext();
-            log.warn("[Filter] 결합 검증 실패로 인증 실패: {}", e.getMessage());
+            log.warn("[Filter] 인증 실패 (errorCode={}): {}", e.getErrorCode().getCode(), e.getMessage());
             AuthenticationEventLogger.logFailure(
-                AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(request), "unknown", e.getMessage());
+                AuthenticationEventLogger.METHOD_OIDC_COOKIE, getClientIp(request), "unknown",
+                e.getErrorCode().getCode());
             CookieUtil.deleteAllTokenCookies(response);
             sessionManager.invalidateSession(request.getSession());
         } catch (AuthenticationException e) {

@@ -61,10 +61,14 @@ public class KeycloakAuthenticationEntryPoint implements AuthenticationEntryPoin
         }
 
         // KeycloakSecurityException이 원인인 경우, 해당 예외에서 errorCode를 추출
-        if (authException.getCause() instanceof KeycloakSecurityException cause) {
-            log.debug("KeycloakAuthenticationEntryPoint: 인증 실패 - KeycloakSecurityException 발생 = {}, {}",
-                cause.getErrorCode(), cause.getMessage());
-        }
+        // (항목 6: 이 EntryPoint는 인증 실패의 최종 처리 지점이므로, 사유가 debug에만 남으면 운영
+        // 기본 로그 레벨(INFO)에서는 401 응답의 원인을 전혀 추적할 수 없다. 구조화된 사유 1줄을
+        // INFO로 남긴다 — 401 자체는 정상적인 보호 동작이므로 WARN까지는 올리지 않는다.)
+        String errorCode = (authException.getCause() instanceof KeycloakSecurityException cause)
+            ? cause.getErrorCode().getCode()
+            : ErrorCode.AUTHENTICATION_FAILED.getCode();
+        log.info("KeycloakAuthenticationEntryPoint: 인증 실패 - uri={}, errorCode={}",
+            request.getRequestURI(), errorCode);
 
         // Basic Auth 요청인 경우 WWW-Authenticate 헤더 추가
         if (basicAuthEnabled && isBasicAuthRequest(request)) {

@@ -20,7 +20,7 @@ import lombok.extern.slf4j.Slf4j;
  * </pre>
  * </p>
  * <p>
- * 로그 레벨: 성공은 INFO, 실패와 차단은 WARN
+ * 로그 레벨: 성공/스킵/세션없음은 INFO, 실패와 차단은 WARN
  * </p>
  */
 @Slf4j
@@ -91,16 +91,19 @@ public final class AuthenticationEventLogger {
     }
 
     /**
-     * OIDC 쿠키 흐름에서 HTTP Session이 없는 상태를 로깅합니다. (DEBUG 레벨)
+     * OIDC 쿠키 흐름에서 HTTP Session이 없는 상태를 로깅합니다. (INFO 레벨)
      * <p>
-     * 정상적인 비로그인 상태이므로 감사 통계 집계 및 rate-limit 카운터에서 제외됩니다.
+     * 정상적인 비로그인 상태(세션 만료/최초 방문 등)이므로 감사 통계 집계 및 rate-limit 카운터에서
+     * 제외되지만, 운영 환경에서 인증 흐름을 추적할 수 있도록 기본 로그 레벨(INFO)에서 남긴다.
+     * (과거 DEBUG였으나, 운영 기본 로그 레벨에서는 아예 보이지 않아 "쿠키는 있는데 로그인이 풀리는"
+     * 문의의 원인 추적이 불가능했다.)
      * </p>
      *
      * @param method 인증 방식 (OIDC_COOKIE)
      * @param ip     클라이언트 IP
      */
     public static void logNoSession(String method, String ip) {
-        log.debug("[AUTH] result=NO_SESSION method={} ip={} username=unknown reason=session_not_found",
+        log.info("[AUTH] result=NO_SESSION method={} ip={} username=unknown reason=session_not_found",
             method, ip);
     }
 

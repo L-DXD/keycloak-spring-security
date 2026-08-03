@@ -77,6 +77,12 @@ public class KeycloakServerAuthenticationEntryPoint implements ServerAuthenticat
       ServerHttpResponse response = exchange.getResponse();
       String authHeader = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
 
+      // 항목 6: servlet 모듈(KeycloakAuthenticationEntryPoint)과 동일하게, 이 EntryPoint는 인증
+      // 실패의 최종 처리 지점이므로 사유를 운영 기본 로그 레벨(INFO)에서 추적 가능해야 한다.
+      // 401 자체는 정상적인 보호 동작이므로 WARN까지는 올리지 않는다.
+      log.info("[EntryPoint] 인증 실패 - path={}, errorCode={}",
+          exchange.getRequest().getPath(), resolveErrorCode(ex).getCode());
+
       // 1. Bearer Token 요청 → WWW-Authenticate: Bearer 위임
       if (authHeader != null && authHeader.startsWith(BEARER_PREFIX)) {
         log.debug("[EntryPoint] Bearer Token 요청 감지 — WWW-Authenticate: Bearer 응답");
