@@ -19,4 +19,6 @@ dependencies {
     testImplementation 'com.h2database:h2'
     // 토큰 응답(JSON)을 읽는 변환기. 실제 앱은 spring-boot-starter-webmvc가 넣는다
     testImplementation 'tools.jackson.core:jackson-databind'
+    // MDC 테스트(EVT-03): SLF4J 구현이 없으면 MDC가 아무것도 하지 않는다
+    testRuntimeOnly 'ch.qos.logback:logback-classic'
 }

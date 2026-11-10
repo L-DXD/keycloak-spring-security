@@ -11,7 +11,9 @@ import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequest
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestRedirectFilter;
 import org.springframework.security.web.authentication.logout.LogoutFilter;
 import org.springframework.security.web.authentication.session.NullAuthenticatedSessionStrategy;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
+import org.springframework.security.web.context.SecurityContextHolderFilter;
 import org.springframework.security.web.context.RequestAttributeSecurityContextRepository;
 import org.springframework.security.web.csrf.CsrfFilter;
 import org.springframework.security.web.csrf.CsrfTokenRepository;
@@ -25,6 +27,8 @@ import org.springframework.web.cors.CorsConfigurationSource;
 
 import com.ids.keycloak.security.authentication.KeycloakPrincipalConverter;
 import com.ids.keycloak.security.config.KeycloakSecuritySettings;
+import com.ids.keycloak.security.logging.LoggingContextAccessor;
+import com.ids.keycloak.security.logging.LoggingValueSanitizer;
 import com.ids.keycloak.security.token.KeycloakAccessTokenValidator;
 import com.ids.keycloak.security.web.authentication.KeycloakAccessTokenFilter;
 import com.ids.keycloak.security.web.cookie.KeycloakCookieWriter;
@@ -37,6 +41,8 @@ import com.ids.keycloak.security.web.login.KeycloakAuthorizationRequestRepositor
 import com.ids.keycloak.security.web.login.KeycloakLoginAuthorizedClientRepository;
 import com.ids.keycloak.security.web.login.KeycloakLoginFailureHandler;
 import com.ids.keycloak.security.web.login.KeycloakLoginSuccessHandler;
+import com.ids.keycloak.security.web.logging.MdcAuthenticationFilter;
+import com.ids.keycloak.security.web.logging.MdcRequestFilter;
 import com.ids.keycloak.security.web.logout.KeycloakBackChannelLogoutErrorFilter;
 import com.ids.keycloak.security.web.logout.KeycloakBackChannelLogoutHandler;
 import com.ids.keycloak.security.web.logout.KeycloakLocalLogoutHandler;
@@ -62,6 +68,7 @@ import com.ids.keycloak.security.web.refresh.KeycloakRefreshService;
  *   <li>로그아웃: {@code POST /logout}(CSRF 필요)만. 세션 행·쿠키를 지우고 Keycloak 로그아웃을 서버끼리 부른 뒤 화면으로 302,
  *       Keycloak 로그아웃을 하지 못하면 OIDC 로그아웃 주소로 302. 다른 메서드는 405</li>
  *   <li>401·403은 JSON (로그인 화면으로 302하지 않는다)</li>
+ *   <li>MDC: 요청 정보({@link MdcRequestFilter}, 체인 맨 앞)와 사용자 정보({@link MdcAuthenticationFilter}, 인가 앞). 키는 v2와 같다</li>
  *   <li>폼 로그인, Basic 인증을 끈다</li>
  * </ul>
  * 빈은 애플리케이션 컨텍스트에서 타입으로 찾는다. 스타터가 모두 올린다.
@@ -136,6 +143,23 @@ public class KeycloakHttpConfigurer extends AbstractHttpConfigurer<KeycloakHttpC
         // Spring의 back-channel 필터도 CsrfFilter 앞에 들어간다. 이 설정기가 먼저 등록돼 같은 자리에서는 이 필터가 앞이다
         http.addFilterBefore(postProcess(new KeycloakBackChannelLogoutErrorFilter(
             PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.POST, BACK_CHANNEL_LOGOUT_PATH))), CsrfFilter.class);
+        http.addFilterBefore(postProcess(mdcRequestFilter(context)), SecurityContextHolderFilter.class);
+        MdcAuthenticationFilter mdcAuthentication = mdcAuthenticationFilter(context);
+        mdcAuthentication.setSecurityContextHolderStrategy(getSecurityContextHolderStrategy());
+        http.addFilterBefore(postProcess(mdcAuthentication), AuthorizationFilter.class);
+    }
+
+    /** 요청 정보 MDC 필터. */
+    protected MdcRequestFilter mdcRequestFilter(ApplicationContext context) {
+        KeycloakSecuritySettings settings = context.getBean(KeycloakSecuritySettings.class);
+        return new MdcRequestFilter(context.getBean(LoggingContextAccessor.class), settings.logging(), settings.trustedProxyCount(),
+            context.getBean(LoggingValueSanitizer.class));
+    }
+
+    /** 사용자 정보 MDC 필터. */
+    protected MdcAuthenticationFilter mdcAuthenticationFilter(ApplicationContext context) {
+        return new MdcAuthenticationFilter(context.getBean(LoggingContextAccessor.class),
+            context.getBean(KeycloakSecuritySettings.class).logging(), context.getBean(LoggingValueSanitizer.class));
     }
 
     /** CORS 설정. 기본은 빈 {@value #CORS_CONFIGURATION_SOURCE_BEAN}. */

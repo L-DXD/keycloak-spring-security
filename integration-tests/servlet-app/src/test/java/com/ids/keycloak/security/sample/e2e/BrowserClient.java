@@ -61,6 +61,15 @@ public class BrowserClient implements AutoCloseable {
 
     private final CloseableHttpClient http;
     private final List<StoredCookie> jar = new ArrayList<>();
+
+    /** 이 JVM에서 샘플 앱이 준 {@code __Host-} 쿠키 값 전부 (sid·at·csrf·login). 로그에 없어야 한다 (EVT-02). */
+    private static final java.util.Set<String> ISSUED_COOKIE_VALUES = new java.util.HashSet<>();
+
+    public static java.util.Set<String> issuedCookieValues() {
+        synchronized (ISSUED_COOKIE_VALUES) {
+            return java.util.Set.copyOf(ISSUED_COOKIE_VALUES);
+        }
+    }
     private final List<Exchange> history = new ArrayList<>();
 
     public BrowserClient(Path caCertificate) {
@@ -287,6 +296,11 @@ public class BrowserClient implements AutoCloseable {
 
     private void store(URI uri, String header) {
         StoredCookie cookie = StoredCookie.parse(uri, header);
+        if (cookie.name().startsWith("__Host-") && cookie.value().length() >= 16) {
+            synchronized (ISSUED_COOKIE_VALUES) {
+                ISSUED_COOKIE_VALUES.add(cookie.value());
+            }
+        }
         // 브라우저는 http 응답이 준 Secure 쿠키를 받지 않는다
         if (cookie.secure() && !"https".equalsIgnoreCase(uri.getScheme())) {
             return;

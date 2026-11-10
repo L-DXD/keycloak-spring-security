@@ -57,6 +57,8 @@ class KeycloakSecuritySettingsTest {
         assertThat(settings.revokeRefreshTokenOnLocalLogout()).isFalse();
         assertThat(settings.permitAllPaths()).isEmpty();
         assertThat(settings.keyRing().activeKeyId()).isEqualTo("k1");
+        assertThat(settings.logging()).isEqualTo(KeycloakLoggingSettings.defaults());
+        assertThat(settings.trustedProxyCount()).isZero();
     }
 
     @Test
@@ -191,5 +193,38 @@ class KeycloakSecuritySettingsTest {
     void reuseWindowShorterThanAbsoluteTimeout() {
         assertThat(problemProperties(valid().absoluteTimeout(Duration.ofSeconds(5)).refreshReuseWindow(Duration.ofSeconds(10))))
             .containsExactly("keycloak.security.session.refresh-reuse-window");
+    }
+
+    @Test
+    @DisplayName("EVT-03 MDC 로깅 기본값은 v2와 같다")
+    void loggingDefaultsMatchV2() {
+        KeycloakLoggingSettings logging = KeycloakLoggingSettings.defaults();
+        assertThat(logging.includeTraceId()).isTrue();
+        assertThat(logging.includeHttpMethod()).isTrue();
+        assertThat(logging.includeRequestUri()).isTrue();
+        assertThat(logging.includeQueryString()).isFalse();
+        assertThat(logging.includeClientIp()).isTrue();
+        assertThat(logging.includeUserAgent()).isTrue();
+        assertThat(logging.maxQueryLength()).isEqualTo(512);
+        assertThat(logging.maxUserAgentLength()).isEqualTo(256);
+        assertThat(logging.returnTraceIdHeader()).isTrue();
+        assertThat(logging.includeResponseMetrics()).isFalse();
+        assertThat(logging.excludePatterns()).containsExactly("/actuator/**");
+        assertThat(logging.includeUserId()).isTrue();
+        assertThat(logging.includeUsername()).isTrue();
+        assertThat(logging.includeSessionId()).isTrue();
+    }
+
+    @Test
+    @DisplayName("MDC 로깅 설정이 틀리면 설정 이름을 알려 주고 실패한다")
+    void loggingProblems() {
+        KeycloakLoggingSettings bad = KeycloakLoggingSettings.builder().maxQueryLength(0).maxUserAgentLength(KeycloakLoggingSettings.MAX_LENGTH + 1)
+            .excludePatterns(List.of("/actuator/**", "health")).build();
+        assertThat(problemProperties(valid().logging(bad).trustedProxyCount(-2))).containsExactlyInAnyOrder(
+            "keycloak.security.trusted-proxy-count",
+            "keycloak.security.logging.max-query-length",
+            "keycloak.security.logging.max-user-agent-length",
+            "keycloak.security.logging.exclude-patterns[1]");
+        assertThat(valid().trustedProxyCount(-1).build().trustedProxyCount()).as("-1은 v2 호환으로 받는다").isEqualTo(-1);
     }
 }

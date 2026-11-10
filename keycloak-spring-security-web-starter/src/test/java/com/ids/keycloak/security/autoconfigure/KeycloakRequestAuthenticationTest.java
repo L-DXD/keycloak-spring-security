@@ -4,11 +4,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.security.Principal;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -20,6 +23,8 @@ import org.springframework.security.web.FilterChainProxy;
 
 import com.ids.keycloak.security.authentication.KeycloakPrincipal;
 import com.ids.keycloak.security.authentication.KeycloakPrincipalConverter;
+import com.ids.keycloak.security.config.KeycloakSecuritySettings;
+import com.ids.keycloak.security.logging.LoggingContextAccessor;
 import com.ids.keycloak.security.token.AccessTokenValidationResult;
 import com.ids.keycloak.security.token.KeycloakAccessTokenValidator;
 
@@ -127,6 +132,103 @@ class KeycloakRequestAuthenticationTest {
                 Authentication authentication = (Authentication) principal;
                 assertThat(authentication.getPrincipal()).isEqualTo(new AppUser("user-1", "dev"));
                 assertThat(authentication.getAuthorities()).extracting(Object::toString).containsExactly("ROLE_ADMIN");
+            });
+    }
+
+    /** 체인 끝(컨트롤러 자리)에서 MDC를 떠서 돌려준다. */
+    static Map<String, String> sendAndCaptureMdc(FilterChainProxy chain, MockHttpServletRequest request, MockHttpServletResponse response)
+        throws Exception {
+        Map<String, String> seen = new HashMap<>();
+        chain.doFilter(request, response, (req, res) -> {
+            Map<String, String> copy = MDC.getCopyOfContextMap();
+            if (copy != null) {
+                seen.putAll(copy);
+            }
+        });
+        return seen;
+    }
+
+    @Test
+    @DisplayName("EVT-03 (통합) 기본 체인: 요청·사용자 MDC 키가 v2 이름으로 들어가고, 응답에 X-Request-Id, 요청이 끝나면 지운다")
+    void mdcKeys() {
+        runner.run(context -> {
+            FilterChainProxy chain = context.getBean("springSecurityFilterChain", FilterChainProxy.class);
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            MockHttpServletRequest request = get("/api/me", new Cookie("__Host-demo_at", "eyJ.at"));
+            request.addHeader("X-Request-Id", "req-1");
+            request.addHeader("User-Agent", "kss-test");
+            request.setRemoteAddr("10.1.2.3");
+
+            Map<String, String> mdc = sendAndCaptureMdc(chain, request, response);
+
+            assertThat(response.getStatus()).isEqualTo(200);
+            assertThat(mdc).containsEntry("traceId", "req-1").containsEntry("httpMethod", "GET").containsEntry("requestUri", "/api/me")
+                .containsEntry("clientIp", "10.1.2.3").containsEntry("userAgent", "kss-test")
+                .containsEntry("userId", "user-1").containsEntry("sessionId", "kc-sid-1")
+                .doesNotContainKeys("queryString", "status", "durationMs");
+            assertThat(mdc.values()).as("토큰·쿠키 값은 MDC에 없다").noneMatch(v -> v.contains("eyJ"));
+            assertThat(response.getHeader("X-Request-Id")).isEqualTo("req-1");
+            assertThat(MDC.getCopyOfContextMap()).isNullOrEmpty();
+        });
+    }
+
+    @Test
+    @DisplayName("EVT-03 (통합) 인증에 실패한 요청(401)도 traceId를 남기고 응답에 돌려준다. 사용자 키는 없다")
+    void mdcOnUnauthenticated() {
+        runner.run(context -> {
+            FilterChainProxy chain = context.getBean("springSecurityFilterChain", FilterChainProxy.class);
+            MockHttpServletResponse response = new MockHttpServletResponse();
+
+            Map<String, String> mdc = sendAndCaptureMdc(chain, get("/api/me"), response);
+
+            assertThat(response.getStatus()).isEqualTo(401);
+            assertThat(response.getHeader("X-Request-Id")).hasSize(36);
+            assertThat(mdc).as("401은 체인 끝까지 가지 않는다").isEmpty();
+        });
+    }
+
+    @Test
+    @DisplayName("EVT-03 (통합) keycloak.security.logging.*·trusted-proxy-count를 읽고, 이 타입의 빈을 올리면 그것을 쓴다")
+    void mdcSettingsAndOverride() {
+        Map<String, String> custom = new HashMap<>();
+        LoggingContextAccessor accessor = new LoggingContextAccessor() {
+            @Override
+            public void put(String key, String value) {
+                custom.put(key, value);
+            }
+
+            @Override
+            public String get(String key) {
+                return custom.get(key);
+            }
+
+            @Override
+            public void remove(String key) {
+                custom.remove(key);
+            }
+
+            @Override
+            public void clear() {
+            }
+        };
+        runner.withPropertyValues("keycloak.security.logging.include-query-string=true", "keycloak.security.logging.include-user-agent=false",
+                "keycloak.security.logging.exclude-patterns=/health/**", "keycloak.security.trusted-proxy-count=1")
+            .withBean(LoggingContextAccessor.class, () -> accessor)
+            .run(context -> {
+                KeycloakSecuritySettings settings = context.getBean(KeycloakSecuritySettings.class);
+                assertThat(settings.logging().includeQueryString()).isTrue();
+                assertThat(settings.logging().excludePatterns()).containsExactly("/health/**");
+                assertThat(settings.trustedProxyCount()).isEqualTo(1);
+
+                FilterChainProxy chain = context.getBean("springSecurityFilterChain", FilterChainProxy.class);
+                MockHttpServletRequest request = get("/api/me", new Cookie("__Host-demo_at", "eyJ.at"));
+                request.setQueryString("email=alice@example.com");
+                request.addHeader("X-Forwarded-For", "fake, 203.0.113.7");
+                request.addHeader("User-Agent", "kss-test");
+                send(chain, request, new MockHttpServletResponse());
+
+                assertThat(custom).containsEntry("queryString", "email=a***@example.com").containsEntry("clientIp", "203.0.113.7")
+                    .containsEntry("userId", "user-1").doesNotContainKey("userAgent");
             });
     }
 }

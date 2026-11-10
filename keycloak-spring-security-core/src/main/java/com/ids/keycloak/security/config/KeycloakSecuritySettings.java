@@ -50,6 +50,8 @@ public class KeycloakSecuritySettings {
     private final boolean revokeRefreshTokenOnLocalLogout;
     private final List<String> permitAllPaths;
     private final KeycloakKeyRing keyRing;
+    private final KeycloakLoggingSettings logging;
+    private final int trustedProxyCount;
 
     protected KeycloakSecuritySettings(Builder b, URI frontendBaseUrl, KeycloakKeyRing keyRing) {
         this.registrationId = b.registrationId;
@@ -69,6 +71,8 @@ public class KeycloakSecuritySettings {
         this.revokeRefreshTokenOnLocalLogout = b.revokeRefreshTokenOnLocalLogout;
         this.permitAllPaths = List.copyOf(b.permitAllPaths);
         this.keyRing = keyRing;
+        this.logging = b.logging;
+        this.trustedProxyCount = b.trustedProxyCount;
     }
 
     public static Builder builder() {
@@ -169,6 +173,19 @@ public class KeycloakSecuritySettings {
         return keyRing;
     }
 
+    /** MDC 로깅 설정. */
+    public KeycloakLoggingSettings logging() {
+        return logging;
+    }
+
+    /**
+     * 앞에 있는 믿을 수 있는 프록시 수. 클라이언트 IP를 {@code X-Forwarded-For}에서 고를 때 쓴다. 기본 0(헤더를 보지 않고 연결 주소).
+     * {@code -1}은 헤더의 첫 값을 그대로 믿는다(v2 호환, 위조될 수 있어 권하지 않음).
+     */
+    public int trustedProxyCount() {
+        return trustedProxyCount;
+    }
+
     /** 비밀값 없이 한 줄로. 기동 로그에 쓴다. */
     @Override
     public String toString() {
@@ -205,6 +222,8 @@ public class KeycloakSecuritySettings {
         private List<String> permitAllPaths = List.of();
         private String activeKeyId;
         private Map<String, String> keys = Map.of();
+        private KeycloakLoggingSettings logging = KeycloakLoggingSettings.defaults();
+        private int trustedProxyCount;
         private final List<Problem> extraProblems = new ArrayList<>();
 
         protected Builder() {
@@ -296,6 +315,16 @@ public class KeycloakSecuritySettings {
             return this;
         }
 
+        public Builder logging(KeycloakLoggingSettings logging) {
+            this.logging = logging;
+            return this;
+        }
+
+        public Builder trustedProxyCount(int trustedProxyCount) {
+            this.trustedProxyCount = trustedProxyCount;
+            return this;
+        }
+
         /** 이 밖에서 찾은 문제를 같이 알린다 (예: 스타터가 찾은 OAuth2 등록 누락). */
         public Builder problem(String property, String message) {
             this.extraProblems.add(new Problem(property, message));
@@ -319,6 +348,7 @@ public class KeycloakSecuritySettings {
             for (int i = 0; i < permitAllPaths.size(); i++) {
                 checkPath(problems, "permit-all-paths[" + i + "]", permitAllPaths.get(i));
             }
+            checkLogging(problems);
             KeycloakKeyRing keyRing = checkCrypto(problems);
             if (!problems.isEmpty()) {
                 throw new KeycloakSecurityConfigurationException(problems);
@@ -359,6 +389,25 @@ public class KeycloakSecuritySettings {
                 problems.add(issue("frontend.base-url", "사용자 정보·쿼리·# 조각을 넣을 수 없습니다"));
             }
             return uri;
+        }
+
+        private void checkLogging(List<Problem> problems) {
+            if (trustedProxyCount < -1) {
+                problems.add(issue("trusted-proxy-count", "0 이상이어야 합니다 (-1은 X-Forwarded-For 첫 값을 그대로 믿는 v2 방식)"));
+            }
+            if (logging == null) {
+                problems.add(issue("logging", "필수입니다"));
+                return;
+            }
+            if (logging.maxQueryLength() < 1 || logging.maxQueryLength() > KeycloakLoggingSettings.MAX_LENGTH) {
+                problems.add(issue("logging.max-query-length", "1에서 " + KeycloakLoggingSettings.MAX_LENGTH + " 사이여야 합니다"));
+            }
+            if (logging.maxUserAgentLength() < 1 || logging.maxUserAgentLength() > KeycloakLoggingSettings.MAX_LENGTH) {
+                problems.add(issue("logging.max-user-agent-length", "1에서 " + KeycloakLoggingSettings.MAX_LENGTH + " 사이여야 합니다"));
+            }
+            for (int i = 0; i < logging.excludePatterns().size(); i++) {
+                checkPath(problems, "logging.exclude-patterns[" + i + "]", logging.excludePatterns().get(i));
+            }
         }
 
         private void checkCookie(List<Problem> problems) {

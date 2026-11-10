@@ -59,13 +59,16 @@ tasks.register('e2eTest', Test) {
         }
     }
     dependsOn e2eCerts, e2eHosts
-    def tls = e2eDir.map { it.dir('tls') }
+    // start-local.sh로 띄운 Keycloak을 다른 작업 폴더(git worktree 등)에서 쓸 때는 그 Keycloak이 믿는 인증서 폴더를 준다.
+    // 새 작업 폴더의 build/e2e/tls는 Gradle이 처음 돌 때 지우고 새로 만들어, 그 Keycloak이 샘플 앱을 믿지 못한다
+    def tls = providers.environmentVariable('KSS_E2E_TLS_DIR').map { new File(it) }
+        .orElse(e2eDir.map { it.dir('tls').asFile })
     def hosts = e2eDir.map { it.file('hosts') }
     def realm = keycloakDir.file('realm-kss-demo.json')
     inputs.file(realm)
     jvmArgumentProviders.add({ [
         "-Djdk.net.hosts.file=${hosts.get().asFile.absolutePath}".toString(),
-        "-Dkss.e2e.tls-dir=${tls.get().asFile.absolutePath}".toString(),
+        "-Dkss.e2e.tls-dir=${tls.get().absolutePath}".toString(),
         "-Dkss.e2e.realm-file=${realm.asFile.absolutePath}".toString(),
     ] } as CommandLineArgumentProvider)
     outputs.upToDateWhen { false }

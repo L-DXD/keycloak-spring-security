@@ -8,6 +8,7 @@ import java.util.Map;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import com.ids.keycloak.security.config.KeycloakLoggingSettings;
 import com.ids.keycloak.security.config.KeycloakSecuritySettings;
 import com.ids.keycloak.security.config.SessionStoreType;
 
@@ -34,6 +35,13 @@ public class KeycloakSecurityProperties {
     private final Csrf csrf = new Csrf();
     private final Logout logout = new Logout();
     private final Crypto crypto = new Crypto();
+    private final Logging logging = new Logging();
+
+    /**
+     * 앞에 있는 믿을 수 있는 프록시 수. 로그의 클라이언트 IP를 X-Forwarded-For에서 고를 때 쓴다.
+     * 0이면 헤더를 보지 않는다. -1은 첫 값을 그대로 믿는다(v2 호환, 권하지 않음).
+     */
+    private int trustedProxyCount = 0;
 
     /** 로그인 없이 허용하는 경로 (예: /api/public/**). */
     private List<String> permitAllPaths = new ArrayList<>();
@@ -61,7 +69,9 @@ public class KeycloakSecurityProperties {
             .revokeRefreshTokenOnLocalLogout(logout.revokeRefreshTokenOnLocalLogout)
             .permitAllPaths(permitAllPaths)
             .activeKeyId(crypto.activeKeyId)
-            .keys(crypto.keys);
+            .keys(crypto.keys)
+            .logging(logging.toSettings())
+            .trustedProxyCount(trustedProxyCount);
     }
 
     public boolean isEnabled() {
@@ -110,6 +120,18 @@ public class KeycloakSecurityProperties {
 
     public Crypto getCrypto() {
         return crypto;
+    }
+
+    public Logging getLogging() {
+        return logging;
+    }
+
+    public int getTrustedProxyCount() {
+        return trustedProxyCount;
+    }
+
+    public void setTrustedProxyCount(int trustedProxyCount) {
+        this.trustedProxyCount = trustedProxyCount;
     }
 
     public List<String> getPermitAllPaths() {
@@ -314,6 +336,183 @@ public class KeycloakSecurityProperties {
 
         public void setKeys(Map<String, String> keys) {
             this.keys = keys;
+        }
+    }
+
+    /** MDC 로깅 ({@code keycloak.security.logging.*}). 이름과 기본값은 v2와 같다. */
+    public static class Logging {
+
+        /** traceId를 넣는가 ({@code X-Request-Id} 또는 새 UUID). */
+        private boolean includeTraceId = true;
+
+        /** httpMethod를 넣는가. */
+        private boolean includeHttpMethod = true;
+
+        /** requestUri를 넣는가. */
+        private boolean includeRequestUri = true;
+
+        /** queryString을 넣는가 (디코딩·길이 제한·마스킹). */
+        private boolean includeQueryString = false;
+
+        /** clientIp를 넣는가 (trusted-proxy-count 기준). */
+        private boolean includeClientIp = true;
+
+        /** userAgent를 넣는가 (길이 제한·마스킹). */
+        private boolean includeUserAgent = true;
+
+        /** queryString 최대 길이. 넘으면 자른다. */
+        private int maxQueryLength = 512;
+
+        /** userAgent 최대 길이. 넘으면 자른다. */
+        private int maxUserAgentLength = 256;
+
+        /** 응답 헤더 X-Request-Id로 traceId를 돌려주는가. */
+        private boolean returnTraceIdHeader = true;
+
+        /** status·durationMs와 "request completed" 로그. 접근 로그와 겹쳐 기본 끔. */
+        private boolean includeResponseMetrics = false;
+
+        /** userId(sub)를 넣는가. */
+        private boolean includeUserId = true;
+
+        /** username(preferred_username)을 넣는가. */
+        private boolean includeUsername = true;
+
+        /** sessionId(Keycloak 세션 id, 토큰의 sid)를 넣는가. */
+        private boolean includeSessionId = true;
+
+        /** MDC 필터를 쓰지 않는 경로 (헬스·메트릭 수집 등). */
+        private List<String> excludePatterns = new ArrayList<>(List.of("/actuator/**"));
+
+        KeycloakLoggingSettings toSettings() {
+            return KeycloakLoggingSettings.builder()
+                .includeTraceId(includeTraceId)
+                .includeHttpMethod(includeHttpMethod)
+                .includeRequestUri(includeRequestUri)
+                .includeQueryString(includeQueryString)
+                .includeClientIp(includeClientIp)
+                .includeUserAgent(includeUserAgent)
+                .maxQueryLength(maxQueryLength)
+                .maxUserAgentLength(maxUserAgentLength)
+                .returnTraceIdHeader(returnTraceIdHeader)
+                .includeResponseMetrics(includeResponseMetrics)
+                .includeUserId(includeUserId)
+                .includeUsername(includeUsername)
+                .includeSessionId(includeSessionId)
+                .excludePatterns(excludePatterns)
+                .build();
+        }
+
+        public boolean isIncludeTraceId() {
+            return includeTraceId;
+        }
+
+        public void setIncludeTraceId(boolean includeTraceId) {
+            this.includeTraceId = includeTraceId;
+        }
+
+        public boolean isIncludeHttpMethod() {
+            return includeHttpMethod;
+        }
+
+        public void setIncludeHttpMethod(boolean includeHttpMethod) {
+            this.includeHttpMethod = includeHttpMethod;
+        }
+
+        public boolean isIncludeRequestUri() {
+            return includeRequestUri;
+        }
+
+        public void setIncludeRequestUri(boolean includeRequestUri) {
+            this.includeRequestUri = includeRequestUri;
+        }
+
+        public boolean isIncludeQueryString() {
+            return includeQueryString;
+        }
+
+        public void setIncludeQueryString(boolean includeQueryString) {
+            this.includeQueryString = includeQueryString;
+        }
+
+        public boolean isIncludeClientIp() {
+            return includeClientIp;
+        }
+
+        public void setIncludeClientIp(boolean includeClientIp) {
+            this.includeClientIp = includeClientIp;
+        }
+
+        public boolean isIncludeUserAgent() {
+            return includeUserAgent;
+        }
+
+        public void setIncludeUserAgent(boolean includeUserAgent) {
+            this.includeUserAgent = includeUserAgent;
+        }
+
+        public int getMaxQueryLength() {
+            return maxQueryLength;
+        }
+
+        public void setMaxQueryLength(int maxQueryLength) {
+            this.maxQueryLength = maxQueryLength;
+        }
+
+        public int getMaxUserAgentLength() {
+            return maxUserAgentLength;
+        }
+
+        public void setMaxUserAgentLength(int maxUserAgentLength) {
+            this.maxUserAgentLength = maxUserAgentLength;
+        }
+
+        public boolean isReturnTraceIdHeader() {
+            return returnTraceIdHeader;
+        }
+
+        public void setReturnTraceIdHeader(boolean returnTraceIdHeader) {
+            this.returnTraceIdHeader = returnTraceIdHeader;
+        }
+
+        public boolean isIncludeResponseMetrics() {
+            return includeResponseMetrics;
+        }
+
+        public void setIncludeResponseMetrics(boolean includeResponseMetrics) {
+            this.includeResponseMetrics = includeResponseMetrics;
+        }
+
+        public boolean isIncludeUserId() {
+            return includeUserId;
+        }
+
+        public void setIncludeUserId(boolean includeUserId) {
+            this.includeUserId = includeUserId;
+        }
+
+        public boolean isIncludeUsername() {
+            return includeUsername;
+        }
+
+        public void setIncludeUsername(boolean includeUsername) {
+            this.includeUsername = includeUsername;
+        }
+
+        public boolean isIncludeSessionId() {
+            return includeSessionId;
+        }
+
+        public void setIncludeSessionId(boolean includeSessionId) {
+            this.includeSessionId = includeSessionId;
+        }
+
+        public List<String> getExcludePatterns() {
+            return excludePatterns;
+        }
+
+        public void setExcludePatterns(List<String> excludePatterns) {
+            this.excludePatterns = excludePatterns;
         }
     }
 }

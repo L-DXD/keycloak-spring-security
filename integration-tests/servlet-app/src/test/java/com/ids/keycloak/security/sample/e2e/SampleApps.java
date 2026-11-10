@@ -43,12 +43,16 @@ public final class SampleApps {
             properties.put("kss.db.password", env.dbPassword());
             properties.put("kss.tls-dir", env.tlsDir().toString());
             properties.put("spring.main.banner-mode", "off");
+            // EVT-02: 라이브러리 DEBUG 로그까지 토큰·sid가 없는지 본다
+            properties.put("logging.level.com.ids.keycloak.security", "DEBUG");
 
             E2eClock clock = new E2eClock();
             SqlRecorder sql = new SqlRecorder();
             HttpSessionCounter sessions = new HttpSessionCounter();
             KeycloakOutage outage = new KeycloakOutage();
+            E2eSessionEvents events = new E2eSessionEvents();
             SpringApplicationBuilder builder = new SpringApplicationBuilder(SampleApplication.class).properties(properties)
+                .listeners(events)
                 .initializers(context -> {
                     context.getBeanFactory().registerSingleton("keycloakSecurityClock", clock);
                     context.getBeanFactory().registerSingleton("e2eHttpSessionCounter", sessions);
@@ -60,17 +64,18 @@ public final class SampleApps {
                 builder.profiles(profile);
             }
             ConfigurableApplicationContext context = builder.run();
+            E2eLogRecorder.attach();
             Runtime.getRuntime().addShutdownHook(new Thread(context::close));
-            return new Running(clientId, "https://api.kss.test:" + port, context, clock, sql, sessions, outage);
+            return new Running(clientId, "https://api.kss.test:" + port, context, clock, sql, sessions, outage, events);
         });
     }
 
     /**
      * 떠 있는 샘플 앱 하나. 테스트용으로 앱에 넣은 것: 시계({@code keycloakSecurityClock}), SQL 기록, HttpSession 수,
-     * 갱신 때 Keycloak 끊기({@link KeycloakOutage}).
+     * 갱신 때 Keycloak 끊기({@link KeycloakOutage}), 세션 이벤트 모음({@link E2eSessionEvents}).
      */
     public record Running(String clientId, String baseUrl, ConfigurableApplicationContext context, E2eClock clock, SqlRecorder sql,
-                          HttpSessionCounter httpSessions, KeycloakOutage keycloakOutage) {
+                          HttpSessionCounter httpSessions, KeycloakOutage keycloakOutage, E2eSessionEvents sessionEvents) {
 
         public String url(String path) {
             return baseUrl + path;

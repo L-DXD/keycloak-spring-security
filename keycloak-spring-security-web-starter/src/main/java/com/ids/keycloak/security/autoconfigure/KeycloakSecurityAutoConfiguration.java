@@ -49,6 +49,9 @@ import com.ids.keycloak.security.event.CompositeKeycloakSessionEventPublisher;
 import com.ids.keycloak.security.event.KeycloakSessionAuditLogger;
 import com.ids.keycloak.security.event.KeycloakSessionEventListener;
 import com.ids.keycloak.security.event.KeycloakSessionEventPublisher;
+import com.ids.keycloak.security.logging.DefaultPiiMaskingSanitizer;
+import com.ids.keycloak.security.logging.LoggingContextAccessor;
+import com.ids.keycloak.security.logging.LoggingValueSanitizer;
 import com.ids.keycloak.security.session.InMemoryKeycloakSessionStore;
 import com.ids.keycloak.security.session.JdbcKeycloakSessionStore;
 import com.ids.keycloak.security.session.KeycloakSessionCleaner;
@@ -71,6 +74,7 @@ import com.ids.keycloak.security.web.login.KeycloakAuthorizationRequestRepositor
 import com.ids.keycloak.security.web.login.KeycloakLoginFailureHandler;
 import com.ids.keycloak.security.web.login.KeycloakLoginSuccessHandler;
 import com.ids.keycloak.security.web.login.LoginReturnPathResolver;
+import com.ids.keycloak.security.web.logging.WebMdcContextAccessor;
 import com.ids.keycloak.security.web.logout.KeycloakBackChannelLogoutHandler;
 import com.ids.keycloak.security.web.logout.KeycloakLocalLogoutHandler;
 import com.ids.keycloak.security.web.logout.KeycloakLogoutHandler;
@@ -384,6 +388,20 @@ public class KeycloakSecurityAutoConfiguration {
         return new KeycloakRefreshService(store, cipher, tokenClient, validator, events, clock, settings.refreshReuseWindow(), revoker);
     }
 
+    /** MDC 접근자 (v2와 같은 키). 사내 로깅 표준에 맞추려면 이 타입의 빈을 올린다. */
+    @Bean
+    @ConditionalOnMissingBean(LoggingContextAccessor.class)
+    public WebMdcContextAccessor keycloakLoggingContextAccessor() {
+        return new WebMdcContextAccessor();
+    }
+
+    /** 로그에 넣기 전 값 가리기 (JWT·Bearer·OAuth2 파라미터·주민번호·카드·이메일·전화). 가리지 않으려면 {@code NoOpLoggingValueSanitizer} 빈. */
+    @Bean
+    @ConditionalOnMissingBean
+    public LoggingValueSanitizer keycloakLoggingValueSanitizer() {
+        return new DefaultPiiMaskingSanitizer();
+    }
+
     /** 설정 검사, 세션 테이블 검사, 정리 작업을 지연 초기화에서 뺀다 (잘못되면 첫 요청이 아니라 기동 때 알도록). */
     @Bean
     public static LazyInitializationExcludeFilter keycloakSecurityEagerInit() {
@@ -446,6 +464,10 @@ public class KeycloakSecurityAutoConfiguration {
         if (settings.sessionStore() == SessionStoreType.MEMORY) {
             log.warn("[KSS] 세션 저장소가 memory입니다. 서버를 여러 대 띄우면 로그인이 서로 보이지 않고, 재시작하면 모두 로그아웃됩니다. "
                 + "개발·테스트에만 쓰고 운영에서는 keycloak.security.session.store=jdbc를 쓰세요.");
+        }
+        if (settings.trustedProxyCount() < 0) {
+            log.warn("[KSS] keycloak.security.trusted-proxy-count=-1: 로그의 clientIp에 X-Forwarded-For 첫 값(클라이언트가 쓸 수 있음)을 씁니다. "
+                + "앞에 있는 프록시 수를 넣으세요.");
         }
     }
 }
