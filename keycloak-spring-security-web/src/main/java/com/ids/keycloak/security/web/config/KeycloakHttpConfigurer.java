@@ -8,15 +8,26 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.client.web.DefaultOAuth2AuthorizationRequestResolver;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestCustomizers;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestRedirectFilter;
+import org.springframework.security.web.authentication.session.NullAuthenticatedSessionStrategy;
 import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
 import org.springframework.security.web.context.RequestAttributeSecurityContextRepository;
+import org.springframework.security.web.csrf.CsrfFilter;
+import org.springframework.security.web.csrf.CsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfTokenRequestHandler;
+import org.springframework.security.web.csrf.XorCsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.savedrequest.NullRequestCache;
+import org.springframework.security.web.servlet.util.matcher.PathPatternRequestMatcher;
+import org.springframework.security.web.util.matcher.OrRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
+import org.springframework.web.cors.CorsConfigurationSource;
 
 import com.ids.keycloak.security.authentication.KeycloakPrincipalConverter;
 import com.ids.keycloak.security.config.KeycloakSecuritySettings;
 import com.ids.keycloak.security.token.KeycloakAccessTokenValidator;
 import com.ids.keycloak.security.web.authentication.KeycloakAccessTokenFilter;
 import com.ids.keycloak.security.web.cookie.KeycloakCookieWriter;
+import com.ids.keycloak.security.web.csrf.KeycloakCsrfTokenEndpointFilter;
+import com.ids.keycloak.security.web.csrf.KeycloakOriginFilter;
 import com.ids.keycloak.security.web.error.KeycloakErrorResponseWriter;
 import com.ids.keycloak.security.web.error.KeycloakAccessDeniedHandler;
 import com.ids.keycloak.security.web.error.KeycloakAuthenticationEntryPoint;
@@ -38,12 +49,18 @@ import com.ids.keycloak.security.web.refresh.KeycloakRefreshService;
  *   <li>HttpSession을 만들지 않는다 (요청 캐시 없음, 보안 컨텍스트는 요청 안에서만)</li>
  *   <li>로그인: Spring {@code oauth2Login} + PKCE S256 + 로그인 임시 쿠키 + UserInfo 호출 없음 + 라이브러리 성공·실패 처리</li>
  *   <li>요청 인증: at 쿠키를 로컬 검증하고 만료면 갱신하는 {@link KeycloakAccessTokenFilter}를 Basic 인증 자리 앞에 넣는다</li>
+ *   <li>CORS(체인 맨 앞, 빈 {@value #CORS_CONFIGURATION_SOURCE_BEAN}) → Origin 확인({@link KeycloakOriginFilter}) → CSRF(sid 서명
+ *       double-submit, Xor 처리기) → {@code GET /api/csrf}({@link KeycloakCsrfTokenEndpointFilter}). back-channel 로그아웃과 OIDC 콜백은
+ *       Origin·CSRF 확인에서 뺀다</li>
  *   <li>401·403은 JSON (로그인 화면으로 302하지 않는다)</li>
  *   <li>폼 로그인, Basic 인증을 끈다</li>
  * </ul>
  * 빈은 애플리케이션 컨텍스트에서 타입으로 찾는다. 스타터가 모두 올린다.
  */
 public class KeycloakHttpConfigurer extends AbstractHttpConfigurer<KeycloakHttpConfigurer, HttpSecurity> {
+
+    /** CORS 설정 빈 이름. 이 이름으로 올린 {@link CorsConfigurationSource}를 쓴다 (MVC의 다른 CORS 빈과 섞이지 않게 이름으로 찾는다). */
+    public static final String CORS_CONFIGURATION_SOURCE_BEAN = "keycloakCorsConfigurationSource";
 
     /** 새 설정기. */
     public static KeycloakHttpConfigurer keycloak() {
@@ -64,9 +81,15 @@ public class KeycloakHttpConfigurer extends AbstractHttpConfigurer<KeycloakHttpC
             .requestCache(r -> r.requestCache(new NullRequestCache()))
             .formLogin(AbstractHttpConfigurer::disable)
             .httpBasic(AbstractHttpConfigurer::disable)
-            // 로그아웃은 #87(POST /logout, 리프레시 토큰 로그아웃), CSRF는 #86(sid 서명 double-submit)에서 붙인다
+            // 로그아웃은 #87(POST /logout, 리프레시 토큰 로그아웃)에서 붙인다
             .logout(AbstractHttpConfigurer::disable)
-            .csrf(AbstractHttpConfigurer::disable)
+            .cors(c -> c.configurationSource(corsConfigurationSource(context)))
+            .csrf(c -> c
+                .csrfTokenRepository(context.getBean(CsrfTokenRepository.class))
+                .csrfTokenRequestHandler(csrfTokenRequestHandler())
+                // 로그인하면 로그인 처리기가 새 sid에 묶은 토큰을 쓴다. Spring의 "로그인 때 토큰 지우고 다시 만들기"는 쿠키를 두 번 쓰게 하므로 끈다
+                .sessionAuthenticationStrategy(new NullAuthenticatedSessionStrategy())
+                .ignoringRequestMatchers(serverCallbacks()))
             .exceptionHandling(e -> e
                 .authenticationEntryPoint(context.getBean(KeycloakAuthenticationEntryPoint.class))
                 .accessDeniedHandler(context.getBean(KeycloakAccessDeniedHandler.class)))
@@ -86,6 +109,36 @@ public class KeycloakHttpConfigurer extends AbstractHttpConfigurer<KeycloakHttpC
         filter.setSecurityContextHolderStrategy(getSecurityContextHolderStrategy());
         filter.setSecurityContextRepository(new RequestAttributeSecurityContextRepository());
         http.addFilterBefore(postProcess(filter), BasicAuthenticationFilter.class);
+        ApplicationContext context = http.getSharedObject(ApplicationContext.class);
+        http.addFilterBefore(postProcess(originFilter(context)), CsrfFilter.class);
+        http.addFilterAfter(postProcess(csrfTokenEndpointFilter(context)), CsrfFilter.class);
+    }
+
+    /** CORS 설정. 기본은 빈 {@value #CORS_CONFIGURATION_SOURCE_BEAN}. */
+    protected CorsConfigurationSource corsConfigurationSource(ApplicationContext context) {
+        return context.getBean(CORS_CONFIGURATION_SOURCE_BEAN, CorsConfigurationSource.class);
+    }
+
+    /** CSRF 토큰 처리기. 기본은 Spring의 Xor(응답마다 토큰을 가려 BREACH를 막는다). 헤더와 폼 칸을 모두 읽는다. */
+    protected CsrfTokenRequestHandler csrfTokenRequestHandler() {
+        return new XorCsrfTokenRequestAttributeHandler();
+    }
+
+    /** Keycloak이 서버에서 부르거나 Keycloak에서 돌아오는 주소. Origin·CSRF 확인에서 뺀다 (back-channel 로그아웃, OIDC 콜백). */
+    protected RequestMatcher serverCallbacks() {
+        PathPatternRequestMatcher.Builder paths = PathPatternRequestMatcher.withDefaults();
+        return new OrRequestMatcher(paths.matcher("/logout/connect/back-channel/**"), paths.matcher("/login/oauth2/code/**"));
+    }
+
+    /** Origin 확인 필터. 빈으로 올리지 않는다 (서블릿 필터로 따로 등록되지 않게). */
+    protected KeycloakOriginFilter originFilter(ApplicationContext context) {
+        return new KeycloakOriginFilter(corsConfigurationSource(context), serverCallbacks(),
+            context.getBean(KeycloakErrorResponseWriter.class));
+    }
+
+    /** {@code GET /api/csrf}. 경로는 {@code keycloak.security.csrf.endpoint}. */
+    protected KeycloakCsrfTokenEndpointFilter csrfTokenEndpointFilter(ApplicationContext context) {
+        return new KeycloakCsrfTokenEndpointFilter(context.getBean(KeycloakSecuritySettings.class).csrfEndpoint());
     }
 
     /**

@@ -9,6 +9,10 @@ public enum KeycloakErrorCode {
     AUTHENTICATION_REQUIRED(401, "로그인이 필요합니다."),
     /** 로그인은 했지만 권한이 없다. */
     ACCESS_DENIED(403, "이 리소스에 접근할 권한이 없습니다."),
+    /** CSRF 토큰이 없거나 맞지 않는다. 화면은 토큰을 다시 받아 한 번 더 보낼 수 있다. */
+    INVALID_CSRF_TOKEN(403, "요청 확인 토큰(CSRF)이 없거나 맞지 않습니다. 토큰을 다시 받아 보내세요."),
+    /** 상태를 바꾸는 요청의 Origin(Referer)이 허용된 화면이 아니다. */
+    ORIGIN_NOT_ALLOWED(403, "허용되지 않은 화면에서 보낸 요청입니다."),
     /** Keycloak(JWKS, 토큰 갱신)에 닿지 못했다. 세션은 그대로 두고 다시 시도하게 한다. */
     KEYCLOAK_UNAVAILABLE(503, "인증 서버에 연결할 수 없습니다. 잠시 뒤 다시 시도하세요.");
 

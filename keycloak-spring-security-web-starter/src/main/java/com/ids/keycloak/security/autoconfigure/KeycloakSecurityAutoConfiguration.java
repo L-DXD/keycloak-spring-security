@@ -27,11 +27,13 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
-import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
+import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.csrf.CsrfTokenRepository;
+import org.springframework.web.cors.CorsConfigurationSource;
 
 import com.ids.keycloak.security.KeycloakSecurityVersion;
 import com.ids.keycloak.security.authentication.DefaultKeycloakPrincipalConverter;
@@ -59,6 +61,8 @@ import com.ids.keycloak.security.token.NimbusJwkSetFetcher;
 import com.ids.keycloak.security.web.config.KeycloakHttpConfigurer;
 import com.ids.keycloak.security.web.cookie.DefaultKeycloakCookieWriter;
 import com.ids.keycloak.security.web.cookie.KeycloakCookieWriter;
+import com.ids.keycloak.security.web.cors.KeycloakCors;
+import com.ids.keycloak.security.web.csrf.SignedDoubleSubmitCsrfTokenRepository;
 import com.ids.keycloak.security.web.error.KeycloakAccessDeniedHandler;
 import com.ids.keycloak.security.web.error.KeycloakAuthenticationEntryPoint;
 import com.ids.keycloak.security.web.error.KeycloakErrorResponseWriter;
@@ -210,6 +214,24 @@ public class KeycloakSecurityAutoConfiguration {
     }
 
     /** 401·403·503 JSON. 앱 오류 형식을 쓰려면 이 빈을 바꾼다. */
+    /** CSRF 토큰 저장소 (sid 서명 double-submit, csrf 쿠키). */
+    @Bean
+    @ConditionalOnMissingBean(CsrfTokenRepository.class)
+    public SignedDoubleSubmitCsrfTokenRepository keycloakCsrfTokenRepository(KeycloakCsrfTokenSigner signer, KeycloakCookieWriter cookies,
+                                                                            KeycloakSecuritySettings settings) {
+        return new SignedDoubleSubmitCsrfTokenRepository(signer, cookies, settings.absoluteTimeout());
+    }
+
+    /**
+     * CORS: 화면 origin 하나, 쿠키 허용. 이름으로만 비켜 선다(Spring MVC가 올리는 다른 {@link CorsConfigurationSource}와 섞이지 않게).
+     * Origin 확인도 이 허용 목록을 쓴다.
+     */
+    @Bean(name = KeycloakHttpConfigurer.CORS_CONFIGURATION_SOURCE_BEAN)
+    @ConditionalOnMissingBean(name = KeycloakHttpConfigurer.CORS_CONFIGURATION_SOURCE_BEAN)
+    public CorsConfigurationSource keycloakCorsConfigurationSource(KeycloakSecuritySettings settings) {
+        return KeycloakCors.source(KeycloakCors.configuration(settings.frontendOrigin(), settings.backgroundHeader()));
+    }
+
     @Bean
     @ConditionalOnMissingBean
     public KeycloakErrorResponseWriter keycloakErrorResponseWriter(KeycloakSecuritySettings settings) {

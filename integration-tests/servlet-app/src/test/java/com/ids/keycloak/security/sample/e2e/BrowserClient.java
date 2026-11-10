@@ -92,6 +92,11 @@ public class BrowserClient implements AutoCloseable {
         return send("POST", url, new UrlEncodedFormEntity(pairs, StandardCharsets.UTF_8), headers);
     }
 
+    /** CORS 사전 확인처럼 OPTIONS를 보낸다 (CORS-01·02). */
+    public Exchange options(String url, Header... headers) {
+        return send("OPTIONS", url, null, headers);
+    }
+
     public Exchange postJson(String url, String json, Header... headers) {
         return send("POST", url, new StringEntity(json, ContentType.APPLICATION_JSON), headers);
     }

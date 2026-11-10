@@ -4,11 +4,14 @@ import java.security.Principal;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.ids.keycloak.security.authentication.KeycloakPrincipal;
@@ -34,10 +37,21 @@ class SampleController {
         return Map.of("pong", true);
     }
 
-    /** 로그인 + CSRF 필요. 받은 것을 그대로 돌려준다. */
-    @PostMapping(path = "/api/items", produces = MediaType.APPLICATION_JSON_VALUE)
+    /** 로그인 + CSRF 필요. 받은 것을 그대로 돌려준다 (화면이 JSON으로 부름, 토큰은 X-XSRF-TOKEN 헤더). */
+    @PostMapping(path = "/api/items", consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    @ResponseStatus(HttpStatus.CREATED)
     Map<String, Object> createItem(@RequestBody Map<String, Object> item, Principal principal) {
         Map<String, Object> body = new LinkedHashMap<>(item);
+        body.put("createdBy", principal.getName());
+        return body;
+    }
+
+    /** 같은 주소를 HTML 폼으로 부름 (토큰은 숨은 칸 _csrf). */
+    @PostMapping(path = "/api/items", consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    @ResponseStatus(HttpStatus.CREATED)
+    Map<String, Object> createItemFromForm(@RequestParam Map<String, String> form, Principal principal) {
+        Map<String, Object> body = new LinkedHashMap<>(form);
+        body.remove("_csrf");
         body.put("createdBy", principal.getName());
         return body;
     }
