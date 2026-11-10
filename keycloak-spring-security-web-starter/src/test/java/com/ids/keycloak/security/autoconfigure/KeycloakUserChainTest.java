@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.config.Customizer;
@@ -37,8 +38,9 @@ import com.ids.keycloak.security.web.refresh.KeycloakTokenResponse;
 import jakarta.servlet.http.Cookie;
 
 /**
- * V3-14 사용자 보안 체인 (#90, EXT-02): 앱이 {@link SecurityFilterChain}을 올리고 {@link KeycloakHttpConfigurer}를 붙이면 기본 체인이
- * 빠지고, 그 체인에서 로그인 시작·요청 인증·갱신·로그아웃이 기본 체인과 같이 된다. Keycloak 대신 토큰 검증기와 토큰 클라이언트만 바꾼다
+ * V3-14 사용자 보안 체인 (#90, EXT-02·06): 앱이 {@link SecurityFilterChain}을 올리고 {@link KeycloakHttpConfigurer}를 붙이면 그 체인에서
+ * 로그인 시작·요청 인증·갱신·로그아웃이 기본 체인과 같이 된다. 앱 체인이 일부 주소만 받으면 기본 체인은 남아 나머지를 지킨다(fail-open 없음).
+ * 기본 체인은 같은 이름의 빈이나 {@code auto-filter-chain=false}로만 빠진다. Keycloak 대신 토큰 검증기와 토큰 클라이언트만 바꾼다
  * (실제 Keycloak 흐름은 E2E가 기본 체인으로 본다).
  */
 class KeycloakUserChainTest {
@@ -61,14 +63,14 @@ class KeycloakUserChainTest {
         }
     }
 
-    /** Customizer를 붙인 체인: 로그인·CORS·CSRF는 불렸는지 적고, 로그아웃 뒤 응답은 204로 바꾼다. */
+    /** Customizer를 붙인 체인: 로그인·CORS·CSRF는 불렸는지 적고, 로그아웃 뒤 응답은 204로 바꾼다. 같은 이름이라 기본 체인 대신 쓰인다. */
     @Configuration(proxyBeanMethods = false)
     @EnableWebSecurity
     static class CustomizedChain {
 
         static final List<String> CALLED = new CopyOnWriteArrayList<>();
 
-        @Bean
+        @Bean(name = "keycloakSecurityFilterChain")
         SecurityFilterChain api(HttpSecurity http) throws Exception {
             return http
                 .authorizeHttpRequests(a -> a.anyRequest().authenticated())
@@ -78,6 +80,31 @@ class KeycloakUserChainTest {
                     .csrf(c -> CALLED.add("csrf"))
                     .logout(l -> l.logoutSuccessHandler((request, response, authentication) -> response.setStatus(204))),
                     Customizer.withDefaults())
+                .build();
+        }
+    }
+
+    /** 운영 주소만 따로 여는 체인 (라이브러리 설정기 없음). v2 1.5.0 fail-open을 다시 만드는 흔한 모양. */
+    @Configuration(proxyBeanMethods = false)
+    @EnableWebSecurity
+    static class ActuatorChain {
+
+        @Bean
+        @Order(0)
+        SecurityFilterChain actuator(HttpSecurity http) throws Exception {
+            return http.securityMatcher("/actuator/**").authorizeHttpRequests(a -> a.anyRequest().permitAll()).build();
+        }
+    }
+
+    /** 모든 주소를 받는 앱 체인 (다른 이름). */
+    @Configuration(proxyBeanMethods = false)
+    @EnableWebSecurity
+    static class CatchAllChain {
+
+        @Bean
+        SecurityFilterChain app(HttpSecurity http) throws Exception {
+            return http.authorizeHttpRequests(a -> a.anyRequest().authenticated())
+                .with(KeycloakHttpConfigurer.keycloak(), Customizer.withDefaults())
                 .build();
         }
     }
@@ -134,13 +161,58 @@ class KeycloakUserChainTest {
     }
 
     @Test
-    @DisplayName("EXT-02 사용자 체인만 남는다 (기본 keycloakSecurityFilterChain 없음)")
-    void defaultChainBacksOff() {
+    @DisplayName("EXT-02 앱 체인이 일부 주소만 받으면 기본 체인은 맨 뒤에 남아 나머지 주소를 지킨다")
+    void defaultChainStaysBehindPartialUserChain() {
         runner.run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.containsBean("keycloakSecurityFilterChain")).isTrue();
+            FilterChainProxy chain = context.getBean("springSecurityFilterChain", FilterChainProxy.class);
+            assertThat(chain.getFilterChains()).hasSize(2);
+            assertThat(chain.getFilterChains().get(1)).isSameAs(context.getBean("keycloakSecurityFilterChain"));
+            assertThat(KeycloakCsrfCorsTest.send(chain, request("GET", "/reports/1")).getStatus()).as("앱 체인 밖 주소").isEqualTo(401);
+        });
+    }
+
+    @Test
+    @DisplayName("EXT-06 앱이 운영 주소 체인(/actuator/**)만 더해도 기본 체인이 빠지지 않아 나머지 주소는 로그인 없이 열리지 않는다 (v2 1.5.0 fail-open 재발 방지)")
+    void actuatorChainDoesNotOpenTheRest() {
+        KeycloakSecurityAutoConfigurationTest
+            .baseRunner(KeycloakSecurityAutoConfigurationTest.registration(KeycloakSecurityAutoConfigurationTest.ISSUER))
+            .withPropertyValues("keycloak.security.session.store=memory")
+            .withUserConfiguration(ActuatorChain.class)
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                FilterChainProxy chain = context.getBean("springSecurityFilterChain", FilterChainProxy.class);
+                assertThat(chain.getFilterChains()).hasSize(2);
+                assertThat(KeycloakCsrfCorsTest.send(chain, request("GET", "/actuator/health")).getStatus()).isEqualTo(201);
+                assertThat(KeycloakCsrfCorsTest.send(chain, request("GET", "/api/me")).getStatus()).isEqualTo(401);
+                assertThat(KeycloakCsrfCorsTest.send(chain, request("POST", "/api/items")).getStatus()).isIn(401, 403);
+            });
+    }
+
+    @Test
+    @DisplayName("EXT-06 기본 체인은 keycloak.security.auto-filter-chain=false일 때만 빠진다")
+    void autoFilterChainOff() {
+        runner.withPropertyValues("keycloak.security.auto-filter-chain=false").run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context.containsBean("keycloakSecurityFilterChain")).isFalse();
             assertThat(context.getBean("springSecurityFilterChain", FilterChainProxy.class).getFilterChains()).hasSize(1);
         });
+    }
+
+    @Test
+    @DisplayName("EXT-06 앱도 모든 주소를 받는 체인을 다른 이름으로 올리면 기동하지 않는다 (같은 이름으로 바꾸거나 auto-filter-chain=false)")
+    void twoCatchAllChainsStopStartup() {
+        KeycloakSecurityAutoConfigurationTest
+            .baseRunner(KeycloakSecurityAutoConfigurationTest.registration(KeycloakSecurityAutoConfigurationTest.ISSUER))
+            .withPropertyValues("keycloak.security.session.store=memory")
+            .withUserConfiguration(CatchAllChain.class)
+            .run(context -> assertThat(context).getFailure().rootCause().hasMessageContaining("any request"));
+        KeycloakSecurityAutoConfigurationTest
+            .baseRunner(KeycloakSecurityAutoConfigurationTest.registration(KeycloakSecurityAutoConfigurationTest.ISSUER))
+            .withPropertyValues("keycloak.security.session.store=memory", "keycloak.security.auto-filter-chain=false")
+            .withUserConfiguration(CatchAllChain.class)
+            .run(context -> assertThat(context).hasNotFailed());
     }
 
     @Test
@@ -204,6 +276,7 @@ class KeycloakUserChainTest {
             .withBean(KeycloakTokenClient.class, () -> tokenClient)
             .run(context -> {
                 assertThat(context).hasNotFailed();
+                assertThat(context.getBean("springSecurityFilterChain", FilterChainProxy.class).getFilterChains()).as("같은 이름이라 기본 체인 대신").hasSize(1);
                 assertThat(CustomizedChain.CALLED).containsExactlyInAnyOrder("login", "cors", "csrf");
                 FilterChainProxy chain = context.getBean("springSecurityFilterChain", FilterChainProxy.class);
 

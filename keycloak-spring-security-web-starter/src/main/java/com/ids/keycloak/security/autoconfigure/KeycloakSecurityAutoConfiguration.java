@@ -24,6 +24,8 @@ import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitializat
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -419,15 +421,22 @@ public class KeycloakSecurityAutoConfiguration {
 
     /**
      * 기본 보안 체인: {@code permit-all-paths}와 {@code /error}는 허용, 나머지는 로그인 필요, Keycloak 로그인.
-     * 앱이 {@link SecurityFilterChain}을 올리면 빠진다. 그때는 앱 체인에 {@link KeycloakHttpConfigurer}를 붙인다.
+     * <p>
+     * 모든 주소를 받는 체인이라 맨 뒤({@link Ordered#LOWEST_PRECEDENCE})에 둔다. 앱이 다른 {@link SecurityFilterChain}(예:
+     * {@code securityMatcher("/actuator/**")})을 더해도 빠지지 않고, 그 체인이 받지 않는 주소를 모두 지킨다. 타입으로 빠지게 하면 앱이
+     * 체인 하나만 더해도 나머지 주소가 로그인 없이 열린다(v2 1.5.0에서 고친 fail-open). 기본 체인을 바꾸려면 같은 이름의 빈을 올리거나
+     * {@code keycloak.security.auto-filter-chain=false}로 끄고 앱 체인에 {@link KeycloakHttpConfigurer}를 붙인다. 앱도 모든 주소를 받는
+     * 체인을 올리면 Spring Security가 기동을 멈춘다(두 체인 가운데 하나는 닿지 않음).
      * Boot의 보안 자동 설정을 빼도 돌도록 {@code @EnableWebSecurity}를 같이 둔다.
      */
     @Configuration(proxyBeanMethods = false)
-    @ConditionalOnMissingBean(SecurityFilterChain.class)
+    @ConditionalOnMissingBean(name = "keycloakSecurityFilterChain")
+    @ConditionalOnBooleanProperty(name = KeycloakSecuritySettings.PREFIX + ".auto-filter-chain", matchIfMissing = true)
     @EnableWebSecurity
     static class KeycloakSecurityFilterChainConfiguration {
 
         @Bean(name = "keycloakSecurityFilterChain")
+        @Order(Ordered.LOWEST_PRECEDENCE)
         SecurityFilterChain keycloakSecurityFilterChain(HttpSecurity http, KeycloakSecuritySettings settings) throws Exception {
             http.authorizeHttpRequests(a -> {
                 a.requestMatchers("/error").permitAll();

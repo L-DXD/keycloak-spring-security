@@ -47,6 +47,12 @@ public class KeycloakSecurityProperties {
     private List<String> permitAllPaths = new ArrayList<>();
 
     /**
+     * 기본 보안 체인({@code keycloakSecurityFilterChain})을 올리는가. 앱이 다른 체인(예: /actuator)을 더해도 기본 체인은
+     * 남아 나머지 주소를 지킨다. 앱이 모든 주소를 자기 체인으로 지킬 때만 끈다. 같은 이름의 빈을 올려도 기본 체인 대신 그것을 쓴다.
+     */
+    private boolean autoFilterChain = true;
+
+    /**
      * 검사를 마친 설정으로 바꾼다.
      *
      * @param clientId OAuth2 등록의 client id. 앱 이름과 aud 기본값으로 쓴다. 등록이 없으면 {@code null}
@@ -132,6 +138,14 @@ public class KeycloakSecurityProperties {
 
     public void setTrustedProxyCount(int trustedProxyCount) {
         this.trustedProxyCount = trustedProxyCount;
+    }
+
+    public boolean isAutoFilterChain() {
+        return autoFilterChain;
+    }
+
+    public void setAutoFilterChain(boolean autoFilterChain) {
+        this.autoFilterChain = autoFilterChain;
     }
 
     public List<String> getPermitAllPaths() {
