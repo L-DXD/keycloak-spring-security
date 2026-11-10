@@ -1,11 +1,13 @@
 package com.ids.keycloak.security.autoconfigure;
 
+import java.net.URI;
 import java.time.Clock;
 import java.util.Locale;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.LazyInitializationExcludeFilter;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBooleanProperty;
@@ -21,13 +23,19 @@ import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 
 import com.ids.keycloak.security.KeycloakSecurityVersion;
+import com.ids.keycloak.security.config.KeycloakProvider;
 import com.ids.keycloak.security.config.KeycloakSecuritySettings;
 import com.ids.keycloak.security.config.SessionStoreType;
+import com.ids.keycloak.security.token.DefaultKeycloakAccessTokenValidator;
+import com.ids.keycloak.security.token.JwkSetFetcher;
+import com.ids.keycloak.security.token.KeycloakAccessTokenValidator;
+import com.ids.keycloak.security.token.KeycloakJwkSource;
+import com.ids.keycloak.security.token.NimbusJwkSetFetcher;
 
 /**
  * Servlet 앱 자동 설정 (v3). 모든 빈은 {@code @ConditionalOnMissingBean}이라 같은 빈을 올리면 그것을 쓴다.
  * <p>
- * 이 판(#79)은 설정 검사와 기동 로그만 한다. 세션 저장소, 토큰 검증, 로그인·로그아웃 빈은 이슈마다 여기에 더한다.
+ * 지금 올리는 것: 설정 검사·기동 로그(#79), 액세스 토큰 로컬 검증(#80). 세션 저장소, 로그인·로그아웃 빈은 이슈마다 여기에 더한다.
  * Boot의 기본 보안 체인보다 먼저 돈다.
  */
 @AutoConfiguration(
@@ -64,10 +72,53 @@ public class KeycloakSecurityAutoConfiguration {
             if (ClientAuthenticationMethod.NONE.equals(registration.getClientAuthenticationMethod())) {
                 builder.problem(registrationProperty + ".client-secret", "비공개 client여야 합니다 (client-secret이 필요합니다)");
             }
+            String providerProperty = "spring.security.oauth2.client.provider." + registrationId;
+            ClientRegistration.ProviderDetails provider = registration.getProviderDetails();
+            if (isBlank(provider.getIssuerUri())) {
+                builder.problem(providerProperty + ".issuer-uri", "필수입니다 (토큰 iss 검사). 예: https://sso.example.com/realms/demo");
+            }
+            if (isBlank(provider.getJwkSetUri())) {
+                builder.problem(providerProperty + ".jwk-set-uri", "서명 키 주소가 없습니다 (issuer-uri를 주면 저절로 채워집니다)");
+            }
+            if (isBlank(provider.getTokenUri())) {
+                builder.problem(providerProperty + ".token-uri", "토큰 주소가 없습니다 (issuer-uri를 주면 저절로 채워집니다)");
+            }
         }
         KeycloakSecuritySettings settings = builder.build();
         logStartup(settings, registration);
         return settings;
+    }
+
+    /** 붙을 Keycloak realm과 client. 설정 검사를 마친 뒤 OAuth2 등록에서 만든다. */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakProvider keycloakProvider(KeycloakSecuritySettings settings, ClientRegistrationRepository registrations) {
+        ClientRegistration registration = findRegistration(registrations, settings.registrationId());
+        if (registration == null) {
+            throw new IllegalStateException("OAuth2 Client 등록이 없습니다: " + settings.registrationId());
+        }
+        ClientRegistration.ProviderDetails provider = registration.getProviderDetails();
+        Object endSession = provider.getConfigurationMetadata().get("end_session_endpoint");
+        return new KeycloakProvider(registration.getRegistrationId(), registration.getClientId(), provider.getIssuerUri(),
+            URI.create(provider.getJwkSetUri()), URI.create(provider.getTokenUri()),
+            endSession == null ? null : URI.create(endSession.toString()));
+    }
+
+    /** JWKS 받기. 프록시·타임아웃을 바꾸려면 이 빈을 바꾼다. */
+    @Bean
+    @ConditionalOnMissingBean
+    public JwkSetFetcher keycloakJwkSetFetcher(KeycloakProvider provider) {
+        return new NimbusJwkSetFetcher(provider.jwkSetUri());
+    }
+
+    /** 액세스 토큰 로컬 검증 (JWT-01~08). Keycloak을 부르지 않는다. */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakAccessTokenValidator keycloakAccessTokenValidator(KeycloakSecuritySettings settings, KeycloakProvider provider,
+                                                                     JwkSetFetcher jwkSetFetcher,
+                                                                     @Qualifier("keycloakSecurityClock") Clock clock) {
+        return new DefaultKeycloakAccessTokenValidator(new KeycloakJwkSource(jwkSetFetcher, clock), provider.issuer(),
+            provider.clientId(), settings.requiredAudience(), settings.clockSkew(), clock);
     }
 
     /** 설정 검사를 지연 초기화에서 뺀다. */
@@ -88,6 +139,10 @@ public class KeycloakSecurityAutoConfiguration {
             return null;
         }
         return repository.findByRegistrationId(registrationId);
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.isBlank();
     }
 
     /** CONF-01·05: 기동 로그. 비밀값(키, client secret)은 찍지 않는다. */

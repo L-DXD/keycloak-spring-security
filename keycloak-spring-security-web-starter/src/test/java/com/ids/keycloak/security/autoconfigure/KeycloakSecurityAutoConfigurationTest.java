@@ -20,10 +20,20 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.oauth2.client.registration.ClientRegistration;
+import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.client.registration.InMemoryClientRegistrationRepository;
+import org.springframework.security.oauth2.core.AuthorizationGrantType;
 
+import com.ids.keycloak.security.config.KeycloakProvider;
 import com.ids.keycloak.security.config.KeycloakSecurityConfigurationException;
 import com.ids.keycloak.security.config.KeycloakSecuritySettings;
 import com.ids.keycloak.security.config.SessionStoreType;
+import com.ids.keycloak.security.token.AccessTokenValidationResult;
+import com.ids.keycloak.security.token.DefaultKeycloakAccessTokenValidator;
+import com.ids.keycloak.security.token.JwkSetFetcher;
+import com.ids.keycloak.security.token.KeycloakAccessTokenValidator;
+import com.ids.keycloak.security.token.NimbusJwkSetFetcher;
 
 /**
  * V3-03 설정과 기동 검사 (CONF-01~05).
@@ -34,20 +44,35 @@ class KeycloakSecurityAutoConfigurationTest {
     static final String KEY = Base64.getEncoder().encodeToString("kss-test-key-0123456789abcdefghi".getBytes());
     static final String CLIENT_SECRET = "demo-client-secret-value";
 
-    final WebApplicationContextRunner runner = new WebApplicationContextRunner()
-        .withConfiguration(AutoConfigurations.of(OAuth2ClientAutoConfiguration.class, KeycloakSecurityAutoConfiguration.class))
-        .withPropertyValues(
-            "spring.security.oauth2.client.registration.keycloak.client-id=demo",
-            "spring.security.oauth2.client.registration.keycloak.client-secret=" + CLIENT_SECRET,
-            "spring.security.oauth2.client.registration.keycloak.authorization-grant-type=authorization_code",
-                "spring.security.oauth2.client.registration.keycloak.redirect-uri={baseUrl}/login/oauth2/code/{registrationId}",
-            "spring.security.oauth2.client.registration.keycloak.scope=openid",
-            "spring.security.oauth2.client.provider.keycloak.authorization-uri=https://sso.example.com/realms/demo/protocol/openid-connect/auth",
-            "spring.security.oauth2.client.provider.keycloak.token-uri=https://sso.example.com/realms/demo/protocol/openid-connect/token",
-            "spring.security.oauth2.client.provider.keycloak.jwk-set-uri=https://sso.example.com/realms/demo/protocol/openid-connect/certs",
-            "keycloak.security.frontend.base-url=https://app.example.com",
-            "keycloak.security.crypto.active-key-id=k1",
-            "keycloak.security.crypto.keys.k1=" + KEY);
+    static final String ISSUER = "https://sso.example.com/realms/demo";
+
+    /** Keycloak 등록. issuer-uri로 설명 문서를 받는 대신 주소를 직접 넣는다 (테스트에서 네트워크를 쓰지 않으려고). */
+    static ClientRegistration registration(String issuer) {
+        return ClientRegistration.withRegistrationId("keycloak")
+            .clientId("demo")
+            .clientSecret(CLIENT_SECRET)
+            .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
+            .redirectUri("{baseUrl}/login/oauth2/code/{registrationId}")
+            .scope("openid")
+            .authorizationUri(ISSUER + "/protocol/openid-connect/auth")
+            .tokenUri(ISSUER + "/protocol/openid-connect/token")
+            .jwkSetUri(ISSUER + "/protocol/openid-connect/certs")
+            .issuerUri(issuer)
+            .providerConfigurationMetadata(Map.of("end_session_endpoint", ISSUER + "/protocol/openid-connect/logout"))
+            .build();
+    }
+
+    static WebApplicationContextRunner runnerWith(ClientRegistration registration) {
+        return new WebApplicationContextRunner()
+            .withConfiguration(AutoConfigurations.of(OAuth2ClientAutoConfiguration.class, KeycloakSecurityAutoConfiguration.class))
+            .withBean(ClientRegistrationRepository.class, () -> new InMemoryClientRegistrationRepository(registration))
+            .withPropertyValues(
+                "keycloak.security.frontend.base-url=https://app.example.com",
+                "keycloak.security.crypto.active-key-id=k1",
+                "keycloak.security.crypto.keys.k1=" + KEY);
+    }
+
+    final WebApplicationContextRunner runner = runnerWith(registration(ISSUER));
 
     @Test
     @DisplayName("CONF-01 필수 설정이 모두 있으면 기동하고, 기동 로그에 v3·세션 저장소·앱 이름·화면 주소가 찍힌다 (비밀값 없음)")
@@ -86,14 +111,8 @@ class KeycloakSecurityAutoConfigurationTest {
     void failsWithoutKeys() {
         new WebApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(OAuth2ClientAutoConfiguration.class, KeycloakSecurityAutoConfiguration.class))
-            .withPropertyValues(
-                "spring.security.oauth2.client.registration.keycloak.client-id=demo",
-                "spring.security.oauth2.client.registration.keycloak.client-secret=" + CLIENT_SECRET,
-                "spring.security.oauth2.client.registration.keycloak.authorization-grant-type=authorization_code",
-                "spring.security.oauth2.client.registration.keycloak.redirect-uri={baseUrl}/login/oauth2/code/{registrationId}",
-                "spring.security.oauth2.client.provider.keycloak.authorization-uri=https://sso.example.com/auth",
-                "spring.security.oauth2.client.provider.keycloak.token-uri=https://sso.example.com/token",
-                "keycloak.security.frontend.base-url=https://app.example.com")
+            .withBean(ClientRegistrationRepository.class, () -> new InMemoryClientRegistrationRepository(registration(ISSUER)))
+            .withPropertyValues("keycloak.security.frontend.base-url=https://app.example.com")
             .run(context -> assertThat(context.getStartupFailure())
                 .rootCause()
                 .hasMessageContaining("keycloak.security.crypto.keys")
@@ -144,6 +163,44 @@ class KeycloakSecurityAutoConfigurationTest {
             .run(context -> assertThat(context.getStartupFailure())
                 .rootCause()
                 .hasMessageContaining("spring.security.oauth2.client.registration.keycloak"));
+    }
+
+    @Test
+    @DisplayName("issuer-uri가 없으면 기동이 실패하고, 설정 이름이 오류에 나온다 (토큰 iss 검사에 필요)")
+    void failsWithoutIssuer() {
+        runnerWith(registration(null))
+            .run(context -> assertThat(context.getStartupFailure())
+                .rootCause()
+                .hasMessageContaining("spring.security.oauth2.client.provider.keycloak.issuer-uri"));
+    }
+
+    @Test
+    @DisplayName("V3-04 액세스 토큰 검증기와 Keycloak 정보가 올라간다")
+    void accessTokenValidator() {
+        runner.run(context -> {
+            assertThat(context).hasSingleBean(KeycloakAccessTokenValidator.class);
+            assertThat(context.getBean(KeycloakAccessTokenValidator.class)).isInstanceOf(DefaultKeycloakAccessTokenValidator.class);
+            KeycloakProvider provider = context.getBean(KeycloakProvider.class);
+            assertThat(provider.issuer()).isEqualTo(ISSUER);
+            assertThat(provider.clientId()).isEqualTo("demo");
+            assertThat(provider.jwkSetUri()).hasToString(ISSUER + "/protocol/openid-connect/certs");
+            assertThat(provider.endSessionEndpoint()).hasToString(ISSUER + "/protocol/openid-connect/logout");
+            assertThat(context.getBean(JwkSetFetcher.class)).isInstanceOf(NimbusJwkSetFetcher.class);
+        });
+    }
+
+    @Test
+    @DisplayName("V3-04 사용자가 검증기·JWKS 받기를 올리면 그것을 쓴다")
+    void userValidatorWins() {
+        KeycloakAccessTokenValidator custom = token -> AccessTokenValidationResult.invalid("custom");
+        JwkSetFetcher fetcher = () -> "{\"keys\":[]}";
+
+        runner.withBean(KeycloakAccessTokenValidator.class, () -> custom)
+            .withBean(JwkSetFetcher.class, () -> fetcher)
+            .run(context -> {
+                assertThat(context.getBean(KeycloakAccessTokenValidator.class)).isSameAs(custom);
+                assertThat(context.getBean(JwkSetFetcher.class)).isSameAs(fetcher);
+            });
     }
 
     @Test
