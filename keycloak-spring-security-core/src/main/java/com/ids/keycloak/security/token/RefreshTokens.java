@@ -13,7 +13,7 @@ import com.nimbusds.jwt.JWTParser;
  * 서명은 확인하지 않는다: 이 값은 앱이 Keycloak 토큰 주소에서 TLS로 직접 받은 것이고, 만료 시각을 행에 적는 데만 쓴다.
  * JWT가 아니거나 exp가 없으면(오프라인 토큰 등) 빈 값.
  */
-public final class RefreshTokens {
+public class RefreshTokens {
 
     private RefreshTokens() {
     }

@@ -3,7 +3,7 @@ package com.ids.keycloak.security.token;
 /**
  * 토큰 검증 오류 코드 (OAuth2Error code).
  */
-public final class KeycloakTokenErrors {
+public class KeycloakTokenErrors {
 
     /** 만료만 걸림. 갱신 대상. */
     public static final String EXPIRED = "kss_token_expired";

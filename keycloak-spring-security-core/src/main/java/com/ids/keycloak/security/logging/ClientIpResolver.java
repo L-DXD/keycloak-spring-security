@@ -14,7 +14,7 @@ import java.util.regex.Pattern;
  * 위조를 막으려고 TCP 주소를 쓴다. {@code -1}은 v2 호환으로 첫 값을 그대로 믿는다(권하지 않음. 시작할 때 경고).
  * IP에 쓰지 않는 글자가 있거나 너무 길면 {@code unknown}으로 남긴다(로그 끼워 넣기 방지).
  */
-public final class ClientIpResolver {
+public class ClientIpResolver {
 
     /** IPv4, IPv6(대괄호·zone 포함), 포트. 그 밖의 글자는 받지 않는다. */
     private static final Pattern IP = Pattern.compile("[0-9A-Za-z.:%\\[\\]_-]{1,64}");

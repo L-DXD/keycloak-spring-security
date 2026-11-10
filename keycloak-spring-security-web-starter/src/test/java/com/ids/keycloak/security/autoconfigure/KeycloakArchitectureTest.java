@@ -30,7 +30,7 @@ class KeycloakArchitectureTest {
                 || k.getModifiers().contains(JavaModifier.PROTECTED)));
 
     @Test
-    @DisplayName("EXT-03 공개 클래스에 final이 없다. 예외는 record·enum과 생성자를 막은 정적 도구 클래스(sid 해시·HKDF 등)뿐")
+    @DisplayName("EXT-03 공개 클래스에 final이 없다. 예외는 record·enum과 암호 도구(sid 해시 SessionIds, HKDF)뿐")
     void noFinalPublicClasses() {
         assertThat(ALL.stream().map(JavaClass::getPackageName).distinct())
             .as("core·web·starter를 모두 읽었다")
@@ -44,7 +44,6 @@ class KeycloakArchitectureTest {
             .filter(c -> c.getModifiers().contains(JavaModifier.PUBLIC) && c.getModifiers().contains(JavaModifier.FINAL))
             .filter(c -> !c.isRecord() && !c.isEnum())
             .map(JavaClass::getSimpleName).sorted().toList();
-        assertThat(finalClasses).as("final인 공개 클래스(모두 정적 도구)")
-            .containsExactly("ClientIpResolver", "Hkdf", "KeycloakTokenErrors", "RefreshTokens", "SessionIds");
+        assertThat(finalClasses).as("final인 공개 클래스는 암호 도구뿐 (01 설계 1절 컨셉 3)").containsExactly("Hkdf", "SessionIds");
     }
 }

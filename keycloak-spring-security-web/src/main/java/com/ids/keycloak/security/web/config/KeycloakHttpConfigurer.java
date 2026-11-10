@@ -2,8 +2,15 @@ package com.ids.keycloak.security.web.config;
 
 import org.springframework.context.ApplicationContext;
 import org.springframework.http.HttpMethod;
+import java.util.Objects;
+
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.config.annotation.web.configurers.CorsConfigurer;
+import org.springframework.security.config.annotation.web.configurers.CsrfConfigurer;
+import org.springframework.security.config.annotation.web.configurers.LogoutConfigurer;
+import org.springframework.security.config.annotation.web.configurers.oauth2.client.OAuth2LoginConfigurer;
 import org.springframework.security.oauth2.client.oidc.userinfo.OidcUserService;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.web.DefaultOAuth2AuthorizationRequestResolver;
@@ -72,6 +79,15 @@ import com.ids.keycloak.security.web.refresh.KeycloakRefreshService;
  *   <li>폼 로그인, Basic 인증을 끈다</li>
  * </ul>
  * 빈은 애플리케이션 컨텍스트에서 타입으로 찾는다. 스타터가 모두 올린다.
+ * <p>
+ * 부분마다 {@link Customizer}를 받아 라이브러리 설정 <b>뒤에</b> 부른다(같은 값을 주면 사용자 것이 이긴다).
+ * <pre>
+ * .with(KeycloakHttpConfigurer.keycloak()
+ *         .csrf(c -&gt; c.ignoringRequestMatchers("/api/webhooks/**"))
+ *         .logout(l -&gt; l.addLogoutHandler(appCacheEvictor)),
+ *     Customizer.withDefaults())
+ * </pre>
+ * 쿠키는 체인 밖의 빈(로그인 성공·갱신·로그아웃 처리기)이 같이 쓰므로 {@code KeycloakCookieWriter} 빈으로 바꾼다.
  */
 public class KeycloakHttpConfigurer extends AbstractHttpConfigurer<KeycloakHttpConfigurer, HttpSecurity> {
 
@@ -84,9 +100,38 @@ public class KeycloakHttpConfigurer extends AbstractHttpConfigurer<KeycloakHttpC
     /** back-channel 로그아웃 주소 (Spring 기본). Keycloak 클라이언트의 Backchannel logout URL에 {@code /logout/connect/back-channel/keycloak}처럼 넣는다. */
     public static final String BACK_CHANNEL_LOGOUT_PATH = "/logout/connect/back-channel/{registrationId}";
 
+    private Customizer<OAuth2LoginConfigurer<HttpSecurity>> login = Customizer.withDefaults();
+    private Customizer<CsrfConfigurer<HttpSecurity>> csrf = Customizer.withDefaults();
+    private Customizer<CorsConfigurer<HttpSecurity>> cors = Customizer.withDefaults();
+    private Customizer<LogoutConfigurer<HttpSecurity>> logout = Customizer.withDefaults();
+
     /** 새 설정기. */
     public static KeycloakHttpConfigurer keycloak() {
         return new KeycloakHttpConfigurer();
+    }
+
+    /** 로그인({@code oauth2Login})을 라이브러리 설정 뒤에 고친다. 권한 요청 저장소·처리기를 바꾸면 라이브러리 로그인 흐름이 빠진다. */
+    public KeycloakHttpConfigurer login(Customizer<OAuth2LoginConfigurer<HttpSecurity>> customizer) {
+        this.login = Objects.requireNonNull(customizer, "customizer");
+        return this;
+    }
+
+    /** CSRF를 라이브러리 설정 뒤에 고친다. 예: 확인에서 뺄 주소 더하기. */
+    public KeycloakHttpConfigurer csrf(Customizer<CsrfConfigurer<HttpSecurity>> customizer) {
+        this.csrf = Objects.requireNonNull(customizer, "customizer");
+        return this;
+    }
+
+    /** CORS를 라이브러리 설정 뒤에 고친다. 허용 목록은 이름 {@value #CORS_CONFIGURATION_SOURCE_BEAN} 빈으로 바꾼다(Origin 확인도 그 목록을 쓴다). */
+    public KeycloakHttpConfigurer cors(Customizer<CorsConfigurer<HttpSecurity>> customizer) {
+        this.cors = Objects.requireNonNull(customizer, "customizer");
+        return this;
+    }
+
+    /** 로그아웃({@code POST /logout})을 라이브러리 설정 뒤에 고친다. 예: 앱 캐시를 비우는 처리기 더하기. */
+    public KeycloakHttpConfigurer logout(Customizer<LogoutConfigurer<HttpSecurity>> customizer) {
+        this.logout = Objects.requireNonNull(customizer, "customizer");
+        return this;
     }
 
     @Override
@@ -103,30 +148,39 @@ public class KeycloakHttpConfigurer extends AbstractHttpConfigurer<KeycloakHttpC
             .requestCache(r -> r.requestCache(new NullRequestCache()))
             .formLogin(AbstractHttpConfigurer::disable)
             .httpBasic(AbstractHttpConfigurer::disable)
-            .logout(l -> l
-                .logoutRequestMatcher(PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.POST, LOGOUT_PATH))
-                .addLogoutHandler(context.getBean(KeycloakLogoutHandler.class))
-                .logoutSuccessHandler(context.getBean(KeycloakLogoutSuccessHandler.class)))
-            .cors(c -> c.configurationSource(corsConfigurationSource(context)))
-            .csrf(c -> c
-                .csrfTokenRepository(context.getBean(CsrfTokenRepository.class))
-                .csrfTokenRequestHandler(csrfTokenRequestHandler())
-                // 로그인하면 로그인 처리기가 새 sid에 묶은 토큰을 쓴다. Spring의 "로그인 때 토큰 지우고 다시 만들기"는 쿠키를 두 번 쓰게 하므로 끈다
-                .sessionAuthenticationStrategy(new NullAuthenticatedSessionStrategy())
-                .ignoringRequestMatchers(serverCallbacks()))
+            .logout(l -> {
+                l.logoutRequestMatcher(PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.POST, LOGOUT_PATH))
+                    .addLogoutHandler(context.getBean(KeycloakLogoutHandler.class))
+                    .logoutSuccessHandler(context.getBean(KeycloakLogoutSuccessHandler.class));
+                logout.customize(l);
+            })
+            .cors(c -> {
+                c.configurationSource(corsConfigurationSource(context));
+                cors.customize(c);
+            })
+            .csrf(c -> {
+                c.csrfTokenRepository(context.getBean(CsrfTokenRepository.class))
+                    .csrfTokenRequestHandler(csrfTokenRequestHandler())
+                    // 로그인하면 로그인 처리기가 새 sid에 묶은 토큰을 쓴다. Spring의 "로그인 때 토큰 지우고 다시 만들기"는 쿠키를 두 번 쓰게 하므로 끈다
+                    .sessionAuthenticationStrategy(new NullAuthenticatedSessionStrategy())
+                    .ignoringRequestMatchers(serverCallbacks());
+                csrf.customize(c);
+            })
             .exceptionHandling(e -> e
                 .authenticationEntryPoint(context.getBean(KeycloakAuthenticationEntryPoint.class))
                 .accessDeniedHandler(context.getBean(KeycloakAccessDeniedHandler.class)))
             // back-channel 로그아웃: Spring이 logout_token을 검증하고, 처리기는 sid의 세션 행을 지운다 (CSRF 필터보다 앞)
             .oidcLogout(o -> o.backChannel(b -> b.logoutHandler(context.getBean(KeycloakBackChannelLogoutHandler.class))))
-            .oauth2Login(login -> login
-                .authorizationEndpoint(a -> a
-                    .authorizationRequestRepository(context.getBean(KeycloakAuthorizationRequestRepository.class))
-                    .authorizationRequestResolver(authorizationRequestResolver(context)))
-                .authorizedClientRepository(new KeycloakLoginAuthorizedClientRepository())
-                .userInfoEndpoint(u -> u.oidcUserService(oidcUserService()))
-                .successHandler(context.getBean(KeycloakLoginSuccessHandler.class))
-                .failureHandler(context.getBean(KeycloakLoginFailureHandler.class)));
+            .oauth2Login(o -> {
+                o.authorizationEndpoint(a -> a
+                        .authorizationRequestRepository(context.getBean(KeycloakAuthorizationRequestRepository.class))
+                        .authorizationRequestResolver(authorizationRequestResolver(context)))
+                    .authorizedClientRepository(new KeycloakLoginAuthorizedClientRepository())
+                    .userInfoEndpoint(u -> u.oidcUserService(oidcUserService()))
+                    .successHandler(context.getBean(KeycloakLoginSuccessHandler.class))
+                    .failureHandler(context.getBean(KeycloakLoginFailureHandler.class));
+                login.customize(o);
+            });
     }
 
     @Override

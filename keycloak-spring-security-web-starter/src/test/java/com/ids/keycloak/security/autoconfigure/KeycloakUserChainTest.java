@@ -61,6 +61,27 @@ class KeycloakUserChainTest {
         }
     }
 
+    /** Customizer를 붙인 체인: 로그인·CORS·CSRF는 불렸는지 적고, 로그아웃 뒤 응답은 204로 바꾼다. */
+    @Configuration(proxyBeanMethods = false)
+    @EnableWebSecurity
+    static class CustomizedChain {
+
+        static final List<String> CALLED = new CopyOnWriteArrayList<>();
+
+        @Bean
+        SecurityFilterChain api(HttpSecurity http) throws Exception {
+            return http
+                .authorizeHttpRequests(a -> a.anyRequest().authenticated())
+                .with(KeycloakHttpConfigurer.keycloak()
+                    .login(l -> CALLED.add("login"))
+                    .cors(c -> CALLED.add("cors"))
+                    .csrf(c -> CALLED.add("csrf"))
+                    .logout(l -> l.logoutSuccessHandler((request, response, authentication) -> response.setStatus(204))),
+                    Customizer.withDefaults())
+                .build();
+        }
+    }
+
     /** 가짜 Keycloak 토큰 주소: 갱신하면 eyJ.at2·rt-2를 준다. 받은 리프레시 토큰을 적어 둔다. */
     static final class FakeTokenClient implements KeycloakTokenClient {
         final List<String> refreshed = new CopyOnWriteArrayList<>();
@@ -170,5 +191,41 @@ class KeycloakUserChainTest {
             assertThat(tokenClient.loggedOut).as("갱신으로 바뀐 리프레시 토큰으로 Keycloak 로그아웃").containsExactly("rt-2");
             assertThat(logout.getHeaders("Set-Cookie")).anyMatch(h -> h.startsWith("__Host-demo_sid=;") && h.contains("Max-Age=0"));
         });
+    }
+
+    @Test
+    @DisplayName("EXT-02 설정기의 Customizer(login·csrf·cors·logout)는 라이브러리 설정 뒤에 불려 사용자 값이 이긴다. 라이브러리 처리기는 그대로 돈다")
+    void customizers() {
+        CustomizedChain.CALLED.clear();
+        KeycloakSecurityAutoConfigurationTest
+            .baseRunner(KeycloakSecurityAutoConfigurationTest.registration(KeycloakSecurityAutoConfigurationTest.ISSUER))
+            .withPropertyValues("keycloak.security.session.store=memory")
+            .withUserConfiguration(CustomizedChain.class)
+            .withBean(KeycloakTokenClient.class, () -> tokenClient)
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(CustomizedChain.CALLED).containsExactlyInAnyOrder("login", "cors", "csrf");
+                FilterChainProxy chain = context.getBean("springSecurityFilterChain", FilterChainProxy.class);
+
+                KeycloakSessionStore store = context.getBean(KeycloakSessionStore.class);
+                String sid = SessionIds.newSid();
+                Instant now = Instant.now();
+                store.insert(new KeycloakSessionRecord(UUID.randomUUID(), SessionIds.hash(sid), "user-1", "kc-sid-1",
+                    context.getBean(TokenCipher.class).encrypt("rt-1"), now.plusSeconds(1800), now, now.plusSeconds(43200), null));
+                Cookie sidCookie = new Cookie("__Host-demo_sid", sid);
+                MockHttpServletResponse csrf = KeycloakCsrfCorsTest.send(chain, request("GET", "/api/csrf", sidCookie));
+                Matcher token = CSRF_TOKEN.matcher(csrf.getContentAsString());
+                assertThat(token.find()).isTrue();
+                MockHttpServletRequest logoutRequest = request("POST", "/logout", sidCookie,
+                    new Cookie("__Host-demo_csrf", setCookieValue(csrf, "__Host-demo_csrf")));
+                logoutRequest.addHeader("Origin", FRONTEND);
+                logoutRequest.addHeader("X-XSRF-TOKEN", token.group(1));
+
+                MockHttpServletResponse logout = KeycloakCsrfCorsTest.send(chain, logoutRequest);
+
+                assertThat(logout.getStatus()).as("사용자 로그아웃 뒤 처리기").isEqualTo(204);
+                assertThat(store.findBySidHash(SessionIds.hash(sid))).as("라이브러리 로그아웃 처리기는 그대로").isEmpty();
+                assertThat(tokenClient.loggedOut).containsExactly("rt-1");
+            });
     }
 }
