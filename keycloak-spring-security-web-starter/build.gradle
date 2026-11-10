@@ -25,3 +25,10 @@ dependencies {
     // EXT-03: 공개 클래스에 final이 없는지 (core·web·starter를 한 번에 본다)
     testImplementation "com.tngtech.archunit:archunit:${archunitVersion}"
 }
+
+// DOC-02·04: 사용 가이드와 옮기기 문서에 설정 키가 모두 있는지 테스트가 본다 (문서가 바뀌면 다시 돈다)
+tasks.named('test') {
+    def docs = rootProject.layout.projectDirectory.dir('docs')
+    inputs.dir(docs).withPropertyName('docs').withPathSensitivity(PathSensitivity.RELATIVE)
+    systemProperty 'kss.docs.dir', docs.asFile.absolutePath
+}

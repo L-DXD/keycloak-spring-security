@@ -17,8 +17,10 @@
 - Spring Boot 4.1.x 기준으로 다시 짠다. Spring Security 7.1.x, Spring Framework 7.0.x, Java 17 이상 ([#78](https://github.com/L-DXD/keycloak-spring-security/issues/78)).
 - 빌드: Gradle 9.9, configuration cache 켬. 배포 pom에 Boot BOM import를 넣지 않고 빌드 때 고른 판을 적는다 ([#78](https://github.com/L-DXD/keycloak-spring-security/issues/78)).
 - CI: Java 17·21에서 빌드하고, 다음 Boot 판(4.2.0-RC2)으로 미리 돌려 본다. 미리 보기는 실패해도 머지를 막지 않는다 ([#78](https://github.com/L-DXD/keycloak-spring-security/issues/78)).
+- 문서: README, 사용 가이드(`docs/GUIDE.md`·`.ko.md`)를 3.x 기준으로 새로 썼다. 2.x 문서는 `docs/v2/`로 옮겼다 ([#91](https://github.com/L-DXD/keycloak-spring-security/issues/91)).
 
 ### Added
+- v2 → v3 옮기기 문서(`docs/MIGRATION-v3.md`·`.ko.md`): 바뀐 설정 키, 빠진 기능과 대안, DB 스키마, Keycloak client 설정, 화면이 할 일. 사용 가이드와 옮기기 문서의 설정 키를 설정 메타데이터와 맞춰 보는 테스트(DOC-02·04)가 있어 키를 더하고 문서를 빠뜨리면 빌드가 실패한다 ([#91](https://github.com/L-DXD/keycloak-spring-security/issues/91)).
 - 확장 지점: 자동 설정의 모든 빈은 같은 타입(CORS·시계는 같은 이름)의 사용자 빈을 올리면 빠진다. 사용자 `SecurityFilterChain`에 `KeycloakHttpConfigurer.keycloak()`을 붙이면 그 체인에서 로그인·갱신·로그아웃이 그대로 된다. 기본 체인은 앱이 다른 체인(예: `/actuator/**`)을 더해도 맨 뒤에 남아 나머지 주소를 지키고, 같은 이름의 빈이나 `keycloak.security.auto-filter-chain=false`로만 빠진다(v2 1.5.0 fail-open 재발 방지). 설정기는 `login`·`csrf`·`cors`·`logout` `Customizer`를 라이브러리 설정 뒤에 부른다. 공개 클래스는 암호 도구(`SessionIds`·`Hkdf`) 말고는 `final`이 아니고, core는 Servlet·Spring Web을 모른다(ArchUnit) ([#90](https://github.com/L-DXD/keycloak-spring-security/issues/90)).
 - MDC 로깅: v2와 같은 키(`traceId`·`httpMethod`·`requestUri`·`clientIp`·`userAgent`·`userId`·`username`·`sessionId`, 켜면 `queryString`·`status`·`durationMs`)와 설정(`keycloak.security.logging.*`, `trusted-proxy-count`). 요청 필터는 보안 체인 맨 앞, 사용자 필터는 인가 앞. `X-Request-Id`·`X-Forwarded-For`의 이상한 값은 쓰지 않고, `username`도 값 가리기(`LoggingValueSanitizer`, 기본 `DefaultPiiMaskingSanitizer`)를 거친다. MDC 접근은 `LoggingContextAccessor` 빈으로 바꾼다 ([#89](https://github.com/L-DXD/keycloak-spring-security/issues/89)).
 - back-channel 로그아웃 `POST /logout/connect/back-channel/keycloak`: Spring Security의 back-channel 필터가 `logout_token`을 검증하고, `KeycloakBackChannelLogoutHandler`가 `sid`(`kc_sid`)의 세션 행을 지운다(사유 `backchannel_logout`). CSRF·Origin 확인은 거치지 않는다. 틀린 토큰과 `sid`가 없는 토큰은 400 ([#88](https://github.com/L-DXD/keycloak-spring-security/issues/88)).
@@ -39,6 +41,7 @@
 - 2.x 코드를 모두 걷어냈다. 기능은 v3 설계대로 #79~#91에서 새로 들어온다 ([#78](https://github.com/L-DXD/keycloak-spring-security/issues/78)).
 - WebFlux 모듈(`keycloak-spring-security-webflux`, `-webflux-starter`). 3.1.0에서 다시 넣는다 ([#92](https://github.com/L-DXD/keycloak-spring-security/issues/92)).
 - `keycloak-client` 의존. Lombok.
+- v2 설정 가운데 Basic 인증(`basic-auth.*`), Bearer·토큰 발급 API(`bearer-token.*`), Rate limit(`rate-limit.*`), Keycloak 인가(`authorization.*`), 역할 매핑(`role-mapping.*`), 정적 리소스(`static-resources.*`), 쿠키 속성(`cookie.*`), 오류 리다이렉트(`error.*`), `matcher.*`, Redis·HttpSession 세션, `KeycloakLoginService`. 대안은 [옮기기 문서](docs/MIGRATION-v3.ko.md) 3-2절.
 
 ## [2.0.3] - 2026-07-16
 ### Fixed
