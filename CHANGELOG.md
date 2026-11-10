@@ -18,6 +18,9 @@
 - 빌드: Gradle 9.9, configuration cache 켬. 배포 pom에 Boot BOM import를 넣지 않고 빌드 때 고른 판을 적는다 ([#78](https://github.com/L-DXD/keycloak-spring-security/issues/78)).
 - CI: Java 17·21에서 빌드하고, 다음 Boot 판(4.2.0-RC2)으로 미리 돌려 본다. 미리 보기는 실패해도 머지를 막지 않는다 ([#78](https://github.com/L-DXD/keycloak-spring-security/issues/78)).
 
+### Added
+- 검증 환경: 샘플 Spring Boot 앱(`integration-tests/servlet-app`)과 실제 Keycloak·PostgreSQL로 도는 E2E(`e2eTest`). Docker가 있으면 Testcontainers, 없으면 `start-local.sh` ([#77](https://github.com/L-DXD/keycloak-spring-security/issues/77)).
+
 ### Removed
 - 2.x 코드를 모두 걷어냈다. 기능은 v3 설계대로 #79~#91에서 새로 들어온다 ([#78](https://github.com/L-DXD/keycloak-spring-security/issues/78)).
 - WebFlux 모듈(`keycloak-spring-security-webflux`, `-webflux-starter`). 3.1.0에서 다시 넣는다 ([#92](https://github.com/L-DXD/keycloak-spring-security/issues/92)).

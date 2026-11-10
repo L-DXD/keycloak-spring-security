@@ -52,6 +52,40 @@ jobs:
           path: '**/build/reports/tests/'
           retention-days: 7
 
+  # E2E-01: 샘플 앱 + 실제 Keycloak + PostgreSQL (Testcontainers). docs/v3/03-검증-환경.md
+  e2e:
+    name: E2E (Keycloak ${{ matrix.keycloak }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        keycloak: ['26.8.2']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+
+      - name: E2E test
+        run: ./gradlew :integration-tests:servlet-app:e2eTest
+        env:
+          KSS_E2E_KEYCLOAK_VERSION: ${{ matrix.keycloak }}
+
+      - name: Upload E2E reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-reports-keycloak${{ matrix.keycloak }}
+          path: integration-tests/servlet-app/build/reports/tests/e2eTest/
+          retention-days: 14
+
   # BUILD-04: 다음 Boot 판으로 미리 돌려 본다. 실패해도 머지를 막지 않는다.
   boot-preview:
     name: Boot preview (${{ matrix.boot }})

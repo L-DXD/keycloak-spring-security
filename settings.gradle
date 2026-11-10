@@ -3,6 +3,10 @@ pluginManagement {
         gradlePluginPortal()
         mavenCentral()
     }
+    plugins {
+        // 샘플 앱(integration-tests)만 쓴다. 판은 gradle.properties의 springBootVersion을 따른다
+        id 'org.springframework.boot' version "${springBootVersion}"
+    }
 }
 
 rootProject.name = 'keycloak-spring-security'
@@ -11,5 +15,7 @@ include 'keycloak-spring-security-core'
 include 'keycloak-spring-security-web'
 include 'keycloak-spring-security-web-starter'
 
+// 샘플 앱 + 실제 Keycloak E2E (docs/v3/03-검증-환경.md, #77). 배포하지 않는다
+include 'integration-tests:servlet-app'
+
 // WebFlux 모듈은 3.1.0에서 다시 넣는다 (docs/v3/04-결정-기록.md D5, #92)
-// 샘플 앱과 E2E는 integration-tests에 둔다 (#77)

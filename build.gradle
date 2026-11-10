@@ -40,11 +40,14 @@ subprojects {
         }
 
         tasks.withType(Test).configureEach {
+            useJUnitPlatform()
+            systemProperty 'file.encoding', 'UTF-8'
+        }
+        // E2E는 e2eTest로 따로 돈다 (integration-tests/servlet-app, #77)
+        tasks.named('test', Test) {
             useJUnitPlatform {
-                // E2E는 따로 돈다 (integration-tests, #77)
                 excludeTags 'e2e'
             }
-            systemProperty 'file.encoding', 'UTF-8'
         }
 
         tasks.withType(Jar).configureEach {

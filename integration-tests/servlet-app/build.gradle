@@ -1,0 +1,77 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot'
+}
+
+description = 'v3 샘플 앱 (가상 프로젝트) + E2E. 배포하지 않는다 (docs/v3/03-검증-환경.md)'
+
+dependencies {
+    implementation project(':keycloak-spring-security-web-starter')
+    implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+    implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    implementation 'org.springframework.boot:spring-boot-starter-flyway'
+    runtimeOnly 'org.flywaydb:flyway-database-postgresql'
+    runtimeOnly 'org.postgresql:postgresql'
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.testcontainers:testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-postgresql'
+    testImplementation 'org.apache.httpcomponents.client5:httpclient5'
+}
+
+// 샘플 앱은 실행 jar를 만들지 않는다. bootRun으로만 띄운다
+tasks.named('bootJar') { enabled = false }
+
+def e2eDir = layout.buildDirectory.dir('e2e')
+def keycloakDir = rootProject.layout.projectDirectory.dir('integration-tests/keycloak')
+
+// 테스트 CA·서버 인증서 (integration-tests/keycloak/gen-test-certs.sh). start-local.sh와 같은 폴더를 쓴다
+def e2eCerts = tasks.register('e2eCerts', Exec) {
+    group = 'verification'
+    description = 'E2E용 테스트 CA와 api.kss.test 인증서를 만든다'
+    def out = e2eDir.map { it.dir('tls') }
+    inputs.file(keycloakDir.file('gen-test-certs.sh'))
+    outputs.dir(out)
+    commandLine 'bash', keycloakDir.file('gen-test-certs.sh').asFile.absolutePath, out.get().asFile.absolutePath
+}
+
+// *.kss.test를 테스트 JVM 안에서만 127.0.0.1로 푼다. /etc/hosts나 외부 DNS를 쓰지 않는다
+def e2eHosts = tasks.register('e2eHosts') {
+    def out = e2eDir.map { it.file('hosts') }
+    outputs.file(out)
+    outputs.upToDateWhen { false }
+    doLast {
+        def localName = InetAddress.localHost.hostName
+        out.get().asFile.text = "127.0.0.1 localhost ${localName} app.kss.test api.kss.test sso.kss.test\n::1 localhost\n"
+    }
+}
+
+// E2E-01·02: ./gradlew :integration-tests:servlet-app:e2eTest
+tasks.register('e2eTest', Test) {
+    group = 'verification'
+    description = 'E2E: 샘플 앱 + 실제 Keycloak + PostgreSQL. Docker가 없으면 KSS_E2E_KEYCLOAK_URL, KSS_E2E_DB_URL을 준다'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform {
+        includeTags 'e2e'
+        if (!providers.gradleProperty('includeSlow').isPresent()) {
+            excludeTags 'slow'
+        }
+    }
+    dependsOn e2eCerts, e2eHosts
+    def tls = e2eDir.map { it.dir('tls') }
+    def hosts = e2eDir.map { it.file('hosts') }
+    def realm = keycloakDir.file('realm-kss-demo.json')
+    inputs.file(realm)
+    jvmArgumentProviders.add({ [
+        "-Djdk.net.hosts.file=${hosts.get().asFile.absolutePath}".toString(),
+        "-Dkss.e2e.tls-dir=${tls.get().asFile.absolutePath}".toString(),
+        "-Dkss.e2e.realm-file=${realm.asFile.absolutePath}".toString(),
+    ] } as CommandLineArgumentProvider)
+    outputs.upToDateWhen { false }
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+        exceptionFormat = 'full'
+    }
+    shouldRunAfter tasks.named('test')
+}

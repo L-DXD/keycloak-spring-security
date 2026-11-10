@@ -46,6 +46,8 @@ out/
 *.yml
 *.yaml
 !.github/**/*.yml
+# 샘플 앱 설정은 테스트 값만 있어 저장소에 둔다
+!integration-tests/servlet-app/src/main/resources/application.yml
 
 # Postman
 postman/

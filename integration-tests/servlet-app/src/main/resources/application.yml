@@ -1,0 +1,52 @@
+# v3 샘플 앱 설정. 값은 E2E 하네스가 시스템 속성으로 준다 (KSS_* 환경 변수로도 줄 수 있다)
+# 주소: 앱 https://api.kss.test:8443 · 화면 https://app.kss.test · Keycloak ${kss.keycloak.url}
+spring:
+  application:
+    name: kss-sample
+  datasource:
+    url: ${kss.db.url:${KSS_DB_URL:jdbc:postgresql://localhost:5432/kss}}
+    username: ${kss.db.username:${KSS_DB_USERNAME:kss}}
+    password: ${kss.db.password:${KSS_DB_PASSWORD:kss}}
+  security:
+    oauth2:
+      client:
+        registration:
+          keycloak:
+            client-id: ${kss.client-id:demo}
+            client-secret: ${kss.client-secret:demo-test-secret}
+            scope: openid
+        provider:
+          keycloak:
+            issuer-uri: ${kss.keycloak.url:${KSS_KEYCLOAK_URL:http://sso.kss.test:8180}}/realms/kss-demo
+            user-name-attribute: preferred_username
+
+server:
+  port: ${kss.port:8443}
+  ssl:
+    enabled: true
+    key-store: file:${kss.tls-dir:${KSS_TLS_DIR:build/e2e/tls}}/server.p12
+    key-store-password: changeit
+    key-store-type: PKCS12
+    key-alias: server
+
+# 라이브러리 설정 (docs/v3/01-설계.md 6절). 기능이 들어오는 이슈마다 채운다
+keycloak:
+  security:
+    frontend:
+      base-url: https://app.kss.test
+      logout-success-path: /logged-out
+    cookie:
+      app-name: ${kss.client-id:demo}
+    permit-all-paths:
+      - /api/public/**
+      - /logged-out
+
+---
+spring:
+  config:
+    activate:
+      on-profile: demo2
+kss:
+  client-id: demo2
+  client-secret: demo2-test-secret
+  port: 8444
