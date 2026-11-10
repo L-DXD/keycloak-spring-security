@@ -19,6 +19,7 @@
 - CI: Java 17·21에서 빌드하고, 다음 Boot 판(4.2.0-RC2)으로 미리 돌려 본다. 미리 보기는 실패해도 머지를 막지 않는다 ([#78](https://github.com/L-DXD/keycloak-spring-security/issues/78)).
 
 ### Added
+- 설정 `keycloak.security.*`와 기동 검사: 필수 값·주소·키 길이를 기동 때 검사하고 잘못된 설정 이름을 모두 알려 준다. 기동 로그에 세션 저장소·앱 이름·화면 주소를 찍는다(비밀값 없음). `session.store=memory`면 경고 ([#79](https://github.com/L-DXD/keycloak-spring-security/issues/79)).
 - 검증 환경: 샘플 Spring Boot 앱(`integration-tests/servlet-app`)과 실제 Keycloak·PostgreSQL로 도는 E2E(`e2eTest`). Docker가 있으면 Testcontainers, 없으면 `start-local.sh` ([#77](https://github.com/L-DXD/keycloak-spring-security/issues/77)).
 
 ### Removed

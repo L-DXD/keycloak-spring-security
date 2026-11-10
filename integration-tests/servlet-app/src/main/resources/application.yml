@@ -40,6 +40,11 @@ keycloak:
     permit-all-paths:
       - /api/public/**
       - /logged-out
+    crypto:
+      active-key-id: e2e
+      keys:
+        # 테스트 값 (32바이트). 실제 앱은 비밀 저장소·환경 변수에서 넣는다: openssl rand -base64 32
+        e2e: ${KSS_KEY_E2E:a3NzLWUyZS10ZXN0LWtleS1ub3QtZm9yLXByb2QtMDE=}
 
 ---
 spring:
