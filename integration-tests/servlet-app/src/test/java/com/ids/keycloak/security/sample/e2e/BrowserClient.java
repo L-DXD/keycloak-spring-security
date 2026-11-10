@@ -214,6 +214,14 @@ public class BrowserClient implements AutoCloseable {
         jar.removeIf(c -> c.name().equals(name) && c.matchesHost(host));
     }
 
+    /** 쿠키 값만 바꾼다 (속성은 그대로). 토큰을 망가뜨리는 시나리오(REQ-04)에서 쓴다. */
+    public void replaceCookieValue(String host, String name, String value) {
+        StoredCookie old = cookie(host, name).orElseThrow(() -> new AssertionError(name + " 쿠키가 없다"));
+        jar.remove(old);
+        jar.add(new StoredCookie(old.name(), value, old.domain(), old.hostOnly(), old.path(), old.secure(), old.httpOnly(),
+            old.sameSite(), old.expiresAt(), old.raw()));
+    }
+
     public List<Exchange> history() {
         return Collections.unmodifiableList(history);
     }

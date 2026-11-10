@@ -34,6 +34,8 @@ import org.springframework.security.oauth2.core.AuthorizationGrantType;
 import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 
 import com.ids.keycloak.security.KeycloakSecurityVersion;
+import com.ids.keycloak.security.authentication.DefaultKeycloakPrincipalConverter;
+import com.ids.keycloak.security.authentication.KeycloakPrincipalConverter;
 import com.ids.keycloak.security.config.KeycloakProvider;
 import com.ids.keycloak.security.config.KeycloakSecurityConfigurationException;
 import com.ids.keycloak.security.config.KeycloakSecuritySettings;
@@ -65,6 +67,7 @@ import com.ids.keycloak.security.web.login.KeycloakAuthorizationRequestRepositor
 import com.ids.keycloak.security.web.login.KeycloakLoginFailureHandler;
 import com.ids.keycloak.security.web.login.KeycloakLoginSuccessHandler;
 import com.ids.keycloak.security.web.login.LoginReturnPathResolver;
+import com.ids.keycloak.security.web.logout.KeycloakLocalLogoutHandler;
 
 /**
  * Servlet 앱 자동 설정 (v3). 모든 빈은 {@code @ConditionalOnMissingBean}이라 같은 빈을 올리면 그것을 쓴다.
@@ -284,6 +287,22 @@ public class KeycloakSecurityAutoConfiguration {
     public KeycloakSessionCleaner keycloakSessionCleaner(KeycloakSessionStore store, KeycloakSessionEventPublisher events,
                                                          @Qualifier("keycloakSecurityClock") Clock clock, KeycloakSecuritySettings settings) {
         return new KeycloakSessionCleaner(store, events, clock, settings.cleanupInterval());
+    }
+
+    /** 검증을 통과한 액세스 토큰 → 인증 (요청 인증). 기본은 권한 없음. */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakPrincipalConverter keycloakPrincipalConverter() {
+        return new DefaultKeycloakPrincipalConverter();
+    }
+
+    /** 로컬 로그아웃 (행·쿠키 삭제, ENDED 이벤트). 토큰 검증 실패·갱신 실패에 쓴다. */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakLocalLogoutHandler keycloakLocalLogoutHandler(KeycloakSessionStore store, KeycloakCookieWriter cookies,
+                                                                 KeycloakSessionEventPublisher events,
+                                                                 @Qualifier("keycloakSecurityClock") Clock clock) {
+        return new KeycloakLocalLogoutHandler(store, cookies, events, clock);
     }
 
     /** 설정 검사, 세션 테이블 검사, 정리 작업을 지연 초기화에서 뺀다 (잘못되면 첫 요청이 아니라 기동 때 알도록). */

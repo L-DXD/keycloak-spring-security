@@ -19,6 +19,7 @@
 - CI: Java 17·21에서 빌드하고, 다음 Boot 판(4.2.0-RC2)으로 미리 돌려 본다. 미리 보기는 실패해도 머지를 막지 않는다 ([#78](https://github.com/L-DXD/keycloak-spring-security/issues/78)).
 
 ### Added
+- 요청 인증 `KeycloakAccessTokenFilter`: at 쿠키의 액세스 토큰을 로컬에서 검증해 `KeycloakPrincipal`(sub·sid·azp·클레임, 권한 없음)을 넣는다. 요청마다 Keycloak도 DB도 부르지 않는다. 만료 말고 다른 검증 실패면 로컬 로그아웃(`KeycloakLocalLogoutHandler`, 사유 `invalid_token`)하고 갱신하지 않는다. JWKS를 못 받으면 503. 사용자 변환은 `KeycloakPrincipalConverter` 빈으로 바꾼다 ([#84](https://github.com/L-DXD/keycloak-spring-security/issues/84)).
 - 로그인: `oauth2Login`에 PKCE S256, 암호화한 로그인 임시 쿠키(`__Host-{앱 이름}_login`, 5분), 돌아갈 경로(`return`, 상대 경로만)를 붙였다. 성공하면 예전 세션 행을 지우고 새 행과 sid·at·csrf 쿠키를 만든 뒤 화면 주소로 302, 실패하면 화면 `/?login_error=코드`로 302. HttpSession·UserInfo 호출·ID 토큰 저장이 없다. 기본 `SecurityFilterChain`과 `KeycloakHttpConfigurer.keycloak()`을 넣었다 ([#83](https://github.com/L-DXD/keycloak-spring-security/issues/83)).
 - 오류 응답 `KeycloakErrorResponseWriter`: 401·403·503을 `{"code","message"}` JSON으로, 401에는 `loginUrl`을 붙인다. `KeycloakAuthenticationEntryPoint`·`KeycloakAccessDeniedHandler`가 쓴다 ([#83](https://github.com/L-DXD/keycloak-spring-security/issues/83)).
 - 쿠키 `KeycloakCookieWriter`: `__Host-{앱 이름}_sid`·`_at`·`_csrf`·`_login`, Secure·HttpOnly·SameSite=Lax·Path=/, Domain 없음. 수명은 초 아래를 버리고, 지울 때도 같은 속성으로 Max-Age=0. 4KB에 가까운 쿠키는 한 번 경고한다 ([#82](https://github.com/L-DXD/keycloak-spring-security/issues/82)).

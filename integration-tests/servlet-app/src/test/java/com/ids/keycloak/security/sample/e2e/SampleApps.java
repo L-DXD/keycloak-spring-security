@@ -43,19 +43,28 @@ public final class SampleApps {
             properties.put("spring.main.banner-mode", "off");
 
             E2eClock clock = new E2eClock();
+            SqlRecorder sql = new SqlRecorder();
+            HttpSessionCounter sessions = new HttpSessionCounter();
             SpringApplicationBuilder builder = new SpringApplicationBuilder(SampleApplication.class).properties(properties)
-                .initializers(context -> context.getBeanFactory().registerSingleton("keycloakSecurityClock", clock));
+                .initializers(context -> {
+                    context.getBeanFactory().registerSingleton("keycloakSecurityClock", clock);
+                    context.getBeanFactory().registerSingleton("e2eHttpSessionCounter", sessions);
+                    context.getBeanFactory().addBeanPostProcessor(sql);
+                });
             if (profile != null) {
                 builder.profiles(profile);
             }
             ConfigurableApplicationContext context = builder.run();
             Runtime.getRuntime().addShutdownHook(new Thread(context::close));
-            return new Running(clientId, "https://api.kss.test:" + port, context, clock);
+            return new Running(clientId, "https://api.kss.test:" + port, context, clock, sql, sessions);
         });
     }
 
-    /** 떠 있는 샘플 앱 하나. */
-    public record Running(String clientId, String baseUrl, ConfigurableApplicationContext context, E2eClock clock) {
+    /**
+     * 떠 있는 샘플 앱 하나. 테스트용으로 앱에 넣은 것: 시계({@code keycloakSecurityClock}), SQL 기록, HttpSession 수.
+     */
+    public record Running(String clientId, String baseUrl, ConfigurableApplicationContext context, E2eClock clock, SqlRecorder sql,
+                          HttpSessionCounter httpSessions) {
 
         public String url(String path) {
             return baseUrl + path;

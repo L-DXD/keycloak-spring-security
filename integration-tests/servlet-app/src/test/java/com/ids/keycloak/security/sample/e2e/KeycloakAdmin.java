@@ -54,6 +54,15 @@ public class KeycloakAdmin {
         return events.valueStream().toList();
     }
 
+    /** 사용자 이름 → Keycloak 사용자 id ({@code sub}). */
+    public String userId(String username) {
+        JsonNode users = getJson("/admin/realms/" + E2eEnvironment.REALM + "/users?exact=true&username=" + encode(username));
+        if (users.size() != 1) {
+            throw new AssertionError("사용자 " + username + "가 " + users.size() + "명이다");
+        }
+        return users.get(0).get("id").asString();
+    }
+
     /** OIDC 설명 문서 (관리자 토큰 없이). */
     public JsonNode discovery() {
         return send(HttpRequest.newBuilder(URI.create(env.issuer() + "/.well-known/openid-configuration")).GET().build());

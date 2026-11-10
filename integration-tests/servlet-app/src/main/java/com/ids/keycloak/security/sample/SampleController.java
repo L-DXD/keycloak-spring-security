@@ -5,10 +5,13 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import org.springframework.http.MediaType;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+
+import com.ids.keycloak.security.authentication.KeycloakPrincipal;
 
 /**
  * 화면(app.kss.test)이 부르는 API 흉내.
@@ -16,11 +19,12 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 class SampleController {
 
-    /** 로그인 필요. 누구로 로그인했는지 돌려준다. */
+    /** 로그인 필요. 누구로 로그인했는지 돌려준다. 라이브러리가 액세스 토큰에서 만든 사용자를 그대로 받는다. */
     @GetMapping(path = "/api/me", produces = MediaType.APPLICATION_JSON_VALUE)
-    Map<String, Object> me(Principal principal) {
+    Map<String, Object> me(@AuthenticationPrincipal KeycloakPrincipal user) {
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("name", principal.getName());
+        body.put("sub", user.subject());
+        body.put("username", user.username());
         return body;
     }
 
