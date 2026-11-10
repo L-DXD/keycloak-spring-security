@@ -2,7 +2,7 @@
 
 **English** | [한국어](README.ko.md)
 
-> **v3 in progress.** The `v3` branch rewrites this library on Spring Boot 4.1 / Spring Security 7.1. Plan, acceptance scenarios and decisions: [docs/v3](docs/v3/README.md). The `main` branch still documents 2.x.
+> **v3 in progress.** The `v3-dev` branch rewrites this library on Spring Boot 4.1 / Spring Security 7.1. Plan, acceptance scenarios and decisions: [docs/v3](docs/v3/README.md). The `main` branch still documents 2.x.
 
 **Guide for Adopting Developers**
 

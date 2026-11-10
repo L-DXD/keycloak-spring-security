@@ -11,7 +11,7 @@
 
 ## [3.0.0] - Unreleased
 
-> `v3` 브랜치에서 작업 중. 계획과 진행은 [docs/v3](docs/v3/README.md), 묶음 이슈 [#75](https://github.com/L-DXD/keycloak-spring-security/issues/75).
+> `v3-dev` 브랜치에서 작업 중. 계획과 진행은 [docs/v3](docs/v3/README.md), 묶음 이슈 [#75](https://github.com/L-DXD/keycloak-spring-security/issues/75).
 
 ### Changed
 - Spring Boot 4.1.x 기준으로 다시 짠다. Spring Security 7.1.x, Spring Framework 7.0.x, Java 17 이상 ([#78](https://github.com/L-DXD/keycloak-spring-security/issues/78)).
