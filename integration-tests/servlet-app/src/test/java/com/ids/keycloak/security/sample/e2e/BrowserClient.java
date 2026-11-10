@@ -108,7 +108,22 @@ public class BrowserClient implements AutoCloseable {
      * 앱의 콜백(/login/oauth2/code/keycloak) 응답까지 받고 멈춘다. 그 뒤 리다이렉트는 부른 쪽이 본다.
      */
     public Login login(SampleApps.Running app, String username, String password) {
-        Exchange start = get(app.url("/oauth2/authorization/keycloak"));
+        return login(app, "/oauth2/authorization/keycloak", username, password);
+    }
+
+    /** 로그인 시작 주소(예: {@code /oauth2/authorization/keycloak?return=/items/3})를 정해 로그인한다. */
+    public Login login(SampleApps.Running app, String startPath, String username, String password) {
+        Login untilCallback = authorize(app, startPath, username, password);
+        Exchange callback = get(untilCallback.submitted().location().toString());
+        return new Login(untilCallback.start(), untilCallback.loginPage(), untilCallback.submitted(), callback);
+    }
+
+    /**
+     * Keycloak 로그인 폼 제출까지만 한다. {@code submitted().location()}이 앱 콜백 주소다.
+     * 콜백을 바꿔 부르는 시나리오(LOGIN-05)에서 쓴다. {@code callback()}은 {@code null}.
+     */
+    public Login authorize(SampleApps.Running app, String startPath, String username, String password) {
+        Exchange start = get(app.url(startPath));
         if (!start.isRedirect()) {
             throw new AssertionError("로그인 시작이 302가 아니다: " + start);
         }
@@ -122,8 +137,24 @@ public class BrowserClient implements AutoCloseable {
         if (!submitted.isRedirect()) {
             throw new AssertionError("로그인 폼 제출 뒤 302가 아니다: " + submitted.status() + " " + abbreviate(submitted.body()));
         }
-        Exchange callback = get(submitted.location().toString());
-        return new Login(start, page, submitted, callback);
+        return new Login(start, page, submitted, null);
+    }
+
+    /**
+     * 이미 Keycloak에 로그인한 브라우저로 앱 로그인을 시작한다 (SSO). Keycloak이 로그인 화면 없이 바로 콜백으로 보내야 한다.
+     * {@code loginPage()}는 Keycloak의 302 응답이다.
+     */
+    public Login ssoLogin(SampleApps.Running app, String startPath) {
+        Exchange start = get(app.url(startPath));
+        if (!start.isRedirect()) {
+            throw new AssertionError("로그인 시작이 302가 아니다: " + start);
+        }
+        Exchange keycloak = get(start.location().toString());
+        if (!keycloak.isRedirect() || !keycloak.location().toString().startsWith(app.url("/login/oauth2/code/"))) {
+            throw new AssertionError("Keycloak이 로그인 화면 없이 콜백으로 보내지 않았다: " + keycloak + " " + abbreviate(keycloak.body()));
+        }
+        Exchange callback = get(keycloak.location().toString());
+        return new Login(start, keycloak, keycloak, callback);
     }
 
     /** Keycloak 로그인 화면(#kc-form-login)의 제출 주소. */
@@ -270,7 +301,7 @@ public class BrowserClient implements AutoCloseable {
         }
     }
 
-    /** E2E-04 로그인 한 번의 단계별 응답. */
+    /** 로그인 한 번의 단계별 응답 (E2E-04). */
     public record Login(Exchange start, Exchange loginPage, Exchange submitted, Exchange callback) {
     }
 

@@ -20,4 +20,6 @@ dependencies {
     testImplementation 'jakarta.servlet:jakarta.servlet-api'
     testImplementation 'org.springframework.boot:spring-boot-sql'
     testImplementation 'com.h2database:h2'
+    // OAuth2 Client가 토큰·오류 응답을 읽는 JSON 변환기. 실제 앱은 spring-boot-starter-webmvc가 넣는다
+    testImplementation 'tools.jackson.core:jackson-databind'
 }

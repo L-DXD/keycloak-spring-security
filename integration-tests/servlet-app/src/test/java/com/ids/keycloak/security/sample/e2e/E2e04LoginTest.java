@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test;
 /**
  * E2E-04: 테스트 도구가 브라우저 없이 Keycloak 로그인 화면을 HTTP로 채워 로그인한다.
  * <p>
- * 앱 쿠키 이름·속성(__Host-…)은 #84(LOGIN-01~)에서 본다. 여기서는 로그인 흐름이 실제 Keycloak과 끝까지 도는지만 본다.
+ * 앱 쿠키 이름·속성(__Host-…)과 세션 행은 E2eLoginTest(LOGIN-01~08)에서 본다. 여기서는 로그인 흐름이 실제 Keycloak과 끝까지 도는지만 본다.
  */
 @E2eTest
 class E2e04LoginTest {
@@ -38,10 +38,6 @@ class E2e04LoginTest {
             assertThat(browser.cookies())
                 .as("앱(api.kss.test)이 준 쿠키가 있다")
                 .anyMatch(c -> c.matchesHost("api.kss.test"));
-
-            BrowserClient.Exchange me = browser.get(app.url("/api/me"));
-            assertThat(me.status()).isEqualTo(200);
-            assertThat(me.body()).contains("\"name\":\"alice\"");
         }
     }
 

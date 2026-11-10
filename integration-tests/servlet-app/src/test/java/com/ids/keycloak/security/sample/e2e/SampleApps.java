@@ -42,18 +42,20 @@ public final class SampleApps {
             properties.put("kss.tls-dir", env.tlsDir().toString());
             properties.put("spring.main.banner-mode", "off");
 
-            SpringApplicationBuilder builder = new SpringApplicationBuilder(SampleApplication.class).properties(properties);
+            E2eClock clock = new E2eClock();
+            SpringApplicationBuilder builder = new SpringApplicationBuilder(SampleApplication.class).properties(properties)
+                .initializers(context -> context.getBeanFactory().registerSingleton("keycloakSecurityClock", clock));
             if (profile != null) {
                 builder.profiles(profile);
             }
             ConfigurableApplicationContext context = builder.run();
             Runtime.getRuntime().addShutdownHook(new Thread(context::close));
-            return new Running(clientId, "https://api.kss.test:" + port, context);
+            return new Running(clientId, "https://api.kss.test:" + port, context, clock);
         });
     }
 
     /** 떠 있는 샘플 앱 하나. */
-    public record Running(String clientId, String baseUrl, ConfigurableApplicationContext context) {
+    public record Running(String clientId, String baseUrl, ConfigurableApplicationContext context, E2eClock clock) {
 
         public String url(String path) {
             return baseUrl + path;

@@ -7,6 +7,8 @@ public enum KeycloakSessionEndReason {
 
     /** 사용자가 로그아웃했다 ({@code POST /logout}). */
     LOGOUT("logout"),
+    /** 예전 sid 쿠키가 있는 채로 다시 로그인해서 예전 세션을 지웠다 (세션 고정 방지, LOGIN-06). */
+    RELOGIN("relogin"),
     /** Keycloak이 back-channel로 로그아웃을 알렸다. */
     BACKCHANNEL_LOGOUT("backchannel_logout"),
     /** 절대 상한이 지났다. */

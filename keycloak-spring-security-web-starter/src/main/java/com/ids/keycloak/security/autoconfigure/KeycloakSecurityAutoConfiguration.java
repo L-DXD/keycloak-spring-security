@@ -23,6 +23,11 @@ import org.springframework.boot.security.oauth2.client.autoconfigure.OAuth2Clien
 import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
@@ -34,6 +39,7 @@ import com.ids.keycloak.security.config.KeycloakSecurityConfigurationException;
 import com.ids.keycloak.security.config.KeycloakSecuritySettings;
 import com.ids.keycloak.security.config.SessionStoreType;
 import com.ids.keycloak.security.crypto.AesGcmTokenCipher;
+import com.ids.keycloak.security.crypto.KeycloakCsrfTokenSigner;
 import com.ids.keycloak.security.crypto.TokenCipher;
 import com.ids.keycloak.security.event.CompositeKeycloakSessionEventPublisher;
 import com.ids.keycloak.security.event.KeycloakSessionAuditLogger;
@@ -48,14 +54,23 @@ import com.ids.keycloak.security.token.JwkSetFetcher;
 import com.ids.keycloak.security.token.KeycloakAccessTokenValidator;
 import com.ids.keycloak.security.token.KeycloakJwkSource;
 import com.ids.keycloak.security.token.NimbusJwkSetFetcher;
+import com.ids.keycloak.security.web.config.KeycloakHttpConfigurer;
 import com.ids.keycloak.security.web.cookie.DefaultKeycloakCookieWriter;
 import com.ids.keycloak.security.web.cookie.KeycloakCookieWriter;
+import com.ids.keycloak.security.web.error.KeycloakAccessDeniedHandler;
+import com.ids.keycloak.security.web.error.KeycloakAuthenticationEntryPoint;
+import com.ids.keycloak.security.web.error.KeycloakErrorResponseWriter;
+import com.ids.keycloak.security.web.login.DefaultLoginReturnPathResolver;
+import com.ids.keycloak.security.web.login.KeycloakAuthorizationRequestRepository;
+import com.ids.keycloak.security.web.login.KeycloakLoginFailureHandler;
+import com.ids.keycloak.security.web.login.KeycloakLoginSuccessHandler;
+import com.ids.keycloak.security.web.login.LoginReturnPathResolver;
 
 /**
  * Servlet 앱 자동 설정 (v3). 모든 빈은 {@code @ConditionalOnMissingBean}이라 같은 빈을 올리면 그것을 쓴다.
  * <p>
- * 지금 올리는 것: 설정 검사·기동 로그(#79), 액세스 토큰 로컬 검증(#80), 세션 저장소·암호·정리 작업·세션 이벤트(#81), 쿠키(#82).
- * 요청 인증, 로그인·로그아웃 빈은 이슈마다 여기에 더한다.
+ * 지금 올리는 것: 설정 검사·기동 로그(#79), 액세스 토큰 로컬 검증(#80), 세션 저장소·암호·정리 작업·세션 이벤트(#81), 쿠키(#82),
+ * 로그인·오류 응답·기본 보안 체인(#83). 요청 인증·갱신·CSRF·로그아웃은 이슈마다 여기에 더한다.
  * Boot의 기본 보안 체인보다 먼저 돈다.
  */
 @AutoConfiguration(
@@ -181,6 +196,71 @@ public class KeycloakSecurityAutoConfiguration {
         return new DefaultKeycloakCookieWriter(settings.cookieAppName());
     }
 
+    /** CSRF 토큰 서명 (sid에 묶인 double-submit 토큰). */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakCsrfTokenSigner keycloakCsrfTokenSigner(KeycloakSecuritySettings settings) {
+        return new KeycloakCsrfTokenSigner(settings.keyRing());
+    }
+
+    /** 401·403·503 JSON. 앱 오류 형식을 쓰려면 이 빈을 바꾼다. */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakErrorResponseWriter keycloakErrorResponseWriter(KeycloakSecuritySettings settings) {
+        return new KeycloakErrorResponseWriter(settings.registrationId());
+    }
+
+    /** 로그인이 필요하면 401 JSON (로그인 주소 포함). */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakAuthenticationEntryPoint keycloakAuthenticationEntryPoint(KeycloakErrorResponseWriter writer) {
+        return new KeycloakAuthenticationEntryPoint(writer);
+    }
+
+    /** 권한이 없으면 403 JSON. */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakAccessDeniedHandler keycloakAccessDeniedHandler(KeycloakErrorResponseWriter writer) {
+        return new KeycloakAccessDeniedHandler(writer);
+    }
+
+    /** 로그인 뒤 돌아갈 경로 ({@code ?return=}, 상대 경로만). */
+    @Bean
+    @ConditionalOnMissingBean
+    public LoginReturnPathResolver keycloakLoginReturnPathResolver() {
+        return new DefaultLoginReturnPathResolver();
+    }
+
+    /** 로그인 임시 정보를 암호화 쿠키({@code _login}, 5분)에 둔다. HttpSession을 쓰지 않는다. */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakAuthorizationRequestRepository keycloakAuthorizationRequestRepository(KeycloakCookieWriter cookies,
+                                                                                         KeycloakSecuritySettings settings,
+                                                                                         LoginReturnPathResolver returnPaths,
+                                                                                         @Qualifier("keycloakSecurityClock") Clock clock) {
+        return new KeycloakAuthorizationRequestRepository(cookies, settings.keyRing(), returnPaths, clock);
+    }
+
+    /** 로그인 실패: 화면 주소로 {@code ?login_error=}. */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakLoginFailureHandler keycloakLoginFailureHandler(KeycloakSecuritySettings settings, KeycloakCookieWriter cookies) {
+        return new KeycloakLoginFailureHandler(settings.frontendBaseUrl(), cookies);
+    }
+
+    /** 로그인 성공: 세션 행과 sid·at·csrf 쿠키를 만들고 화면으로. */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakLoginSuccessHandler keycloakLoginSuccessHandler(KeycloakAccessTokenValidator validator, KeycloakSessionStore store,
+                                                                   TokenCipher cipher, KeycloakCsrfTokenSigner csrf,
+                                                                   KeycloakCookieWriter cookies, KeycloakSessionEventPublisher events,
+                                                                   KeycloakLoginFailureHandler failureHandler,
+                                                                   @Qualifier("keycloakSecurityClock") Clock clock,
+                                                                   KeycloakSecuritySettings settings) {
+        return new KeycloakLoginSuccessHandler(validator, store, cipher, csrf, cookies, events, failureHandler, clock,
+            settings.absoluteTimeout(), settings.frontendBaseUrl());
+    }
+
     /** 기본 감사 로그. {@link KeycloakSessionEventListener}를 올리면 그것으로 바뀐다. */
     @Bean
     @ConditionalOnMissingBean(KeycloakSessionEventListener.class)
@@ -218,6 +298,29 @@ public class KeycloakSecurityAutoConfiguration {
     @ConditionalOnMissingBean(name = "keycloakSecurityClock")
     public Clock keycloakSecurityClock() {
         return Clock.systemUTC();
+    }
+
+    /**
+     * 기본 보안 체인: {@code permit-all-paths}와 {@code /error}는 허용, 나머지는 로그인 필요, Keycloak 로그인.
+     * 앱이 {@link SecurityFilterChain}을 올리면 빠진다. 그때는 앱 체인에 {@link KeycloakHttpConfigurer}를 붙인다.
+     * Boot의 보안 자동 설정을 빼도 돌도록 {@code @EnableWebSecurity}를 같이 둔다.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnMissingBean(SecurityFilterChain.class)
+    @EnableWebSecurity
+    static class KeycloakSecurityFilterChainConfiguration {
+
+        @Bean(name = "keycloakSecurityFilterChain")
+        SecurityFilterChain keycloakSecurityFilterChain(HttpSecurity http, KeycloakSecuritySettings settings) throws Exception {
+            http.authorizeHttpRequests(a -> {
+                a.requestMatchers("/error").permitAll();
+                for (String path : settings.permitAllPaths()) {
+                    a.requestMatchers(path).permitAll();
+                }
+                a.anyRequest().authenticated();
+            }).with(KeycloakHttpConfigurer.keycloak(), Customizer.withDefaults());
+            return http.build();
+        }
     }
 
     private static ClientRegistration findRegistration(ClientRegistrationRepository repository, String registrationId) {

@@ -37,6 +37,9 @@ keycloak:
       logout-success-path: /logged-out
     cookie:
       app-name: ${kss.client-id:demo}
+    session:
+      # 테스트값 (03 문서 2절): 절대 상한 3분. 실제 앱 기본은 12시간
+      absolute-timeout: 3m
     permit-all-paths:
       - /api/public/**
       - /logged-out
