@@ -48,12 +48,14 @@ import com.ids.keycloak.security.token.JwkSetFetcher;
 import com.ids.keycloak.security.token.KeycloakAccessTokenValidator;
 import com.ids.keycloak.security.token.KeycloakJwkSource;
 import com.ids.keycloak.security.token.NimbusJwkSetFetcher;
+import com.ids.keycloak.security.web.cookie.DefaultKeycloakCookieWriter;
+import com.ids.keycloak.security.web.cookie.KeycloakCookieWriter;
 
 /**
  * Servlet 앱 자동 설정 (v3). 모든 빈은 {@code @ConditionalOnMissingBean}이라 같은 빈을 올리면 그것을 쓴다.
  * <p>
- * 지금 올리는 것: 설정 검사·기동 로그(#79), 액세스 토큰 로컬 검증(#80), 세션 저장소·암호·정리 작업·세션 이벤트(#81).
- * 쿠키, 로그인·로그아웃 빈은 이슈마다 여기에 더한다.
+ * 지금 올리는 것: 설정 검사·기동 로그(#79), 액세스 토큰 로컬 검증(#80), 세션 저장소·암호·정리 작업·세션 이벤트(#81), 쿠키(#82).
+ * 요청 인증, 로그인·로그아웃 빈은 이슈마다 여기에 더한다.
  * Boot의 기본 보안 체인보다 먼저 돈다.
  */
 @AutoConfiguration(
@@ -170,6 +172,13 @@ public class KeycloakSecurityAutoConfiguration {
             throw configurationProblem(KeycloakSecuritySettings.PREFIX + ".session.table-name", e.getMessage());
         }
         return store;
+    }
+
+    /** 쿠키 쓰기 ({@code __Host-{앱 이름}_*}, Secure, HttpOnly, SameSite=Lax, Path=/). */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakCookieWriter keycloakCookieWriter(KeycloakSecuritySettings settings) {
+        return new DefaultKeycloakCookieWriter(settings.cookieAppName());
     }
 
     /** 기본 감사 로그. {@link KeycloakSessionEventListener}를 올리면 그것으로 바뀐다. */

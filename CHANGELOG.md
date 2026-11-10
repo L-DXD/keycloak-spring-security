@@ -19,6 +19,7 @@
 - CI: Java 17·21에서 빌드하고, 다음 Boot 판(4.2.0-RC2)으로 미리 돌려 본다. 미리 보기는 실패해도 머지를 막지 않는다 ([#78](https://github.com/L-DXD/keycloak-spring-security/issues/78)).
 
 ### Added
+- 쿠키 `KeycloakCookieWriter`: `__Host-{앱 이름}_sid`·`_at`·`_csrf`·`_login`, Secure·HttpOnly·SameSite=Lax·Path=/, Domain 없음. 수명은 초 아래를 버리고, 지울 때도 같은 속성으로 Max-Age=0. 4KB에 가까운 쿠키는 한 번 경고한다 ([#82](https://github.com/L-DXD/keycloak-spring-security/issues/82)).
 - 세션 행 저장소 `KeycloakSessionStore`: DB(`JdbcKeycloakSessionStore`, PostgreSQL·H2, 기본)와 메모리. sid는 SHA-256만, 리프레시 토큰은 AES-256-GCM(키 id로 교체, 용도별 HKDF 키)으로 저장한다. 갱신은 행 잠금(`SELECT … FOR UPDATE`)으로 한 번만 한다. 스키마 SQL은 jar의 `kss/schema-postgresql.sql`·`kss/schema-h2.sql`이고 앱 마이그레이션이 넣는다. 기동 때 테이블·열을 검사한다 ([#81](https://github.com/L-DXD/keycloak-spring-security/issues/81)).
 - 끝난 세션 행 정리 작업(`session.cleanup-interval`)과 세션 이벤트(CREATED·REFRESHED·ENDED+사유). 기본 감사 로그(`com.ids.keycloak.security.audit`)를 남기고, `KeycloakSessionEventListener` 빈이나 `@EventListener`로 받을 수 있다 ([#81](https://github.com/L-DXD/keycloak-spring-security/issues/81)).
 - 액세스 토큰 로컬 검증 `KeycloakAccessTokenValidator`: JWKS 서명(RS256만)·iss·aud·azp·typ·시간(오차 30초). 만료만 걸리면 갱신 대상, 그 밖은 갱신 없이 실패, JWKS를 못 받으면 503. 모르는 kid면 JWKS를 1분에 한 번까지 다시 받는다 ([#80](https://github.com/L-DXD/keycloak-spring-security/issues/80)).

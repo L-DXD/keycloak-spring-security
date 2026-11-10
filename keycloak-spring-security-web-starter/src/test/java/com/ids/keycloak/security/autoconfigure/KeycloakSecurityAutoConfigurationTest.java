@@ -54,6 +54,8 @@ import com.ids.keycloak.security.token.DefaultKeycloakAccessTokenValidator;
 import com.ids.keycloak.security.token.JwkSetFetcher;
 import com.ids.keycloak.security.token.KeycloakAccessTokenValidator;
 import com.ids.keycloak.security.token.NimbusJwkSetFetcher;
+import com.ids.keycloak.security.web.cookie.KeycloakCookie;
+import com.ids.keycloak.security.web.cookie.KeycloakCookieWriter;
 
 /**
  * V3-03 설정과 기동 검사 (CONF-01~05).
@@ -382,6 +384,27 @@ class KeycloakSecurityAutoConfigurationTest {
             assertThat(filter.isExcluded("keycloakSessionCleaner", context.getBeanFactory().getBeanDefinition("keycloakSessionCleaner"),
                 KeycloakSessionCleaner.class)).isTrue();
         });
+    }
+
+    @Test
+    @DisplayName("V3-06 쿠키 이름은 cookie.app-name(기본 client id)을 쓴다")
+    void cookieWriter() {
+        runner.run(context -> assertThat(context.getBean(KeycloakCookieWriter.class).name(KeycloakCookie.SESSION))
+            .isEqualTo("__Host-demo_sid"));
+        runner.withPropertyValues("keycloak.security.cookie.app-name=portal")
+            .run(context -> assertThat(context.getBean(KeycloakCookieWriter.class).name(KeycloakCookie.ACCESS_TOKEN))
+                .isEqualTo("__Host-portal_at"));
+    }
+
+    @Test
+    @DisplayName("COOKIE-05 앱 이름에 공백·;가 있으면 기동하지 않는다")
+    void badAppNameFailsStartup() {
+        for (String bad : new String[] {"my app", "app;x"}) {
+            runner.withPropertyValues("keycloak.security.cookie.app-name=" + bad)
+                .run(context -> assertThat(context.getStartupFailure()).rootCause()
+                    .isInstanceOf(KeycloakSecurityConfigurationException.class)
+                    .hasMessageContaining("keycloak.security.cookie.app-name"));
+        }
     }
 
     static class SpringListener {
