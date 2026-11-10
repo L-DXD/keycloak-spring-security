@@ -34,6 +34,8 @@ public final class SampleApps {
     private static synchronized Running start(String clientId, int port, String profile) {
         return RUNNING.computeIfAbsent(clientId, id -> {
             E2eEnvironment env = E2eEnvironment.get();
+            // back-channel 로그아웃 테스트 키를 앱이 JWKS를 받기 전에 realm에 넣는다
+            E2eLogoutTokens.get();
             Map<String, Object> properties = new LinkedHashMap<>();
             properties.put("kss.keycloak.url", env.keycloakUrl());
             properties.put("kss.db.url", env.dbUrl());

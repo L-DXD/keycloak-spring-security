@@ -142,4 +142,22 @@ class KeycloakCsrfCorsTest {
             assertThat(denied.getHeader("Access-Control-Allow-Origin")).isNull();
         });
     }
+
+    @Test
+    @DisplayName("BCL-04 (통합) back-channel 주소는 CSRF·Origin 없이 받는다: 틀린 logout_token은 403이 아니라 400 invalid_request, 처리기 빈은 기본값")
+    void backChannelSkipsCsrfAndOrigin() {
+        runner.run(context -> {
+            assertThat(context.getBean(com.ids.keycloak.security.web.logout.KeycloakBackChannelLogoutHandler.class)).isNotNull();
+            FilterChainProxy chain = context.getBean("springSecurityFilterChain", FilterChainProxy.class);
+            MockHttpServletRequest request = request("POST", "/logout/connect/back-channel/keycloak");
+            request.setContentType("application/x-www-form-urlencoded");
+            request.addParameter("logout_token", "not.a.jwt");
+
+            MockHttpServletResponse response = send(chain, request);
+
+            assertThat(response.getStatus()).isEqualTo(400);
+            assertThat(response.getContentAsString()).contains("invalid_request");
+            assertThat(response.getHeaders("Set-Cookie")).isEmpty();
+        });
+    }
 }

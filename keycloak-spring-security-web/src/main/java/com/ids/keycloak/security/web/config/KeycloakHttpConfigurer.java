@@ -37,6 +37,8 @@ import com.ids.keycloak.security.web.login.KeycloakAuthorizationRequestRepositor
 import com.ids.keycloak.security.web.login.KeycloakLoginAuthorizedClientRepository;
 import com.ids.keycloak.security.web.login.KeycloakLoginFailureHandler;
 import com.ids.keycloak.security.web.login.KeycloakLoginSuccessHandler;
+import com.ids.keycloak.security.web.logout.KeycloakBackChannelLogoutErrorFilter;
+import com.ids.keycloak.security.web.logout.KeycloakBackChannelLogoutHandler;
 import com.ids.keycloak.security.web.logout.KeycloakLocalLogoutHandler;
 import com.ids.keycloak.security.web.logout.KeycloakLogoutHandler;
 import com.ids.keycloak.security.web.logout.KeycloakLogoutMethodFilter;
@@ -72,6 +74,9 @@ public class KeycloakHttpConfigurer extends AbstractHttpConfigurer<KeycloakHttpC
     /** 로그아웃 주소. POST만 받는다(CSRF 필요). */
     public static final String LOGOUT_PATH = "/logout";
 
+    /** back-channel 로그아웃 주소 (Spring 기본). Keycloak 클라이언트의 Backchannel logout URL에 {@code /logout/connect/back-channel/keycloak}처럼 넣는다. */
+    public static final String BACK_CHANNEL_LOGOUT_PATH = "/logout/connect/back-channel/{registrationId}";
+
     /** 새 설정기. */
     public static KeycloakHttpConfigurer keycloak() {
         return new KeycloakHttpConfigurer();
@@ -105,6 +110,8 @@ public class KeycloakHttpConfigurer extends AbstractHttpConfigurer<KeycloakHttpC
             .exceptionHandling(e -> e
                 .authenticationEntryPoint(context.getBean(KeycloakAuthenticationEntryPoint.class))
                 .accessDeniedHandler(context.getBean(KeycloakAccessDeniedHandler.class)))
+            // back-channel 로그아웃: Spring이 logout_token을 검증하고, 처리기는 sid의 세션 행을 지운다 (CSRF 필터보다 앞)
+            .oidcLogout(o -> o.backChannel(b -> b.logoutHandler(context.getBean(KeycloakBackChannelLogoutHandler.class))))
             .oauth2Login(login -> login
                 .authorizationEndpoint(a -> a
                     .authorizationRequestRepository(context.getBean(KeycloakAuthorizationRequestRepository.class))
@@ -126,6 +133,9 @@ public class KeycloakHttpConfigurer extends AbstractHttpConfigurer<KeycloakHttpC
         http.addFilterAfter(postProcess(csrfTokenEndpointFilter(context)), CsrfFilter.class);
         http.addFilterBefore(postProcess(new KeycloakLogoutMethodFilter(PathPatternRequestMatcher.withDefaults().matcher(LOGOUT_PATH),
             context.getBean(KeycloakErrorResponseWriter.class))), LogoutFilter.class);
+        // Spring의 back-channel 필터도 CsrfFilter 앞에 들어간다. 이 설정기가 먼저 등록돼 같은 자리에서는 이 필터가 앞이다
+        http.addFilterBefore(postProcess(new KeycloakBackChannelLogoutErrorFilter(
+            PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.POST, BACK_CHANNEL_LOGOUT_PATH))), CsrfFilter.class);
     }
 
     /** CORS 설정. 기본은 빈 {@value #CORS_CONFIGURATION_SOURCE_BEAN}. */

@@ -109,6 +109,26 @@ public class KeycloakAdmin {
         return users.get(0).get("id").asString();
     }
 
+    /**
+     * realm에 RSA 서명 키 제공자를 넣는다(같은 이름이 있으면 지우고 새로). 우선순위를 낮게 주면 Keycloak은 자기 키로 서명하고
+     * 이 키는 JWKS에만 나온다. 넣은 키의 kid를 돌려준다.
+     */
+    public String replaceRsaKey(String name, String privateKeyBase64, int priority) {
+        String realm = "/admin/realms/" + E2eEnvironment.REALM;
+        String type = "org.keycloak.keys.KeyProvider";
+        getJson(realm + "/components?type=" + encode(type) + "&name=" + encode(name)).valueStream()
+            .forEach(c -> call("DELETE", realm + "/components/" + c.get("id").asString(), null, 204));
+        String body = """
+            {"name":"%s","providerId":"rsa","providerType":"%s","parentId":"%s",
+             "config":{"priority":["%d"],"enabled":["true"],"active":["true"],"algorithm":["RS256"],"privateKey":["%s"]}}"""
+            .formatted(name, type, realm().get("id").asString(), priority, privateKeyBase64);
+        call("POST", realm + "/components", body, 201);
+        String componentId = getJson(realm + "/components?type=" + encode(type) + "&name=" + encode(name)).get(0).get("id").asString();
+        return getJson(realm + "/keys").get("keys").valueStream()
+            .filter(k -> componentId.equals(k.path("providerId").asString(""))).findFirst()
+            .orElseThrow(() -> new AssertionError("넣은 키가 realm 키 목록에 없다: " + name)).get("kid").asString();
+    }
+
     /** OIDC 설명 문서 (관리자 토큰 없이). */
     public JsonNode discovery() {
         return send(HttpRequest.newBuilder(URI.create(env.issuer() + "/.well-known/openid-configuration")).GET().build());

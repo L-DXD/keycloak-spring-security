@@ -71,6 +71,7 @@ import com.ids.keycloak.security.web.login.KeycloakAuthorizationRequestRepositor
 import com.ids.keycloak.security.web.login.KeycloakLoginFailureHandler;
 import com.ids.keycloak.security.web.login.KeycloakLoginSuccessHandler;
 import com.ids.keycloak.security.web.login.LoginReturnPathResolver;
+import com.ids.keycloak.security.web.logout.KeycloakBackChannelLogoutHandler;
 import com.ids.keycloak.security.web.logout.KeycloakLocalLogoutHandler;
 import com.ids.keycloak.security.web.logout.KeycloakLogoutHandler;
 import com.ids.keycloak.security.web.logout.KeycloakLogoutSuccessHandler;
@@ -349,6 +350,14 @@ public class KeycloakSecurityAutoConfiguration {
                                                        KeycloakCookieWriter cookies, KeycloakSessionEventPublisher events,
                                                        @Qualifier("keycloakSecurityClock") Clock clock) {
         return new KeycloakLogoutHandler(store, cipher, tokenClient, cookies, events, clock);
+    }
+
+    /** back-channel 로그아웃: 검증된 logout_token의 sid로 세션 행을 지운다. */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakBackChannelLogoutHandler keycloakBackChannelLogoutHandler(KeycloakSessionStore store, KeycloakSessionEventPublisher events,
+                                                                             @Qualifier("keycloakSecurityClock") Clock clock) {
+        return new KeycloakBackChannelLogoutHandler(store, events, clock);
     }
 
     /** 로그아웃 뒤: 화면 로그아웃 주소, Keycloak 로그아웃을 못 했으면 OIDC 로그아웃 주소로 302. */
