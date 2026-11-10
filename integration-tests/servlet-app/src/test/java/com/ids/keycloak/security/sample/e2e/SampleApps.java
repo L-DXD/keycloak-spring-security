@@ -45,26 +45,30 @@ public final class SampleApps {
             E2eClock clock = new E2eClock();
             SqlRecorder sql = new SqlRecorder();
             HttpSessionCounter sessions = new HttpSessionCounter();
+            KeycloakOutage outage = new KeycloakOutage();
             SpringApplicationBuilder builder = new SpringApplicationBuilder(SampleApplication.class).properties(properties)
                 .initializers(context -> {
                     context.getBeanFactory().registerSingleton("keycloakSecurityClock", clock);
                     context.getBeanFactory().registerSingleton("e2eHttpSessionCounter", sessions);
                     context.getBeanFactory().addBeanPostProcessor(sql);
+                    outage.attach(context);
+                    context.getBeanFactory().addBeanPostProcessor(outage);
                 });
             if (profile != null) {
                 builder.profiles(profile);
             }
             ConfigurableApplicationContext context = builder.run();
             Runtime.getRuntime().addShutdownHook(new Thread(context::close));
-            return new Running(clientId, "https://api.kss.test:" + port, context, clock, sql, sessions);
+            return new Running(clientId, "https://api.kss.test:" + port, context, clock, sql, sessions, outage);
         });
     }
 
     /**
-     * 떠 있는 샘플 앱 하나. 테스트용으로 앱에 넣은 것: 시계({@code keycloakSecurityClock}), SQL 기록, HttpSession 수.
+     * 떠 있는 샘플 앱 하나. 테스트용으로 앱에 넣은 것: 시계({@code keycloakSecurityClock}), SQL 기록, HttpSession 수,
+     * 갱신 때 Keycloak 끊기({@link KeycloakOutage}).
      */
     public record Running(String clientId, String baseUrl, ConfigurableApplicationContext context, E2eClock clock, SqlRecorder sql,
-                          HttpSessionCounter httpSessions) {
+                          HttpSessionCounter httpSessions, KeycloakOutage keycloakOutage) {
 
         public String url(String path) {
             return baseUrl + path;

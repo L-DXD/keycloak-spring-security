@@ -15,4 +15,8 @@ dependencies {
 
     testImplementation 'jakarta.servlet:jakarta.servlet-api'
     testImplementation 'org.springframework:spring-test'
+    // 갱신 동시성 통합 테스트(REFRESH-02·09): JDBC 세션 저장소 + H2
+    testImplementation 'com.h2database:h2'
+    // 토큰 응답(JSON)을 읽는 변환기. 실제 앱은 spring-boot-starter-webmvc가 넣는다
+    testImplementation 'tools.jackson.core:jackson-databind'
 }

@@ -2,6 +2,7 @@ package com.ids.keycloak.security.sample.e2e;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -79,9 +80,10 @@ class E2eRequestTest {
             browser.login(app, "alice", "alice-test-password");
             String sid = browser.cookie(API_HOST, "__Host-demo_sid").orElseThrow().value();
             Object rowId = AppSessions.rowBySid(app, sid).get("id");
+            String kcSid = (String) AppSessions.rowBySid(app, sid).get("kc_sid");
             String at = browser.cookie(API_HOST, "__Host-demo_at").orElseThrow().value();
             browser.replaceCookieValue(API_HOST, "__Host-demo_at", tamperSignature(at));
-            int refreshesBefore = admin.events("REFRESH_TOKEN", "demo").size();
+            int refreshesBefore = admin.sessionEvents("REFRESH_TOKEN", kcSid).size();
 
             Exchange me = browser.get(app.url("/api/me"));
 
@@ -93,7 +95,7 @@ class E2eRequestTest {
             }
             assertThat(browser.cookies()).noneMatch(c -> c.matchesHost(API_HOST));
             assertThat(audit.messages()).anyMatch(m -> m.contains("reason=invalid_token") && m.contains("session=" + rowId));
-            assertThat(admin.events("REFRESH_TOKEN", "demo")).as("Keycloak 갱신 호출 없음").hasSize(refreshesBefore);
+            assertThat(admin.sessionEvents("REFRESH_TOKEN", kcSid)).as("Keycloak 갱신 호출 없음").hasSize(refreshesBefore);
         }
     }
 
@@ -119,18 +121,19 @@ class E2eRequestTest {
         SampleApps.Running app = SampleApps.demo();
         try (BrowserClient browser = new BrowserClient(env.caCertificate())) {
             browser.login(app, "bob", "bob-test-password");
-            Map<String, Integer> before = keycloakCalls();
+            Instant start = Instant.now();
 
             for (int i = 0; i < 100; i++) {
                 assertThat(browser.get(app.url("/api/me")).status()).isEqualTo(200);
             }
 
-            assertThat(keycloakCalls()).isEqualTo(before);
+            assertThat(keycloakCallsSince(start)).containsOnly(Map.entry("INTROSPECT_TOKEN", 0), Map.entry("USER_INFO_REQUEST", 0),
+                Map.entry("REFRESH_TOKEN", 0), Map.entry("CODE_TO_TOKEN", 0));
         }
     }
 
-    private Map<String, Integer> keycloakCalls() {
-        return KEYCLOAK_CALLS.stream().collect(java.util.stream.Collectors.toMap(t -> t, t -> admin.events(t, "demo").size()));
+    private Map<String, Integer> keycloakCallsSince(Instant start) {
+        return KEYCLOAK_CALLS.stream().collect(java.util.stream.Collectors.toMap(t -> t, t -> admin.eventsSince(t, "demo", start).size()));
     }
 
     /** JWT 서명 부분의 글자 하나를 바꾼다. 형식은 그대로라 만료가 아닌 서명 실패가 된다. */

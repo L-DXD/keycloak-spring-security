@@ -56,6 +56,10 @@ import com.ids.keycloak.security.token.KeycloakAccessTokenValidator;
 import com.ids.keycloak.security.token.NimbusJwkSetFetcher;
 import com.ids.keycloak.security.web.cookie.KeycloakCookie;
 import com.ids.keycloak.security.web.cookie.KeycloakCookieWriter;
+import com.ids.keycloak.security.web.refresh.DefaultKeycloakTokenClient;
+import com.ids.keycloak.security.web.refresh.KeycloakRefreshService;
+import com.ids.keycloak.security.web.refresh.KeycloakTokenClient;
+import com.ids.keycloak.security.web.refresh.KeycloakTokenResponse;
 
 /**
  * V3-03 설정과 기동 검사 (CONF-01~05).
@@ -238,6 +242,18 @@ class KeycloakSecurityAutoConfigurationTest {
                 assertThat(context.getBean(KeycloakAccessTokenValidator.class)).isSameAs(custom);
                 assertThat(context.getBean(JwkSetFetcher.class)).isSameAs(fetcher);
             });
+    }
+
+    @Test
+    @DisplayName("갱신용 토큰 클라이언트와 갱신 서비스가 올라가고, 앱이 토큰 클라이언트를 바꿔 끼울 수 있다 (#85)")
+    void refreshBeans() {
+        runner.run(context -> {
+            assertThat(context.getBean(KeycloakTokenClient.class)).isInstanceOf(DefaultKeycloakTokenClient.class);
+            assertThat(context).hasSingleBean(KeycloakRefreshService.class);
+        });
+        KeycloakTokenClient custom = refreshToken -> new KeycloakTokenResponse("at", "rt", null);
+        runner.withBean(KeycloakTokenClient.class, () -> custom)
+            .run(context -> assertThat(context.getBean(KeycloakTokenClient.class)).isSameAs(custom));
     }
 
     @Test

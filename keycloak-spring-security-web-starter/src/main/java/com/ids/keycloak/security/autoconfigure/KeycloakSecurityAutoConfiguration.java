@@ -68,6 +68,9 @@ import com.ids.keycloak.security.web.login.KeycloakLoginFailureHandler;
 import com.ids.keycloak.security.web.login.KeycloakLoginSuccessHandler;
 import com.ids.keycloak.security.web.login.LoginReturnPathResolver;
 import com.ids.keycloak.security.web.logout.KeycloakLocalLogoutHandler;
+import com.ids.keycloak.security.web.refresh.DefaultKeycloakTokenClient;
+import com.ids.keycloak.security.web.refresh.KeycloakRefreshService;
+import com.ids.keycloak.security.web.refresh.KeycloakTokenClient;
 
 /**
  * Servlet 앱 자동 설정 (v3). 모든 빈은 {@code @ConditionalOnMissingBean}이라 같은 빈을 올리면 그것을 쓴다.
@@ -303,6 +306,22 @@ public class KeycloakSecurityAutoConfiguration {
                                                                  KeycloakSessionEventPublisher events,
                                                                  @Qualifier("keycloakSecurityClock") Clock clock) {
         return new KeycloakLocalLogoutHandler(store, cookies, events, clock);
+    }
+
+    /** Keycloak 토큰 주소 호출 (갱신). */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakTokenClient keycloakTokenClient(ClientRegistrationRepository registrations, KeycloakSecuritySettings settings) {
+        return new DefaultKeycloakTokenClient(registrations.findByRegistrationId(settings.registrationId()));
+    }
+
+    /** 갱신 (세션 행 잠금 → Keycloak 갱신, 동시 요청은 한 번만). */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakRefreshService keycloakRefreshService(KeycloakSessionStore store, TokenCipher cipher, KeycloakTokenClient tokenClient,
+                                                         KeycloakAccessTokenValidator validator, KeycloakSessionEventPublisher events,
+                                                         @Qualifier("keycloakSecurityClock") Clock clock, KeycloakSecuritySettings settings) {
+        return new KeycloakRefreshService(store, cipher, tokenClient, validator, events, clock, settings.refreshReuseWindow());
     }
 
     /** 설정 검사, 세션 테이블 검사, 정리 작업을 지연 초기화에서 뺀다 (잘못되면 첫 요청이 아니라 기동 때 알도록). */

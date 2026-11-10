@@ -70,6 +70,8 @@ public class BrowserClient implements AutoCloseable {
             .disableAutomaticRetries()
             .setConnectionManager(PoolingHttpClientConnectionManagerBuilder.create()
                 .setTlsSocketStrategy(new DefaultClientTlsStrategy(trusting(caCertificate)))
+                .setMaxConnPerRoute(20)
+                .setMaxConnTotal(40)
                 .build())
             .setDefaultRequestConfig(RequestConfig.custom()
                 .setResponseTimeout(Timeout.ofSeconds(30))
@@ -170,13 +172,51 @@ public class BrowserClient implements AutoCloseable {
         return action.group(1).replace("&amp;", "&");
     }
 
+    /**
+     * 같은 쿠키로 GET {@code count}개를 한꺼번에 보낸다 (REFRESH-02: 탭 여러 개가 동시에 부르는 상황).
+     * 모든 요청이 보내기 전의 쿠키 상자를 그대로 쓰고, 응답의 Set-Cookie는 다 받은 뒤 순서대로 상자에 넣는다.
+     */
+    public List<Exchange> getConcurrently(String url, int count, Header... headers) {
+        URI uri = URI.create(url);
+        String cookie = cookieHeader(uri);
+        java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(count);
+        try {
+            List<java.util.concurrent.Future<Exchange>> futures = new ArrayList<>();
+            for (int i = 0; i < count; i++) {
+                futures.add(pool.submit(() -> {
+                    go.await();
+                    return execute("GET", uri, null, cookie, headers);
+                }));
+            }
+            go.countDown();
+            List<Exchange> exchanges = new ArrayList<>();
+            for (java.util.concurrent.Future<Exchange> future : futures) {
+                exchanges.add(future.get(60, java.util.concurrent.TimeUnit.SECONDS));
+            }
+            for (Exchange exchange : exchanges) {
+                remember(exchange);
+            }
+            return exchanges;
+        } catch (Exception e) {
+            throw new IllegalStateException("동시 요청 실패: " + e.getMessage(), e);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     private Exchange send(String method, String url, org.apache.hc.core5.http.HttpEntity entity, Header... headers) {
         URI uri = URI.create(url);
+        Exchange exchange = execute(method, uri, entity, cookieHeader(uri), headers);
+        remember(exchange);
+        return exchange;
+    }
+
+    private Exchange execute(String method, URI uri, org.apache.hc.core5.http.HttpEntity entity, String cookie, Header... headers) {
         HttpUriRequestBase request = new HttpUriRequestBase(method, uri);
         for (Header header : headers) {
             request.addHeader(header);
         }
-        String cookie = cookieHeader(uri);
         if (!cookie.isEmpty()) {
             request.addHeader("Cookie", cookie);
         }
@@ -184,18 +224,20 @@ public class BrowserClient implements AutoCloseable {
             request.setEntity(entity);
         }
         try {
-            Exchange exchange = http.execute(request, response -> {
+            return http.execute(request, response -> {
                 String body = response.getEntity() == null ? "" : EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
                 return new Exchange(method, uri, response.getCode(), List.of(response.getHeaders()), body);
             });
-            for (String setCookie : exchange.headers("Set-Cookie")) {
-                store(uri, setCookie);
-            }
-            history.add(exchange);
-            return exchange;
         } catch (IOException e) {
-            throw new IllegalStateException(method + " " + url + " 실패: " + e.getMessage(), e);
+            throw new IllegalStateException(method + " " + uri + " 실패: " + e.getMessage(), e);
         }
+    }
+
+    private void remember(Exchange exchange) {
+        for (String setCookie : exchange.headers("Set-Cookie")) {
+            store(exchange.uri(), setCookie);
+        }
+        history.add(exchange);
     }
 
     // ---- 쿠키 상자 ----

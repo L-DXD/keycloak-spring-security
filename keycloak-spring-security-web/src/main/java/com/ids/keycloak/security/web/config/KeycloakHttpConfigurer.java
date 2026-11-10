@@ -13,6 +13,7 @@ import org.springframework.security.web.context.RequestAttributeSecurityContextR
 import org.springframework.security.web.savedrequest.NullRequestCache;
 
 import com.ids.keycloak.security.authentication.KeycloakPrincipalConverter;
+import com.ids.keycloak.security.config.KeycloakSecuritySettings;
 import com.ids.keycloak.security.token.KeycloakAccessTokenValidator;
 import com.ids.keycloak.security.web.authentication.KeycloakAccessTokenFilter;
 import com.ids.keycloak.security.web.cookie.KeycloakCookieWriter;
@@ -24,6 +25,7 @@ import com.ids.keycloak.security.web.login.KeycloakLoginAuthorizedClientReposito
 import com.ids.keycloak.security.web.login.KeycloakLoginFailureHandler;
 import com.ids.keycloak.security.web.login.KeycloakLoginSuccessHandler;
 import com.ids.keycloak.security.web.logout.KeycloakLocalLogoutHandler;
+import com.ids.keycloak.security.web.refresh.KeycloakRefreshService;
 
 /**
  * 보안 체인에 Keycloak 로그인을 붙인다. 기본 체인({@code keycloakSecurityFilterChain})이 쓰고, 사용자 체인에도 붙일 수 있다.
@@ -35,7 +37,7 @@ import com.ids.keycloak.security.web.logout.KeycloakLocalLogoutHandler;
  * <ul>
  *   <li>HttpSession을 만들지 않는다 (요청 캐시 없음, 보안 컨텍스트는 요청 안에서만)</li>
  *   <li>로그인: Spring {@code oauth2Login} + PKCE S256 + 로그인 임시 쿠키 + UserInfo 호출 없음 + 라이브러리 성공·실패 처리</li>
- *   <li>요청 인증: at 쿠키를 로컬 검증하는 {@link KeycloakAccessTokenFilter}를 Basic 인증 자리 앞에 넣는다</li>
+ *   <li>요청 인증: at 쿠키를 로컬 검증하고 만료면 갱신하는 {@link KeycloakAccessTokenFilter}를 Basic 인증 자리 앞에 넣는다</li>
  *   <li>401·403은 JSON (로그인 화면으로 302하지 않는다)</li>
  *   <li>폼 로그인, Basic 인증을 끈다</li>
  * </ul>
@@ -96,7 +98,9 @@ public class KeycloakHttpConfigurer extends AbstractHttpConfigurer<KeycloakHttpC
             context.getBean(KeycloakPrincipalConverter.class),
             context.getBean(KeycloakCookieWriter.class),
             context.getBean(KeycloakLocalLogoutHandler.class),
-            context.getBean(KeycloakErrorResponseWriter.class));
+            context.getBean(KeycloakErrorResponseWriter.class),
+            context.getBean(KeycloakRefreshService.class),
+            context.getBean(KeycloakSecuritySettings.class).backgroundHeader());
     }
 
     /** PKCE S256을 늘 붙인다 (client가 비공개여도). state·nonce는 Spring이 붙인다. */

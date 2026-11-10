@@ -20,12 +20,15 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import com.ids.keycloak.security.authentication.KeycloakPrincipalConverter;
 import com.ids.keycloak.security.error.KeycloakErrorCode;
 import com.ids.keycloak.security.event.KeycloakSessionEndReason;
+import com.ids.keycloak.security.session.SessionIds;
 import com.ids.keycloak.security.token.AccessTokenValidationResult;
 import com.ids.keycloak.security.token.KeycloakAccessTokenValidator;
 import com.ids.keycloak.security.web.cookie.KeycloakCookie;
 import com.ids.keycloak.security.web.cookie.KeycloakCookieWriter;
 import com.ids.keycloak.security.web.error.KeycloakErrorResponseWriter;
 import com.ids.keycloak.security.web.logout.KeycloakLocalLogoutHandler;
+import com.ids.keycloak.security.web.refresh.KeycloakRefreshResult;
+import com.ids.keycloak.security.web.refresh.KeycloakRefreshService;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -33,10 +36,12 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 /**
- * 요청 인증 (V3-08, 01 설계 4-2): at 쿠키의 액세스 토큰을 로컬에서 검증해 보안 컨텍스트에 넣는다. Keycloak도 DB도 부르지 않는다.
+ * 요청 인증 (V3-08·09, 01 설계 4-2): at 쿠키의 액세스 토큰을 로컬에서 검증해 보안 컨텍스트에 넣는다. 통과하면 Keycloak도 DB도 부르지 않는다.
  * <ul>
  *   <li>통과: {@link KeycloakPrincipalConverter}가 만든 인증을 넣는다</li>
- *   <li>at 쿠키 없음·만료: 로그인 안 한 채로 넘긴다 (갱신은 {@link #onAccessTokenMissing}·{@link #onAccessTokenExpired}, #85)</li>
+ *   <li>at 쿠키 없음·만료: sid 쿠키가 있으면 {@link KeycloakRefreshService}로 갱신해 새 at 쿠키를 쓰고 이어 간다. 화면은 갱신을 모른다.
+ *       세션이 끝났으면 쿠키를 지우고 로그인 안 한 채로, Keycloak을 부르지 못했으면 503.
+ *       {@code request.background-header}가 붙은 요청은 갱신하지 않는다(화면이 띄워 둔 주기 요청이 세션을 늘리지 않게)</li>
  *   <li>그 밖의 검증 실패: 로컬 로그아웃(행·쿠키 삭제, 사유 {@code invalid_token}) 뒤 로그인 안 한 채로 넘긴다. 갱신하지 않는다</li>
  *   <li>서명 키(JWKS)를 못 받음: 토큰 탓이 아니므로 로그아웃하지 않고 503</li>
  * </ul>
@@ -52,18 +57,25 @@ public class KeycloakAccessTokenFilter extends OncePerRequestFilter {
     private final KeycloakCookieWriter cookies;
     private final KeycloakLocalLogoutHandler localLogout;
     private final KeycloakErrorResponseWriter errors;
+    private final KeycloakRefreshService refresh;
+    private final String backgroundHeader;
 
     private SecurityContextHolderStrategy securityContextHolderStrategy = SecurityContextHolder.getContextHolderStrategy();
     private SecurityContextRepository securityContextRepository = new RequestAttributeSecurityContextRepository();
 
+    /**
+     * @param backgroundHeader 이 헤더가 붙은 요청은 갱신하지 않는다 (예: {@code X-Background})
+     */
     public KeycloakAccessTokenFilter(KeycloakAccessTokenValidator validator, KeycloakPrincipalConverter converter,
                                      KeycloakCookieWriter cookies, KeycloakLocalLogoutHandler localLogout,
-                                     KeycloakErrorResponseWriter errors) {
+                                     KeycloakErrorResponseWriter errors, KeycloakRefreshService refresh, String backgroundHeader) {
         this.validator = Objects.requireNonNull(validator);
         this.converter = Objects.requireNonNull(converter);
         this.cookies = Objects.requireNonNull(cookies);
         this.localLogout = Objects.requireNonNull(localLogout);
         this.errors = Objects.requireNonNull(errors);
+        this.refresh = Objects.requireNonNull(refresh);
+        this.backgroundHeader = Objects.requireNonNull(backgroundHeader);
     }
 
     @Override
@@ -90,17 +102,45 @@ public class KeycloakAccessTokenFilter extends OncePerRequestFilter {
         }
     }
 
-    /** at 쿠키가 없다. 기본: 로그인 안 한 채로 넘긴다. */
+    /** at 쿠키가 없다 (브라우저가 수명이 다한 쿠키를 버렸다). 갱신한다. */
     protected void onAccessTokenMissing(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
         throws ServletException, IOException {
-        chain.doFilter(request, response);
+        refreshAndContinue(request, response, chain);
     }
 
-    /** 만료만 걸렸다. 기본: 로그인 안 한 채로 넘긴다. */
+    /** 만료만 걸렸다. 갱신한다. */
     protected void onAccessTokenExpired(HttpServletRequest request, HttpServletResponse response, FilterChain chain,
                                         AccessTokenValidationResult result) throws ServletException, IOException {
         log.debug("[KSS] 액세스 토큰이 만료됐습니다: {}", result.reason());
-        chain.doFilter(request, response);
+        refreshAndContinue(request, response, chain);
+    }
+
+    /** sid 쿠키로 갱신하고 결과대로 이어 간다 (REFRESH-01~07). */
+    protected void refreshAndContinue(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+        throws ServletException, IOException {
+        Optional<String> sid = cookies.read(request, KeycloakCookie.SESSION).filter(SessionIds::looksLikeSid);
+        if (sid.isEmpty()) {
+            chain.doFilter(request, response);
+            return;
+        }
+        if (request.getHeader(backgroundHeader) != null) {
+            log.debug("[KSS] {} 요청이라 갱신하지 않습니다", backgroundHeader);
+            chain.doFilter(request, response);
+            return;
+        }
+        KeycloakRefreshResult result = refresh.refresh(sid.get());
+        switch (result.status()) {
+            case REFRESHED, REUSED -> {
+                cookies.write(response, KeycloakCookie.ACCESS_TOKEN, result.accessToken().getTokenValue(), result.accessTokenCookieAge());
+                authenticate(request, response, result.accessToken());
+                chain.doFilter(request, response);
+            }
+            case SESSION_ENDED -> {
+                cookies.clearAll(response);
+                chain.doFilter(request, response);
+            }
+            case UNAVAILABLE -> errors.write(request, response, KeycloakErrorCode.KEYCLOAK_UNAVAILABLE);
+        }
     }
 
     /** 만료 말고 다른 검증 실패. 로컬 로그아웃 뒤 로그인 안 한 채로 넘긴다 (REQ-04). */
