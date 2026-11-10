@@ -22,4 +22,6 @@ dependencies {
     testImplementation 'com.h2database:h2'
     // OAuth2 Client가 토큰·오류 응답을 읽는 JSON 변환기. 실제 앱은 spring-boot-starter-webmvc가 넣는다
     testImplementation 'tools.jackson.core:jackson-databind'
+    // EXT-03: 공개 클래스에 final이 없는지 (core·web·starter를 한 번에 본다)
+    testImplementation "com.tngtech.archunit:archunit:${archunitVersion}"
 }

@@ -404,6 +404,7 @@ public class KeycloakSecurityAutoConfiguration {
 
     /** 설정 검사, 세션 테이블 검사, 정리 작업을 지연 초기화에서 뺀다 (잘못되면 첫 요청이 아니라 기동 때 알도록). */
     @Bean
+    @ConditionalOnMissingBean(name = "keycloakSecurityEagerInit")
     public static LazyInitializationExcludeFilter keycloakSecurityEagerInit() {
         return LazyInitializationExcludeFilter.forBeanTypes(KeycloakSecuritySettings.class, KeycloakSessionStore.class,
             KeycloakSessionCleaner.class);
