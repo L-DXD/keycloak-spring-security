@@ -97,6 +97,15 @@ public class KeycloakSecuritySettings {
         return logoutSuccessPath;
     }
 
+    /** 로그아웃 뒤 화면 주소 = 화면 주소 + 로그아웃 뒤 경로. Keycloak client의 post logout redirect URI로 등록한다. */
+    public URI frontendLogoutUrl() {
+        String base = frontendBaseUrl.toString();
+        if (base.endsWith("/")) {
+            base = base.substring(0, base.length() - 1);
+        }
+        return URI.create(base + logoutSuccessPath);
+    }
+
     /** 쿠키 이름에 들어가는 앱 이름. 예: {@code demo} → {@code __Host-demo_sid}. */
     public String cookieAppName() {
         return cookieAppName;

@@ -20,6 +20,7 @@ import com.ids.keycloak.security.session.InMemoryKeycloakSessionStore;
 import com.ids.keycloak.security.session.KeycloakSessionRecord;
 import com.ids.keycloak.security.session.SessionIds;
 import com.ids.keycloak.security.token.AccessTokenValidationResult;
+import com.ids.keycloak.security.web.logout.KeycloakRefreshTokenRevoker;
 import com.ids.keycloak.security.web.refresh.KeycloakRefreshResult.Status;
 import com.ids.keycloak.security.web.refresh.RefreshFixtures.FakeTokenClient;
 import com.ids.keycloak.security.web.refresh.RefreshFixtures.FakeValidator;
@@ -33,9 +34,11 @@ class KeycloakRefreshServiceTest {
     final FakeTokenClient keycloak = new FakeTokenClient(rt -> null);
     final FakeValidator validator = new FakeValidator(clock);
     final List<KeycloakSessionEvent> events = RefreshFixtures.events();
+    boolean revokeOnLocalLogout = false;
 
     KeycloakRefreshService service() {
-        return new KeycloakRefreshService(store, cipher, keycloak, validator, events::add, clock, Duration.ofSeconds(10));
+        return new KeycloakRefreshService(store, cipher, keycloak, validator, events::add, clock, Duration.ofSeconds(10),
+            new KeycloakRefreshTokenRevoker(revokeOnLocalLogout, cipher, keycloak));
     }
 
     KeycloakSessionRecord row(String sid) {
@@ -150,6 +153,51 @@ class KeycloakRefreshServiceTest {
 
         assertThat(service().refresh(sid).endReason()).isEqualTo(KeycloakSessionEndReason.INVALID_TOKEN);
         assertThat(store.snapshot()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("LOGOUT-06 옵션을 켜면 절대 상한으로 끝낸 세션의 리프레시 토큰을 폐기한다. 기본(끔)은 폐기하지 않는다")
+    void revokeOnAbsoluteTimeout() {
+        String sid = loggedIn(store, cipher);
+        clock.advanceSeconds(12 * 3600);
+        service().refresh(sid);
+        assertThat(keycloak.revoked).as("기본은 끔").isEmpty();
+
+        revokeOnLocalLogout = true;
+        String sid2 = loggedIn(store, cipher);
+        service().refresh(sid2);
+        assertThat(keycloak.revoked).containsExactly("rt-login");
+        assertThat(keycloak.calls).as("갱신은 부르지 않는다").hasValue(0);
+    }
+
+    @Test
+    @DisplayName("LOGOUT-06 옵션을 켜면 갱신 응답 토큰이 맞지 않아 끝낸 세션은 새로 받은 리프레시 토큰을 폐기한다")
+    void revokeNewRefreshTokenOnInvalidToken() {
+        revokeOnLocalLogout = true;
+        String sid = loggedIn(store, cipher);
+        validator.results.put("at-1", AccessTokenValidationResult.invalid("aud가 다름"));
+
+        service().refresh(sid);
+
+        assertThat(keycloak.revoked).containsExactly("rt-1");
+    }
+
+    @Test
+    @DisplayName("LOGOUT-06 옵션을 켜도 idle·Keycloak 거절로 끝낸 세션은 폐기하지 않는다 (Keycloak에서 이미 죽은 토큰)")
+    void noRevokeWhenKeycloakAlreadyEnded() {
+        revokeOnLocalLogout = true;
+        String idle = loggedIn(store, cipher);
+        clock.advanceSeconds(1801);
+        service().refresh(idle);
+
+        clock.reset();
+        String rejected = loggedIn(store, cipher);
+        keycloak.answer = rt -> {
+            throw new KeycloakTokenException("invalid_grant", "Session not active", null);
+        };
+        service().refresh(rejected);
+
+        assertThat(keycloak.revoked).isEmpty();
     }
 
     @Test

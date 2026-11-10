@@ -24,6 +24,7 @@ import com.ids.keycloak.security.session.SessionIds;
 import com.ids.keycloak.security.token.AccessTokenValidationResult;
 import com.ids.keycloak.security.token.KeycloakAccessTokenValidator;
 import com.ids.keycloak.security.token.RefreshTokens;
+import com.ids.keycloak.security.web.logout.KeycloakRefreshTokenRevoker;
 
 /**
  * 갱신 (V3-09, 01 설계 4-2): 세션 행을 잠그고 Keycloak에서 새 토큰을 받는다. 같은 세션의 동시 요청은 잠금 순서대로 줄을 서고,
@@ -39,6 +40,7 @@ import com.ids.keycloak.security.token.RefreshTokens;
  *   <li>행에 새 리프레시 토큰(활성 키로 암호화)과 갱신 시각을 쓰고 REFRESHED 이벤트</li>
  * </ol>
  * 갱신 중에는 DB 연결 하나로 행을 잠근 채 Keycloak을 부른다. 다른 인스턴스가 방금 갱신한 경우에는 한 번 더 갱신한다(드묾).
+ * 옵션을 켜면 사유가 {@code absolute}·{@code invalid_token}일 때 잠금이 끝난 뒤 리프레시 토큰을 폐기한다(LOGOUT-06).
  */
 public class KeycloakRefreshService {
 
@@ -51,6 +53,7 @@ public class KeycloakRefreshService {
     private final KeycloakSessionEventPublisher events;
     private final Clock clock;
     private final Duration reuseWindow;
+    private final KeycloakRefreshTokenRevoker revoker;
 
     /** 이 인스턴스가 방금 받은 토큰 (sid 해시 → 토큰). reuse-window가 지나면 버린다. */
     private final Map<String, Recent> recent = new ConcurrentHashMap<>();
@@ -58,13 +61,17 @@ public class KeycloakRefreshService {
     private record Recent(String accessToken, Instant refreshedAt) {
     }
 
-    /** 잠금 안에서 정한 것. 이벤트는 잠금(트랜잭션)이 끝난 뒤 낸다. */
-    private record Outcome(KeycloakRefreshResult result, KeycloakSessionEvent event) {
+    /** 잠금 안에서 정한 것. 이벤트와 토큰 폐기는 잠금(트랜잭션)이 끝난 뒤에 한다. */
+    private record Outcome(KeycloakRefreshResult result, KeycloakSessionEvent event, Runnable afterLock) {
+
+        Outcome(KeycloakRefreshResult result, KeycloakSessionEvent event) {
+            this(result, event, null);
+        }
     }
 
     public KeycloakRefreshService(KeycloakSessionStore store, TokenCipher cipher, KeycloakTokenClient tokenClient,
                                   KeycloakAccessTokenValidator validator, KeycloakSessionEventPublisher events, Clock clock,
-                                  Duration reuseWindow) {
+                                  Duration reuseWindow, KeycloakRefreshTokenRevoker revoker) {
         this.store = Objects.requireNonNull(store);
         this.cipher = Objects.requireNonNull(cipher);
         this.tokenClient = Objects.requireNonNull(tokenClient);
@@ -72,6 +79,7 @@ public class KeycloakRefreshService {
         this.events = Objects.requireNonNull(events);
         this.clock = Objects.requireNonNull(clock);
         this.reuseWindow = Objects.requireNonNull(reuseWindow);
+        this.revoker = Objects.requireNonNull(revoker);
     }
 
     /** sid 쿠키 값으로 갱신한다. */
@@ -82,13 +90,16 @@ public class KeycloakRefreshService {
         if (outcome.event() != null) {
             events.publish(outcome.event());
         }
+        if (outcome.afterLock() != null) {
+            outcome.afterLock().run();
+        }
         return outcome.result();
     }
 
     private Outcome refreshLocked(KeycloakSessionRecord row) {
         Instant now = clock.instant();
         if (row.isAbsolutelyExpired(now)) {
-            return end(row, KeycloakSessionEndReason.ABSOLUTE_TIMEOUT, now);
+            return end(row, KeycloakSessionEndReason.ABSOLUTE_TIMEOUT, now, () -> revoker.revoke(row));
         }
         if (row.isRefreshExpired(now)) {
             return end(row, KeycloakSessionEndReason.IDLE, now);
@@ -131,7 +142,7 @@ public class KeycloakRefreshService {
         if (!result.isValid() || !row.keycloakUserId().equals(result.subject()) || !row.kcSid().equals(result.sessionId())) {
             log.warn("[KSS] 갱신으로 받은 토큰이 세션과 맞지 않아 세션을 끝냅니다 session={} ({})", row.id(),
                 result.isValid() ? "sub 또는 sid가 다름" : result.reason());
-            return end(row, KeycloakSessionEndReason.INVALID_TOKEN, now);
+            return end(row, KeycloakSessionEndReason.INVALID_TOKEN, now, () -> revoker.revoke(row, newRefreshToken));
         }
 
         Instant refreshedAt = now.truncatedTo(ChronoUnit.MILLIS);
@@ -143,9 +154,13 @@ public class KeycloakRefreshService {
 
     /** 행을 지우고 ENDED 이벤트를 준비한다 (잠금 안이라 같은 트랜잭션에서 지운다). */
     private Outcome end(KeycloakSessionRecord row, KeycloakSessionEndReason reason, Instant now) {
+        return end(row, reason, now, null);
+    }
+
+    private Outcome end(KeycloakSessionRecord row, KeycloakSessionEndReason reason, Instant now, Runnable afterLock) {
         store.deleteBySidHash(row.sidHash());
         recent.remove(row.sidHash());
-        return new Outcome(KeycloakRefreshResult.sessionEnded(reason), KeycloakSessionEvent.ended(row, reason, now));
+        return new Outcome(KeycloakRefreshResult.sessionEnded(reason), KeycloakSessionEvent.ended(row, reason, now), afterLock);
     }
 
     /** 이 인스턴스가 방금(reuse-window 안) 이 행을 갱신했고, 그 뒤로 다른 곳에서 갱신하지 않았으면 그 토큰. */

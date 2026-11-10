@@ -156,7 +156,7 @@ class E2eCsrfTest {
     }
 
     @Test
-    @DisplayName("CSRF-07 HTML 폼의 숨은 칸 _csrf로 POST /api/items(form) → 201 (POST /logout은 #87에서 같은 방법으로 본다)")
+    @DisplayName("CSRF-07 HTML 폼의 숨은 칸 _csrf로 POST /api/items(form) → 201 (POST /logout은 E2eLogoutTest가 같은 방법으로 본다)")
     void csrf07() throws Exception {
         try (BrowserClient browser = new BrowserClient(env.caCertificate())) {
             browser.login(app, "alice", "alice-test-password");

@@ -42,6 +42,10 @@ final class RefreshFixtures {
             now.updateAndGet(i -> i.plusSeconds(seconds));
         }
 
+        void reset() {
+            now.set(LOGIN);
+        }
+
         @Override
         public ZoneId getZone() {
             return ZoneOffset.UTC;
@@ -84,6 +88,23 @@ final class RefreshFixtures {
             }
             KeycloakTokenResponse response = answer.apply(refreshToken);
             return response == null ? new KeycloakTokenResponse("at-" + n, "rt-" + n, null) : response;
+        }
+
+        final List<String> loggedOut = java.util.Collections.synchronizedList(new ArrayList<>());
+        final List<String> revoked = java.util.Collections.synchronizedList(new ArrayList<>());
+        volatile RuntimeException logoutFailure;
+
+        @Override
+        public void logout(String refreshToken) {
+            if (logoutFailure != null) {
+                throw logoutFailure;
+            }
+            loggedOut.add(refreshToken);
+        }
+
+        @Override
+        public void revoke(String refreshToken) {
+            revoked.add(refreshToken);
         }
     }
 

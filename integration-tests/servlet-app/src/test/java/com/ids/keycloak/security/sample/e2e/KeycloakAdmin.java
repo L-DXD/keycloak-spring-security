@@ -94,6 +94,12 @@ public class KeycloakAdmin {
         call("DELETE", "/admin/realms/" + E2eEnvironment.REALM + "/users/" + userId, null, 204);
     }
 
+    /** 사용자의 Keycloak 세션 id 목록 (로그아웃하면 그 세션이 빠진다). */
+    public List<String> userSessions(String userId) {
+        return getJson("/admin/realms/" + E2eEnvironment.REALM + "/users/" + userId + "/sessions").valueStream()
+            .map(s -> s.get("id").asString()).toList();
+    }
+
     /** 사용자 이름 → Keycloak 사용자 id ({@code sub}). */
     public String userId(String username) {
         JsonNode users = getJson("/admin/realms/" + E2eEnvironment.REALM + "/users?exact=true&username=" + encode(username));

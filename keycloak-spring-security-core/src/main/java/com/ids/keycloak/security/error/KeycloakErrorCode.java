@@ -13,6 +13,8 @@ public enum KeycloakErrorCode {
     INVALID_CSRF_TOKEN(403, "요청 확인 토큰(CSRF)이 없거나 맞지 않습니다. 토큰을 다시 받아 보내세요."),
     /** 상태를 바꾸는 요청의 Origin(Referer)이 허용된 화면이 아니다. */
     ORIGIN_NOT_ALLOWED(403, "허용되지 않은 화면에서 보낸 요청입니다."),
+    /** 이 주소는 이 메서드로 부를 수 없다 (예: {@code GET /logout}). 응답에 {@code Allow} 헤더가 붙는다. */
+    METHOD_NOT_ALLOWED(405, "이 주소는 이 방식으로 부를 수 없습니다."),
     /** Keycloak(JWKS, 토큰 갱신)에 닿지 못했다. 세션은 그대로 두고 다시 시도하게 한다. */
     KEYCLOAK_UNAVAILABLE(503, "인증 서버에 연결할 수 없습니다. 잠시 뒤 다시 시도하세요.");
 

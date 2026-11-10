@@ -11,10 +11,11 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 
 import com.ids.keycloak.security.web.refresh.DefaultKeycloakTokenClient;
 import com.ids.keycloak.security.web.refresh.KeycloakTokenClient;
+import com.ids.keycloak.security.web.refresh.KeycloakTokenResponse;
 
 /**
- * 갱신할 때 Keycloak에 닿지 않는 상황(REFRESH-06)을 만든다. 공용 Keycloak을 실제로 멈추면 다른 테스트와 앱이 같이 흔들리므로,
- * 샘플 앱의 {@link KeycloakTokenClient} 빈을 감싸 {@link #begin()} 동안만 같은 설정의 기본 클라이언트를 닫힌 포트로 보낸다.
+ * Keycloak에 닿지 않는 상황(REFRESH-06, 로그아웃 실패)을 만든다. 공용 Keycloak을 실제로 멈추면 다른 테스트와 앱이 같이 흔들리므로,
+ * 샘플 앱의 {@link KeycloakTokenClient} 빈을 감싸 {@link #begin()} 동안만 같은 설정의 기본 클라이언트를 닫힌 포트로 보낸다(갱신·로그아웃·폐기 모두).
  * 앱 안의 코드는 그대로 돌고, 연결 거부도 실제로 일어난다.
  */
 public class KeycloakOutage implements BeanPostProcessor {
@@ -40,9 +41,28 @@ public class KeycloakOutage implements BeanPostProcessor {
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) {
         if (bean instanceof KeycloakTokenClient real) {
-            return (KeycloakTokenClient) refreshToken -> down ? unreachable().refresh(refreshToken) : real.refresh(refreshToken);
+            return new KeycloakTokenClient() {
+                @Override
+                public KeycloakTokenResponse refresh(String refreshToken) {
+                    return client(real).refresh(refreshToken);
+                }
+
+                @Override
+                public void logout(String refreshToken) {
+                    client(real).logout(refreshToken);
+                }
+
+                @Override
+                public void revoke(String refreshToken) {
+                    client(real).revoke(refreshToken);
+                }
+            };
         }
         return bean;
+    }
+
+    private KeycloakTokenClient client(KeycloakTokenClient real) {
+        return down ? unreachable() : real;
     }
 
     private KeycloakTokenClient unreachable() {
@@ -50,6 +70,8 @@ public class KeycloakOutage implements BeanPostProcessor {
             ClientRegistration registration = context.getBean(ClientRegistrationRepository.class).findByRegistrationId("keycloak");
             unreachable = new DefaultKeycloakTokenClient(ClientRegistration.withClientRegistration(registration)
                 .tokenUri("http://127.0.0.1:" + closedPort() + "/token")
+                .providerConfigurationMetadata(java.util.Map.of())
+                .issuerUri("http://127.0.0.1:" + closedPort() + "/realms/down")
                 .build());
         }
         return unreachable;

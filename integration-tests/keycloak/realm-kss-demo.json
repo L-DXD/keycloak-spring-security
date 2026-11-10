@@ -46,7 +46,7 @@
       "webOrigins": [],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "https://app.kss.test/",
+        "post.logout.redirect.uris": "https://app.kss.test/logged-out",
         "backchannel.logout.url": "https://api.kss.test:8443/logout/connect/back-channel/keycloak",
         "backchannel.logout.session.required": "true",
         "backchannel.logout.revoke.offline.tokens": "false",
@@ -97,7 +97,7 @@
       "webOrigins": [],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "https://app.kss.test/",
+        "post.logout.redirect.uris": "https://app.kss.test/logged-out",
         "backchannel.logout.url": "https://api.kss.test:8444/logout/connect/back-channel/keycloak",
         "backchannel.logout.session.required": "true",
         "backchannel.logout.revoke.offline.tokens": "false",

@@ -36,6 +36,10 @@ cp "$HERE/realm-kss-demo.json" "$KC_HOME/data/import/"
 export KC_BOOTSTRAP_ADMIN_USERNAME=${KC_BOOTSTRAP_ADMIN_USERNAME:-admin}
 export KC_BOOTSTRAP_ADMIN_PASSWORD=${KC_BOOTSTRAP_ADMIN_PASSWORD:-admin}
 export JAVA_OPTS_APPEND="${JAVA_OPTS_APPEND:-} -Djdk.net.hosts.file=$HOSTS"
+# Keycloak이 샘플 앱을 서버끼리 부를 때(back-channel 로그아웃) HTTPS_PROXY가 있어도 프록시를 타지 않게
+for v in NO_PROXY no_proxy; do
+  export "$v=${!v:+${!v},}app.kss.test,api.kss.test,sso.kss.test"
+done
 
 exec "$KC_HOME/bin/kc.sh" start-dev \
   --http-port="$KC_PORT" \

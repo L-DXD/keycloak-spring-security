@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.AfterEach;
@@ -20,6 +21,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.core.AuthorizationGrantType;
+import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 
 import com.sun.net.httpserver.HttpServer;
 
@@ -30,6 +32,7 @@ class DefaultKeycloakTokenClientTest {
     final AtomicReference<Answer> answer = new AtomicReference<>(new Answer(200,
         "{\"access_token\":\"new-at\",\"token_type\":\"Bearer\",\"expires_in\":60,\"refresh_token\":\"new-rt\",\"refresh_expires_in\":120}"));
     final List<String> requests = new ArrayList<>();
+    final AtomicReference<Answer> endpointAnswer = new AtomicReference<>(new Answer(204, ""));
 
     record Answer(int status, String body) {
     }
@@ -37,6 +40,26 @@ class DefaultKeycloakTokenClientTest {
     @BeforeEach
     void start() throws IOException {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        for (String path : new String[] {"/realms/demo/protocol/openid-connect/logout", "/realms/demo/protocol/openid-connect/revoke",
+            "/custom/logout"}) {
+            server.createContext(path, exchange -> {
+                String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                synchronized (requests) {
+                    requests.add(exchange.getRequestURI().getPath() + " " + exchange.getRequestHeaders().getFirst("Authorization") + " "
+                        + URLDecoder.decode(body, StandardCharsets.UTF_8));
+                }
+                Answer a = endpointAnswer.get();
+                byte[] bytes = a.body().getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(a.status(), a.status() == 204 ? -1 : bytes.length);
+                if (a.status() != 204) {
+                    try (OutputStream out = exchange.getResponseBody()) {
+                        out.write(bytes);
+                    }
+                }
+                exchange.close();
+            });
+        }
         server.createContext("/realms/demo/protocol/openid-connect/token", exchange -> {
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
             synchronized (requests) {
@@ -59,10 +82,14 @@ class DefaultKeycloakTokenClientTest {
     }
 
     ClientRegistration registration(String base) {
+        return builder(base).build();
+    }
+
+    ClientRegistration.Builder builder(String base) {
         return ClientRegistration.withRegistrationId("keycloak").clientId("demo").clientSecret("demo-secret")
             .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE).redirectUri("{baseUrl}/login/oauth2/code/{registrationId}")
             .scope("openid").authorizationUri(base + "/realms/demo/protocol/openid-connect/auth")
-            .tokenUri(base + "/realms/demo/protocol/openid-connect/token").build();
+            .tokenUri(base + "/realms/demo/protocol/openid-connect/token").issuerUri(base + "/realms/demo");
     }
 
     String base() {
@@ -124,5 +151,63 @@ class DefaultKeycloakTokenClientTest {
                 assertThat(e.isInvalidGrant()).isFalse();
                 assertThat(e.errorCode()).isEqualTo("invalid_token_response");
             });
+    }
+
+    @Test
+    @DisplayName("LOGOUT-01 로그아웃: {issuer}/protocol/openid-connect/logout에 client 인증(Basic)과 refresh_token을 POST, 204면 끝")
+    void logout() {
+        new DefaultKeycloakTokenClient(registration(base())).logout("rt-1");
+
+        assertThat(requests).singleElement().satisfies(r -> assertThat(r)
+            .startsWith("/realms/demo/protocol/openid-connect/logout Basic ")
+            .endsWith(" refresh_token=rt-1"));
+    }
+
+    @Test
+    @DisplayName("LOGOUT-02 Keycloak이 로그아웃을 거절(400 invalid_grant)하면 KeycloakTokenException")
+    void logoutRejected() {
+        endpointAnswer.set(new Answer(400, "{\"error\":\"invalid_grant\",\"error_description\":\"Session not active\"}"));
+
+        assertThatThrownBy(() -> new DefaultKeycloakTokenClient(registration(base())).logout("rt-1"))
+            .isInstanceOfSatisfying(KeycloakTokenException.class, e -> assertThat(e.isInvalidGrant()).isTrue());
+    }
+
+    @Test
+    @DisplayName("Keycloak에 닿지 않으면 로그아웃도 KeycloakTokenException (temporarily_unavailable)")
+    void logoutUnreachable() throws IOException {
+        int closedPort;
+        try (ServerSocket socket = new ServerSocket(0)) {
+            closedPort = socket.getLocalPort();
+        }
+
+        assertThatThrownBy(() -> new DefaultKeycloakTokenClient(registration("http://127.0.0.1:" + closedPort)).logout("rt-1"))
+            .isInstanceOfSatisfying(KeycloakTokenException.class, e -> assertThat(e.errorCode()).isEqualTo("temporarily_unavailable"));
+    }
+
+    @Test
+    @DisplayName("LOGOUT-06 폐기: revoke 주소에 token과 token_type_hint=refresh_token을 POST")
+    void revoke() {
+        endpointAnswer.set(new Answer(200, ""));
+
+        new DefaultKeycloakTokenClient(registration(base())).revoke("rt-1");
+
+        assertThat(requests).singleElement().satisfies(r -> assertThat(r)
+            .startsWith("/realms/demo/protocol/openid-connect/revoke Basic ")
+            .contains("token=rt-1").contains("token_type_hint=refresh_token"));
+    }
+
+    @Test
+    @DisplayName("설명 문서에 end_session_endpoint가 있으면 그 주소, client_secret_post면 폼에 client_id·client_secret")
+    void metadataEndpointAndClientSecretPost() {
+        ClientRegistration registration = builder(base())
+            .clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_POST)
+            .providerConfigurationMetadata(Map.of("end_session_endpoint", base() + "/custom/logout"))
+            .build();
+
+        new DefaultKeycloakTokenClient(registration).logout("rt-1");
+
+        assertThat(requests).singleElement().satisfies(r -> assertThat(r)
+            .startsWith("/custom/logout null ")
+            .contains("client_id=demo").contains("client_secret=demo-secret").contains("refresh_token=rt-1"));
     }
 }

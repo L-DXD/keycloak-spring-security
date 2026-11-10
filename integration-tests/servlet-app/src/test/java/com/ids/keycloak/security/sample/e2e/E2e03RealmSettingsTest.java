@@ -30,7 +30,7 @@ class E2e03RealmSettingsTest {
         assertThat(attributes.get("pkce.code.challenge.method").asString()).isEqualTo("S256");
         assertThat(client.get("redirectUris").valueStream().map(JsonNode::asString))
             .containsExactly(api + "/login/oauth2/code/keycloak");
-        assertThat(attributes.get("post.logout.redirect.uris").asString()).isEqualTo("https://app.kss.test/");
+        assertThat(attributes.get("post.logout.redirect.uris").asString()).isEqualTo("https://app.kss.test/logged-out");
         assertThat(attributes.get("backchannel.logout.url").asString()).isEqualTo(api + "/logout/connect/back-channel/keycloak");
         assertThat(attributes.get("backchannel.logout.session.required").asString()).isEqualTo("true");
         assertThat(attributes.get("client.session.idle.timeout").asString()).isEqualTo("120");

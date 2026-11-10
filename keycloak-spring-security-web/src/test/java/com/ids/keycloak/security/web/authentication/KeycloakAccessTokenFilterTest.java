@@ -29,7 +29,6 @@ import com.ids.keycloak.security.authentication.DefaultKeycloakPrincipalConverte
 import com.ids.keycloak.security.authentication.KeycloakPrincipal;
 import com.ids.keycloak.security.authentication.KeycloakPrincipalConverter;
 import com.ids.keycloak.security.crypto.AesGcmTokenCipher;
-import com.ids.keycloak.security.crypto.EncryptedToken;
 import com.ids.keycloak.security.crypto.KeycloakKeyRing;
 import com.ids.keycloak.security.event.KeycloakSessionEndReason;
 import com.ids.keycloak.security.event.KeycloakSessionEvent;
@@ -40,8 +39,11 @@ import com.ids.keycloak.security.token.AccessTokenValidationResult;
 import com.ids.keycloak.security.web.cookie.DefaultKeycloakCookieWriter;
 import com.ids.keycloak.security.web.error.KeycloakErrorResponseWriter;
 import com.ids.keycloak.security.web.logout.KeycloakLocalLogoutHandler;
+import com.ids.keycloak.security.web.logout.KeycloakRefreshTokenRevoker;
 import com.ids.keycloak.security.web.refresh.KeycloakRefreshResult;
 import com.ids.keycloak.security.web.refresh.KeycloakRefreshService;
+import com.ids.keycloak.security.web.refresh.KeycloakTokenClient;
+import com.ids.keycloak.security.web.refresh.KeycloakTokenResponse;
 
 import jakarta.servlet.http.Cookie;
 
@@ -56,14 +58,36 @@ class KeycloakAccessTokenFilterTest {
     AccessTokenValidationResult validation = AccessTokenValidationResult.valid(jwt());
     KeycloakPrincipalConverter converter = new DefaultKeycloakPrincipalConverter();
 
+    final AesGcmTokenCipher cipher = new AesGcmTokenCipher(new KeycloakKeyRing("k1",
+        Map.of("k1", "0123456789abcdef0123456789abcdef".getBytes())));
+    /** Keycloak 자리. 폐기한 토큰만 적어 둔다 (갱신은 아래 refresh 서비스가 대신한다). */
+    final List<String> revoked = new ArrayList<>();
+    final KeycloakTokenClient keycloak = new KeycloakTokenClient() {
+        @Override
+        public KeycloakTokenResponse refresh(String refreshToken) {
+            throw new AssertionError("이 테스트는 갱신 서비스를 바꿔 끼운다");
+        }
+
+        @Override
+        public void logout(String refreshToken) {
+            throw new AssertionError("로컬 로그아웃은 Keycloak 로그아웃을 부르지 않는다");
+        }
+
+        @Override
+        public void revoke(String refreshToken) {
+            revoked.add(refreshToken);
+        }
+    };
+    boolean revokeOnLocalLogout = false;
+
     /** 갱신 결과를 테스트가 정한다. 부른 sid를 적어 둔다. */
     final List<String> refreshedSids = new ArrayList<>();
     KeycloakRefreshResult refreshResult = KeycloakRefreshResult.refreshed(jwt("eyJ.new"), Duration.ofSeconds(60));
 
     KeycloakAccessTokenFilter filter() {
-        KeycloakRefreshService refresh = new KeycloakRefreshService(store, new AesGcmTokenCipher(new KeycloakKeyRing("k1",
-            Map.of("k1", "0123456789abcdef0123456789abcdef".getBytes()))), rt -> null, token -> validation, events::add,
-            Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofSeconds(10)) {
+        KeycloakRefreshTokenRevoker revoker = new KeycloakRefreshTokenRevoker(revokeOnLocalLogout, cipher, keycloak);
+        KeycloakRefreshService refresh = new KeycloakRefreshService(store, cipher, keycloak, token -> validation, events::add,
+            Clock.fixed(NOW, ZoneOffset.UTC), Duration.ofSeconds(10), revoker) {
             @Override
             public KeycloakRefreshResult refresh(String sid) {
                 refreshedSids.add(sid);
@@ -74,7 +98,7 @@ class KeycloakAccessTokenFilterTest {
             validated.add(token);
             return validation;
         }, accessToken -> converter.convert(accessToken), cookies,
-            new KeycloakLocalLogoutHandler(store, cookies, events::add, Clock.fixed(NOW, ZoneOffset.UTC)),
+            new KeycloakLocalLogoutHandler(store, cookies, events::add, Clock.fixed(NOW, ZoneOffset.UTC), revoker),
             new KeycloakErrorResponseWriter("keycloak"), refresh, "X-Background");
     }
 
@@ -98,7 +122,7 @@ class KeycloakAccessTokenFilterTest {
     String sidWithRow() {
         String sid = SessionIds.newSid();
         store.insert(new KeycloakSessionRecord(UUID.randomUUID(), SessionIds.hash(sid), "user-1", "kc-sid-1",
-            new EncryptedToken("k1", new byte[]{1, 2, 3}), NOW.plusSeconds(3600), NOW, NOW.plusSeconds(3600), null));
+            cipher.encrypt("rt-row"), NOW.plusSeconds(3600), NOW, NOW.plusSeconds(3600), null));
         return sid;
     }
 
@@ -147,6 +171,20 @@ class KeycloakAccessTokenFilterTest {
         assertThat(validated).isEmpty();
         assertThat(refreshedSids).isEmpty();
         assertThat(response.getHeaders("Set-Cookie")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("LOGOUT-06 서명이 틀려 로컬 로그아웃할 때, 옵션을 켜면 리프레시 토큰을 폐기하고 기본(끔)은 폐기하지 않는다")
+    void revokeOnInvalidTokenLocalLogout() throws Exception {
+        validation = AccessTokenValidationResult.invalid("서명이 맞지 않습니다");
+        filter().doFilter(request(new Cookie("__Host-demo_at", "eyJ.bad"), new Cookie("__Host-demo_sid", sidWithRow())),
+            new MockHttpServletResponse(), chain());
+        assertThat(revoked).isEmpty();
+
+        revokeOnLocalLogout = true;
+        filter().doFilter(request(new Cookie("__Host-demo_at", "eyJ.bad"), new Cookie("__Host-demo_sid", sidWithRow())),
+            new MockHttpServletResponse(), chain());
+        assertThat(revoked).containsExactly("rt-row");
     }
 
     @Test

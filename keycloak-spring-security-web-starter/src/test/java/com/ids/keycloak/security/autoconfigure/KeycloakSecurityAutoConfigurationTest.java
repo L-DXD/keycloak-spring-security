@@ -56,6 +56,8 @@ import com.ids.keycloak.security.token.KeycloakAccessTokenValidator;
 import com.ids.keycloak.security.token.NimbusJwkSetFetcher;
 import com.ids.keycloak.security.web.cookie.KeycloakCookie;
 import com.ids.keycloak.security.web.cookie.KeycloakCookieWriter;
+import com.ids.keycloak.security.web.logout.KeycloakLogoutHandler;
+import com.ids.keycloak.security.web.logout.KeycloakRefreshTokenRevoker;
 import com.ids.keycloak.security.web.refresh.DefaultKeycloakTokenClient;
 import com.ids.keycloak.security.web.refresh.KeycloakRefreshService;
 import com.ids.keycloak.security.web.refresh.KeycloakTokenClient;
@@ -245,13 +247,28 @@ class KeycloakSecurityAutoConfigurationTest {
     }
 
     @Test
-    @DisplayName("갱신용 토큰 클라이언트와 갱신 서비스가 올라가고, 앱이 토큰 클라이언트를 바꿔 끼울 수 있다 (#85)")
+    @DisplayName("토큰 클라이언트·갱신 서비스·로그아웃 처리기가 올라가고, 앱이 토큰 클라이언트를 바꿔 끼울 수 있다 (#85·#87)")
     void refreshBeans() {
         runner.run(context -> {
             assertThat(context.getBean(KeycloakTokenClient.class)).isInstanceOf(DefaultKeycloakTokenClient.class);
             assertThat(context).hasSingleBean(KeycloakRefreshService.class);
+            assertThat(context).hasSingleBean(KeycloakLogoutHandler.class);
+            assertThat(context.getBean(KeycloakRefreshTokenRevoker.class).isEnabled()).as("D13 기본 끔").isFalse();
         });
-        KeycloakTokenClient custom = refreshToken -> new KeycloakTokenResponse("at", "rt", null);
+        KeycloakTokenClient custom = new KeycloakTokenClient() {
+            @Override
+            public KeycloakTokenResponse refresh(String refreshToken) {
+                return new KeycloakTokenResponse("at", "rt", null);
+            }
+
+            @Override
+            public void logout(String refreshToken) {
+            }
+
+            @Override
+            public void revoke(String refreshToken) {
+            }
+        };
         runner.withBean(KeycloakTokenClient.class, () -> custom)
             .run(context -> assertThat(context.getBean(KeycloakTokenClient.class)).isSameAs(custom));
     }

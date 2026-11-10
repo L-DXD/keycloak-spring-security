@@ -22,6 +22,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 
 import com.ids.keycloak.security.crypto.AesGcmTokenCipher;
+import com.ids.keycloak.security.web.logout.KeycloakRefreshTokenRevoker;
 import com.ids.keycloak.security.session.JdbcKeycloakSessionStore;
 import com.ids.keycloak.security.web.refresh.KeycloakRefreshResult.Status;
 import com.ids.keycloak.security.web.refresh.RefreshFixtures.FakeTokenClient;
@@ -49,7 +50,7 @@ class KeycloakRefreshConcurrencyTest {
         FakeTokenClient keycloak = new FakeTokenClient(rt -> null);
         keycloak.delayMillis = 300;
         KeycloakRefreshService service = new KeycloakRefreshService(store, cipher, keycloak, new FakeValidator(clock), e -> {
-        }, clock, Duration.ofSeconds(10));
+        }, clock, Duration.ofSeconds(10), new KeycloakRefreshTokenRevoker(false, cipher, keycloak));
         String sid = RefreshFixtures.loggedIn(store, cipher);
 
         ExecutorService pool = Executors.newFixedThreadPool(5);

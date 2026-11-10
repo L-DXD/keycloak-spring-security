@@ -1,6 +1,7 @@
 package com.ids.keycloak.security.web.config;
 
 import org.springframework.context.ApplicationContext;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.oauth2.client.oidc.userinfo.OidcUserService;
@@ -8,6 +9,7 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.security.oauth2.client.web.DefaultOAuth2AuthorizationRequestResolver;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestCustomizers;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizationRequestRedirectFilter;
+import org.springframework.security.web.authentication.logout.LogoutFilter;
 import org.springframework.security.web.authentication.session.NullAuthenticatedSessionStrategy;
 import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
 import org.springframework.security.web.context.RequestAttributeSecurityContextRepository;
@@ -36,6 +38,9 @@ import com.ids.keycloak.security.web.login.KeycloakLoginAuthorizedClientReposito
 import com.ids.keycloak.security.web.login.KeycloakLoginFailureHandler;
 import com.ids.keycloak.security.web.login.KeycloakLoginSuccessHandler;
 import com.ids.keycloak.security.web.logout.KeycloakLocalLogoutHandler;
+import com.ids.keycloak.security.web.logout.KeycloakLogoutHandler;
+import com.ids.keycloak.security.web.logout.KeycloakLogoutMethodFilter;
+import com.ids.keycloak.security.web.logout.KeycloakLogoutSuccessHandler;
 import com.ids.keycloak.security.web.refresh.KeycloakRefreshService;
 
 /**
@@ -52,6 +57,8 @@ import com.ids.keycloak.security.web.refresh.KeycloakRefreshService;
  *   <li>CORS(체인 맨 앞, 빈 {@value #CORS_CONFIGURATION_SOURCE_BEAN}) → Origin 확인({@link KeycloakOriginFilter}) → CSRF(sid 서명
  *       double-submit, Xor 처리기) → {@code GET /api/csrf}({@link KeycloakCsrfTokenEndpointFilter}). back-channel 로그아웃과 OIDC 콜백은
  *       Origin·CSRF 확인에서 뺀다</li>
+ *   <li>로그아웃: {@code POST /logout}(CSRF 필요)만. 세션 행·쿠키를 지우고 Keycloak 로그아웃을 서버끼리 부른 뒤 화면으로 302,
+ *       Keycloak 로그아웃을 하지 못하면 OIDC 로그아웃 주소로 302. 다른 메서드는 405</li>
  *   <li>401·403은 JSON (로그인 화면으로 302하지 않는다)</li>
  *   <li>폼 로그인, Basic 인증을 끈다</li>
  * </ul>
@@ -61,6 +68,9 @@ public class KeycloakHttpConfigurer extends AbstractHttpConfigurer<KeycloakHttpC
 
     /** CORS 설정 빈 이름. 이 이름으로 올린 {@link CorsConfigurationSource}를 쓴다 (MVC의 다른 CORS 빈과 섞이지 않게 이름으로 찾는다). */
     public static final String CORS_CONFIGURATION_SOURCE_BEAN = "keycloakCorsConfigurationSource";
+
+    /** 로그아웃 주소. POST만 받는다(CSRF 필요). */
+    public static final String LOGOUT_PATH = "/logout";
 
     /** 새 설정기. */
     public static KeycloakHttpConfigurer keycloak() {
@@ -81,8 +91,10 @@ public class KeycloakHttpConfigurer extends AbstractHttpConfigurer<KeycloakHttpC
             .requestCache(r -> r.requestCache(new NullRequestCache()))
             .formLogin(AbstractHttpConfigurer::disable)
             .httpBasic(AbstractHttpConfigurer::disable)
-            // 로그아웃은 #87(POST /logout, 리프레시 토큰 로그아웃)에서 붙인다
-            .logout(AbstractHttpConfigurer::disable)
+            .logout(l -> l
+                .logoutRequestMatcher(PathPatternRequestMatcher.withDefaults().matcher(HttpMethod.POST, LOGOUT_PATH))
+                .addLogoutHandler(context.getBean(KeycloakLogoutHandler.class))
+                .logoutSuccessHandler(context.getBean(KeycloakLogoutSuccessHandler.class)))
             .cors(c -> c.configurationSource(corsConfigurationSource(context)))
             .csrf(c -> c
                 .csrfTokenRepository(context.getBean(CsrfTokenRepository.class))
@@ -112,6 +124,8 @@ public class KeycloakHttpConfigurer extends AbstractHttpConfigurer<KeycloakHttpC
         ApplicationContext context = http.getSharedObject(ApplicationContext.class);
         http.addFilterBefore(postProcess(originFilter(context)), CsrfFilter.class);
         http.addFilterAfter(postProcess(csrfTokenEndpointFilter(context)), CsrfFilter.class);
+        http.addFilterBefore(postProcess(new KeycloakLogoutMethodFilter(PathPatternRequestMatcher.withDefaults().matcher(LOGOUT_PATH),
+            context.getBean(KeycloakErrorResponseWriter.class))), LogoutFilter.class);
     }
 
     /** CORS 설정. 기본은 빈 {@value #CORS_CONFIGURATION_SOURCE_BEAN}. */

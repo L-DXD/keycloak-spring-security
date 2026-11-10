@@ -72,6 +72,9 @@ import com.ids.keycloak.security.web.login.KeycloakLoginFailureHandler;
 import com.ids.keycloak.security.web.login.KeycloakLoginSuccessHandler;
 import com.ids.keycloak.security.web.login.LoginReturnPathResolver;
 import com.ids.keycloak.security.web.logout.KeycloakLocalLogoutHandler;
+import com.ids.keycloak.security.web.logout.KeycloakLogoutHandler;
+import com.ids.keycloak.security.web.logout.KeycloakLogoutSuccessHandler;
+import com.ids.keycloak.security.web.logout.KeycloakRefreshTokenRevoker;
 import com.ids.keycloak.security.web.refresh.DefaultKeycloakTokenClient;
 import com.ids.keycloak.security.web.refresh.KeycloakRefreshService;
 import com.ids.keycloak.security.web.refresh.KeycloakTokenClient;
@@ -326,11 +329,36 @@ public class KeycloakSecurityAutoConfiguration {
     @ConditionalOnMissingBean
     public KeycloakLocalLogoutHandler keycloakLocalLogoutHandler(KeycloakSessionStore store, KeycloakCookieWriter cookies,
                                                                  KeycloakSessionEventPublisher events,
-                                                                 @Qualifier("keycloakSecurityClock") Clock clock) {
-        return new KeycloakLocalLogoutHandler(store, cookies, events, clock);
+                                                                 @Qualifier("keycloakSecurityClock") Clock clock,
+                                                                 KeycloakRefreshTokenRevoker revoker) {
+        return new KeycloakLocalLogoutHandler(store, cookies, events, clock, revoker);
     }
 
-    /** Keycloak 토큰 주소 호출 (갱신). */
+    /** 로컬 로그아웃 때 리프레시 토큰 폐기 (옵션 logout.revoke-refresh-token-on-local-logout, 기본 끔). */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakRefreshTokenRevoker keycloakRefreshTokenRevoker(KeycloakSecuritySettings settings, TokenCipher cipher,
+                                                                   KeycloakTokenClient tokenClient) {
+        return new KeycloakRefreshTokenRevoker(settings.revokeRefreshTokenOnLocalLogout(), cipher, tokenClient);
+    }
+
+    /** POST /logout: 세션 행·쿠키를 지우고 Keycloak 로그아웃을 서버끼리 부른다. */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakLogoutHandler keycloakLogoutHandler(KeycloakSessionStore store, TokenCipher cipher, KeycloakTokenClient tokenClient,
+                                                       KeycloakCookieWriter cookies, KeycloakSessionEventPublisher events,
+                                                       @Qualifier("keycloakSecurityClock") Clock clock) {
+        return new KeycloakLogoutHandler(store, cipher, tokenClient, cookies, events, clock);
+    }
+
+    /** 로그아웃 뒤: 화면 로그아웃 주소, Keycloak 로그아웃을 못 했으면 OIDC 로그아웃 주소로 302. */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakLogoutSuccessHandler keycloakLogoutSuccessHandler(KeycloakSecuritySettings settings, KeycloakProvider provider) {
+        return new KeycloakLogoutSuccessHandler(settings.frontendLogoutUrl(), provider.endSessionEndpoint(), provider.clientId());
+    }
+
+    /** Keycloak 토큰 주소 호출 (갱신·로그아웃·폐기). */
     @Bean
     @ConditionalOnMissingBean
     public KeycloakTokenClient keycloakTokenClient(ClientRegistrationRepository registrations, KeycloakSecuritySettings settings) {
@@ -342,8 +370,9 @@ public class KeycloakSecurityAutoConfiguration {
     @ConditionalOnMissingBean
     public KeycloakRefreshService keycloakRefreshService(KeycloakSessionStore store, TokenCipher cipher, KeycloakTokenClient tokenClient,
                                                          KeycloakAccessTokenValidator validator, KeycloakSessionEventPublisher events,
-                                                         @Qualifier("keycloakSecurityClock") Clock clock, KeycloakSecuritySettings settings) {
-        return new KeycloakRefreshService(store, cipher, tokenClient, validator, events, clock, settings.refreshReuseWindow());
+                                                         @Qualifier("keycloakSecurityClock") Clock clock, KeycloakSecuritySettings settings,
+                                                         KeycloakRefreshTokenRevoker revoker) {
+        return new KeycloakRefreshService(store, cipher, tokenClient, validator, events, clock, settings.refreshReuseWindow(), revoker);
     }
 
     /** 설정 검사, 세션 테이블 검사, 정리 작업을 지연 초기화에서 뺀다 (잘못되면 첫 요청이 아니라 기동 때 알도록). */

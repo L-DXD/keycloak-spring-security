@@ -84,9 +84,13 @@ public class DefaultKeycloakCookieWriter implements KeycloakCookieWriter {
         add(response, cookie(cookie, value).maxAge(seconds).build());
     }
 
+    /** 쿠키를 지운다. 같은 응답에 이미 같은 지우기 헤더가 있으면 다시 넣지 않는다(로그아웃 때 CSRF 처리기도 csrf 쿠키를 지운다). */
     @Override
     public void clear(HttpServletResponse response, KeycloakCookie cookie) {
-        add(response, cookie(cookie, "").maxAge(0).build());
+        String cleared = name(cookie) + "=;";
+        if (response.getHeaders(HttpHeaders.SET_COOKIE).stream().noneMatch(h -> h.startsWith(cleared) && h.contains("Max-Age=0"))) {
+            add(response, cookie(cookie, "").maxAge(0).build());
+        }
     }
 
     /**

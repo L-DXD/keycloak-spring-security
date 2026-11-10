@@ -64,3 +64,8 @@ kss:
   client-id: demo2
   client-secret: demo2-test-secret
   port: 8444
+keycloak:
+  security:
+    logout:
+      # LOGOUT-06: 두 번째 앱은 로컬 로그아웃(절대 상한·토큰 이상) 때 리프레시 토큰도 폐기한다. 기본은 끔(D13)
+      revoke-refresh-token-on-local-logout: true

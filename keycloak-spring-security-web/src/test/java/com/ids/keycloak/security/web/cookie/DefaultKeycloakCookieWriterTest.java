@@ -42,13 +42,13 @@ class DefaultKeycloakCookieWriterTest {
     @Test
     @DisplayName("COOKIE-03 수명은 초 아래를 버린다 (만료보다 늦게 남지 않게). 1초보다 짧으면 지운다")
     void maxAgeIsFloored() {
-        MockHttpServletResponse response = new MockHttpServletResponse();
+        List<String> headers = new java.util.ArrayList<>();
+        for (Duration age : List.of(Duration.ofMillis(59_999), Duration.ofMillis(999), Duration.ofSeconds(-5))) {
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            writer.write(response, KeycloakCookie.ACCESS_TOKEN, "eyJ.a.b", age);
+            headers.add(response.getHeader("Set-Cookie"));
+        }
 
-        writer.write(response, KeycloakCookie.ACCESS_TOKEN, "eyJ.a.b", Duration.ofMillis(59_999));
-        writer.write(response, KeycloakCookie.ACCESS_TOKEN, "eyJ.a.b", Duration.ofMillis(999));
-        writer.write(response, KeycloakCookie.ACCESS_TOKEN, "eyJ.a.b", Duration.ofSeconds(-5));
-
-        List<String> headers = response.getHeaders("Set-Cookie");
         assertThat(headers.get(0)).contains("Max-Age=59;");
         assertThat(headers.get(1)).startsWith("__Host-demo_at=;").contains("Max-Age=0");
         assertThat(headers.get(2)).startsWith("__Host-demo_at=;").contains("Max-Age=0");
@@ -68,6 +68,9 @@ class DefaultKeycloakCookieWriterTest {
         assertThat(headers).allSatisfy(h -> assertThat(h)
             .contains("=;", "; Path=/", "; Max-Age=0", "; Secure", "; HttpOnly", "; SameSite=Lax")
             .doesNotContainIgnoringCase("domain"));
+
+        writer.clear(response, KeycloakCookie.CSRF);
+        assertThat(response.getHeaders("Set-Cookie")).as("같은 응답에서 두 번 지워도 헤더는 하나").hasSize(4);
     }
 
     @Test
