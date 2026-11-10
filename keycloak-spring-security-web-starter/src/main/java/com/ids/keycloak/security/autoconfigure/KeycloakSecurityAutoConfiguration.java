@@ -2,7 +2,11 @@ package com.ids.keycloak.security.autoconfigure;
 
 import java.net.URI;
 import java.time.Clock;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+
+import javax.sql.DataSource;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,6 +20,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.security.oauth2.client.autoconfigure.OAuth2ClientAutoConfiguration;
+import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
@@ -24,8 +30,19 @@ import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
 
 import com.ids.keycloak.security.KeycloakSecurityVersion;
 import com.ids.keycloak.security.config.KeycloakProvider;
+import com.ids.keycloak.security.config.KeycloakSecurityConfigurationException;
 import com.ids.keycloak.security.config.KeycloakSecuritySettings;
 import com.ids.keycloak.security.config.SessionStoreType;
+import com.ids.keycloak.security.crypto.AesGcmTokenCipher;
+import com.ids.keycloak.security.crypto.TokenCipher;
+import com.ids.keycloak.security.event.CompositeKeycloakSessionEventPublisher;
+import com.ids.keycloak.security.event.KeycloakSessionAuditLogger;
+import com.ids.keycloak.security.event.KeycloakSessionEventListener;
+import com.ids.keycloak.security.event.KeycloakSessionEventPublisher;
+import com.ids.keycloak.security.session.InMemoryKeycloakSessionStore;
+import com.ids.keycloak.security.session.JdbcKeycloakSessionStore;
+import com.ids.keycloak.security.session.KeycloakSessionCleaner;
+import com.ids.keycloak.security.session.KeycloakSessionStore;
 import com.ids.keycloak.security.token.DefaultKeycloakAccessTokenValidator;
 import com.ids.keycloak.security.token.JwkSetFetcher;
 import com.ids.keycloak.security.token.KeycloakAccessTokenValidator;
@@ -35,7 +52,8 @@ import com.ids.keycloak.security.token.NimbusJwkSetFetcher;
 /**
  * Servlet 앱 자동 설정 (v3). 모든 빈은 {@code @ConditionalOnMissingBean}이라 같은 빈을 올리면 그것을 쓴다.
  * <p>
- * 지금 올리는 것: 설정 검사·기동 로그(#79), 액세스 토큰 로컬 검증(#80). 세션 저장소, 로그인·로그아웃 빈은 이슈마다 여기에 더한다.
+ * 지금 올리는 것: 설정 검사·기동 로그(#79), 액세스 토큰 로컬 검증(#80), 세션 저장소·암호·정리 작업·세션 이벤트(#81).
+ * 쿠키, 로그인·로그아웃 빈은 이슈마다 여기에 더한다.
  * Boot의 기본 보안 체인보다 먼저 돈다.
  */
 @AutoConfiguration(
@@ -121,10 +139,69 @@ public class KeycloakSecurityAutoConfiguration {
             provider.clientId(), settings.requiredAudience(), settings.clockSkew(), clock);
     }
 
-    /** 설정 검사를 지연 초기화에서 뺀다. */
+    /** 리프레시 토큰 암호 (AES-256-GCM, 키 id로 교체). KMS·HSM을 쓰려면 이 빈을 바꾼다. */
     @Bean
-    public static LazyInitializationExcludeFilter keycloakSecuritySettingsEagerInit() {
-        return LazyInitializationExcludeFilter.forBeanTypes(KeycloakSecuritySettings.class);
+    @ConditionalOnMissingBean
+    public TokenCipher keycloakTokenCipher(KeycloakSecuritySettings settings) {
+        return new AesGcmTokenCipher(settings.keyRing());
+    }
+
+    /**
+     * 세션 행 저장소. {@code session.store=jdbc}(기본)면 앱의 DataSource를 쓰고, 기동 때 테이블과 열이 있는지 본다.
+     * Flyway 등 DB 초기화가 끝난 뒤에 만든다. 다른 DB·테이블 구조는 이 빈을 바꾼다.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    @DependsOnDatabaseInitialization
+    public KeycloakSessionStore keycloakSessionStore(KeycloakSecuritySettings settings, ObjectProvider<DataSource> dataSources) {
+        if (settings.sessionStore() == SessionStoreType.MEMORY) {
+            return new InMemoryKeycloakSessionStore();
+        }
+        DataSource dataSource = dataSources.getIfUnique();
+        if (dataSource == null) {
+            throw configurationProblem(KeycloakSecuritySettings.PREFIX + ".session.store",
+                "jdbc인데 쓸 DataSource가 없습니다 (없거나 여러 개인데 @Primary가 없음). spring-boot-starter-jdbc와 spring.datasource.*를 넣거나, "
+                    + "개발·테스트라면 memory를 쓰세요");
+        }
+        JdbcKeycloakSessionStore store = new JdbcKeycloakSessionStore(dataSource, settings.sessionTableName());
+        try {
+            store.verifySchema();
+        } catch (IllegalStateException e) {
+            throw configurationProblem(KeycloakSecuritySettings.PREFIX + ".session.table-name", e.getMessage());
+        }
+        return store;
+    }
+
+    /** 기본 감사 로그. {@link KeycloakSessionEventListener}를 올리면 그것으로 바뀐다. */
+    @Bean
+    @ConditionalOnMissingBean(KeycloakSessionEventListener.class)
+    public KeycloakSessionAuditLogger keycloakSessionAuditLogger() {
+        return new KeycloakSessionAuditLogger();
+    }
+
+    /** 세션 이벤트를 {@link KeycloakSessionEventListener} 빈들과 Spring 이벤트({@code @EventListener})로 보낸다. */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakSessionEventPublisher keycloakSessionEventPublisher(ObjectProvider<KeycloakSessionEventListener> listeners,
+                                                                       ApplicationEventPublisher applicationEvents) {
+        List<KeycloakSessionEventListener> all = new ArrayList<>(listeners.orderedStream().toList());
+        all.add(applicationEvents::publishEvent);
+        return new CompositeKeycloakSessionEventPublisher(all);
+    }
+
+    /** 끝난 세션 행 정리 ({@code session.cleanup-interval}마다). */
+    @Bean
+    @ConditionalOnMissingBean
+    public KeycloakSessionCleaner keycloakSessionCleaner(KeycloakSessionStore store, KeycloakSessionEventPublisher events,
+                                                         @Qualifier("keycloakSecurityClock") Clock clock, KeycloakSecuritySettings settings) {
+        return new KeycloakSessionCleaner(store, events, clock, settings.cleanupInterval());
+    }
+
+    /** 설정 검사, 세션 테이블 검사, 정리 작업을 지연 초기화에서 뺀다 (잘못되면 첫 요청이 아니라 기동 때 알도록). */
+    @Bean
+    public static LazyInitializationExcludeFilter keycloakSecurityEagerInit() {
+        return LazyInitializationExcludeFilter.forBeanTypes(KeycloakSecuritySettings.class, KeycloakSessionStore.class,
+            KeycloakSessionCleaner.class);
     }
 
     /** 라이브러리가 쓰는 시계. 테스트에서 바꿔 끼운다 (절대 상한·만료 시나리오). */
@@ -139,6 +216,10 @@ public class KeycloakSecurityAutoConfiguration {
             return null;
         }
         return repository.findByRegistrationId(registrationId);
+    }
+
+    private static KeycloakSecurityConfigurationException configurationProblem(String property, String message) {
+        return new KeycloakSecurityConfigurationException(List.of(new KeycloakSecurityConfigurationException.Problem(property, message)));
     }
 
     private static boolean isBlank(String value) {

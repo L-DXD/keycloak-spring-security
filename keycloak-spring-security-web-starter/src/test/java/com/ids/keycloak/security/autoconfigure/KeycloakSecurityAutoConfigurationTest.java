@@ -5,8 +5,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+
+import javax.sql.DataSource;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -20,6 +25,10 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.event.EventListener;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.security.oauth2.client.registration.InMemoryClientRegistrationRepository;
@@ -29,6 +38,17 @@ import com.ids.keycloak.security.config.KeycloakProvider;
 import com.ids.keycloak.security.config.KeycloakSecurityConfigurationException;
 import com.ids.keycloak.security.config.KeycloakSecuritySettings;
 import com.ids.keycloak.security.config.SessionStoreType;
+import com.ids.keycloak.security.crypto.AesGcmTokenCipher;
+import com.ids.keycloak.security.crypto.TokenCipher;
+import com.ids.keycloak.security.event.KeycloakSessionAuditLogger;
+import com.ids.keycloak.security.event.KeycloakSessionEndReason;
+import com.ids.keycloak.security.event.KeycloakSessionEvent;
+import com.ids.keycloak.security.event.KeycloakSessionEventListener;
+import com.ids.keycloak.security.event.KeycloakSessionEventPublisher;
+import com.ids.keycloak.security.session.InMemoryKeycloakSessionStore;
+import com.ids.keycloak.security.session.JdbcKeycloakSessionStore;
+import com.ids.keycloak.security.session.KeycloakSessionCleaner;
+import com.ids.keycloak.security.session.KeycloakSessionStore;
 import com.ids.keycloak.security.token.AccessTokenValidationResult;
 import com.ids.keycloak.security.token.DefaultKeycloakAccessTokenValidator;
 import com.ids.keycloak.security.token.JwkSetFetcher;
@@ -62,7 +82,17 @@ class KeycloakSecurityAutoConfigurationTest {
             .build();
     }
 
-    static WebApplicationContextRunner runnerWith(ClientRegistration registration) {
+    /** 세션 테이블(kss/schema-h2.sql)을 넣은 새 H2 DB. */
+    static DataSource h2(boolean withSchema) {
+        DriverManagerDataSource dataSource = new DriverManagerDataSource("jdbc:h2:mem:kss-" + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1", "sa", "");
+        if (withSchema) {
+            new ResourceDatabasePopulator(new ClassPathResource("kss/schema-h2.sql")).execute(dataSource);
+        }
+        return dataSource;
+    }
+
+    /** 필수 설정만 있고 DataSource는 없는 앱. */
+    static WebApplicationContextRunner baseRunner(ClientRegistration registration) {
         return new WebApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(OAuth2ClientAutoConfiguration.class, KeycloakSecurityAutoConfiguration.class))
             .withBean(ClientRegistrationRepository.class, () -> new InMemoryClientRegistrationRepository(registration))
@@ -70,6 +100,11 @@ class KeycloakSecurityAutoConfigurationTest {
                 "keycloak.security.frontend.base-url=https://app.example.com",
                 "keycloak.security.crypto.active-key-id=k1",
                 "keycloak.security.crypto.keys.k1=" + KEY);
+    }
+
+    /** 필수 설정 + 세션 테이블이 있는 DB. */
+    static WebApplicationContextRunner runnerWith(ClientRegistration registration) {
+        return baseRunner(registration).withBean(DataSource.class, () -> h2(true));
     }
 
     final WebApplicationContextRunner runner = runnerWith(registration(ISSUER));
@@ -242,6 +277,121 @@ class KeycloakSecurityAutoConfigurationTest {
             assertThat(context.getBean(KeycloakSecuritySettings.class).cookieAppName()).isEqualTo("custom");
             assertThat(context.getBean("keycloakSecurityClock", Clock.class).instant()).isEqualTo(Instant.EPOCH);
         });
+    }
+
+    @Test
+    @DisplayName("V3-05 기본은 DB 세션 저장소(auth_session)와 AES-GCM 암호, 정리 작업이 올라간다")
+    void defaultJdbcStore() {
+        runner.run(context -> {
+            assertThat(context).hasNotFailed();
+            assertThat(context.getBean(KeycloakSessionStore.class)).isInstanceOf(JdbcKeycloakSessionStore.class);
+            assertThat(((JdbcKeycloakSessionStore) context.getBean(KeycloakSessionStore.class)).tableName()).isEqualTo("auth_session");
+            assertThat(context.getBean(TokenCipher.class)).isInstanceOf(AesGcmTokenCipher.class);
+            KeycloakSessionCleaner cleaner = context.getBean(KeycloakSessionCleaner.class);
+            assertThat(cleaner.isRunning()).isTrue();
+            assertThat(cleaner.interval()).hasMinutes(10);
+        });
+    }
+
+    @Test
+    @DisplayName("V3-05 session.store=memory면 메모리 저장소를 쓰고 DataSource가 없어도 된다")
+    void memoryStore() {
+        baseRunner(registration(ISSUER)).withPropertyValues("keycloak.security.session.store=memory")
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context.getBean(KeycloakSessionStore.class)).isInstanceOf(InMemoryKeycloakSessionStore.class);
+            });
+    }
+
+    @Test
+    @DisplayName("V3-05 jdbc인데 DataSource가 없으면 기동이 실패하고 session.store 설정 이름이 나온다")
+    void jdbcWithoutDataSource() {
+        baseRunner(registration(ISSUER))
+            .run(context -> {
+                assertThat(context.getStartupFailure()).rootCause()
+                    .isInstanceOf(KeycloakSecurityConfigurationException.class)
+                    .hasMessageContaining("keycloak.security.session.store")
+                    .hasMessageContaining("DataSource");
+                FailureAnalysis analysis = new KeycloakSecurityConfigurationFailureAnalyzer().analyze(context.getStartupFailure());
+                assertThat(analysis).isNotNull();
+            });
+    }
+
+    @Test
+    @DisplayName("V3-05 세션 테이블이 없으면 기동이 실패하고 스키마 파일 이름을 알려 준다")
+    void jdbcWithoutTable() {
+        baseRunner(registration(ISSUER)).withBean(DataSource.class, () -> h2(false)).run(context ->
+            assertThat(context.getStartupFailure()).rootCause()
+                .isInstanceOf(KeycloakSecurityConfigurationException.class)
+                .hasMessageContaining("keycloak.security.session.table-name")
+                .hasMessageContaining("kss/schema-postgresql.sql"));
+    }
+
+    @Test
+    @DisplayName("V3-05 사용자가 저장소·암호를 올리면 그것을 쓴다 (DataSource가 없어도 된다)")
+    void userStoreWins() {
+        KeycloakSessionStore custom = new InMemoryKeycloakSessionStore();
+        TokenCipher cipher = new AesGcmTokenCipher(new com.ids.keycloak.security.crypto.KeycloakKeyRing("x",
+            Map.of("x", "custom-key-0123456789abcdefghijk".getBytes())));
+        baseRunner(registration(ISSUER))
+            .withBean(KeycloakSessionStore.class, () -> custom)
+            .withBean(TokenCipher.class, () -> cipher)
+            .run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context.getBean(KeycloakSessionStore.class)).isSameAs(custom);
+                assertThat(context.getBean(TokenCipher.class)).isSameAs(cipher);
+                assertThat(context.getBean(KeycloakSessionCleaner.class)).isNotNull();
+            });
+    }
+
+    @Test
+    @DisplayName("EVT 세션 이벤트는 기본 감사 로그와 @EventListener로 가고, 사용자 ID는 앞 8자만 찍힌다")
+    void eventsGoToAuditLogAndSpringListeners(CapturedOutput output) {
+        runner.withUserConfiguration(SpringListener.class).run(context -> {
+            assertThat(context).hasSingleBean(KeycloakSessionAuditLogger.class);
+            KeycloakSessionEvent event = new KeycloakSessionEvent(KeycloakSessionEvent.Type.ENDED, UUID.randomUUID(),
+                "0f3c9a8e-5b1d-4c1a-9a51-1b9d0f3c9a8e", KeycloakSessionEndReason.ABSOLUTE_TIMEOUT, Instant.EPOCH);
+
+            context.getBean(KeycloakSessionEventPublisher.class).publish(event);
+
+            assertThat(context.getBean(SpringListener.class).received).containsExactly(event);
+        });
+        assertThat(output).contains("[KSS] 세션 끝남 reason=absolute").contains("user=0f3c9a8e…").doesNotContain("5b1d-4c1a");
+    }
+
+    @Test
+    @DisplayName("EVT 사용자가 KeycloakSessionEventListener를 올리면 기본 감사 로그 대신 그것이 받는다")
+    void userEventListenerReplacesAuditLog() {
+        List<KeycloakSessionEvent> received = new ArrayList<>();
+        runner.withBean(KeycloakSessionEventListener.class, () -> received::add).run(context -> {
+            assertThat(context).doesNotHaveBean(KeycloakSessionAuditLogger.class);
+            KeycloakSessionEvent event = new KeycloakSessionEvent(KeycloakSessionEvent.Type.CREATED, UUID.randomUUID(), "user",
+                null, Instant.EPOCH);
+            context.getBean(KeycloakSessionEventPublisher.class).publish(event);
+            assertThat(received).containsExactly(event);
+        });
+    }
+
+    @Test
+    @DisplayName("지연 초기화를 켜도 세션 저장소(테이블 검사)와 정리 작업은 기동 때 만든다")
+    void storeAndCleanerAreEager() {
+        runner.run(context -> {
+            LazyInitializationExcludeFilter filter = context.getBean(LazyInitializationExcludeFilter.class);
+            assertThat(filter.isExcluded("keycloakSessionStore", context.getBeanFactory().getBeanDefinition("keycloakSessionStore"),
+                KeycloakSessionStore.class)).isTrue();
+            assertThat(filter.isExcluded("keycloakSessionCleaner", context.getBeanFactory().getBeanDefinition("keycloakSessionCleaner"),
+                KeycloakSessionCleaner.class)).isTrue();
+        });
+    }
+
+    static class SpringListener {
+
+        final List<KeycloakSessionEvent> received = new ArrayList<>();
+
+        @EventListener
+        void on(KeycloakSessionEvent event) {
+            received.add(event);
+        }
     }
 
     @Configuration(proxyBeanMethods = false)

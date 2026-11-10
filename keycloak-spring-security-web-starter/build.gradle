@@ -10,9 +10,14 @@ dependencies {
     api 'org.springframework.boot:spring-boot-autoconfigure'
     api 'org.springframework.boot:spring-boot-starter-security-oauth2-client'
 
+    // @DependsOnDatabaseInitialization: 앱에 JDBC·Flyway가 있으면 그 모듈이 같이 들어온다
+    compileOnly 'org.springframework.boot:spring-boot-sql'
+
     annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
 
     testImplementation 'org.springframework.boot:spring-boot-test'
     testImplementation 'org.springframework:spring-test'
     testImplementation 'jakarta.servlet:jakarta.servlet-api'
+    testImplementation 'org.springframework.boot:spring-boot-sql'
+    testImplementation 'com.h2database:h2'
 }

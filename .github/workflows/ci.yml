@@ -29,6 +29,22 @@ jobs:
       matrix:
         java: ['17', '21']
 
+    # 세션 저장소 계약 테스트를 PostgreSQL에도 돌린다 (STORE-01·06, KSS_TEST_DB_URL)
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: kss
+          POSTGRES_USER: kss
+          POSTGRES_PASSWORD: kss
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kss"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - uses: actions/checkout@v4
 
@@ -43,6 +59,10 @@ jobs:
 
       - name: Build
         run: ./gradlew build printSpringVersions
+        env:
+          KSS_TEST_DB_URL: jdbc:postgresql://localhost:5432/kss
+          KSS_TEST_DB_USERNAME: kss
+          KSS_TEST_DB_PASSWORD: kss
 
       - name: Upload test reports
         if: failure()

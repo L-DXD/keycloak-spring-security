@@ -47,10 +47,16 @@ keycloak:
         e2e: ${KSS_KEY_E2E:a3NzLWUyZS10ZXN0LWtleS1ub3QtZm9yLXByb2QtMDE=}
 
 ---
+# 두 번째 앱. 실제 앱처럼 DB를 따로 쓰도록 스키마 demo2에 테이블을 둔다 (세션 행이 섞이지 않게)
 spring:
   config:
     activate:
       on-profile: demo2
+  datasource:
+    hikari:
+      schema: demo2
+  flyway:
+    schemas: demo2
 kss:
   client-id: demo2
   client-secret: demo2-test-secret
