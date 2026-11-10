@@ -9,6 +9,20 @@
 
 ## [Unreleased]
 
+## [3.0.0] - Unreleased
+
+> `v3` 브랜치에서 작업 중. 계획과 진행은 [docs/v3](docs/v3/README.md), 묶음 이슈 [#75](https://github.com/L-DXD/keycloak-spring-security/issues/75).
+
+### Changed
+- Spring Boot 4.1.x 기준으로 다시 짠다. Spring Security 7.1.x, Spring Framework 7.0.x, Java 17 이상 ([#78](https://github.com/L-DXD/keycloak-spring-security/issues/78)).
+- 빌드: Gradle 9.9, configuration cache 켬. 배포 pom에 Boot BOM import를 넣지 않고 빌드 때 고른 판을 적는다 ([#78](https://github.com/L-DXD/keycloak-spring-security/issues/78)).
+- CI: Java 17·21에서 빌드하고, 다음 Boot 판(4.2.0-RC2)으로 미리 돌려 본다. 미리 보기는 실패해도 머지를 막지 않는다 ([#78](https://github.com/L-DXD/keycloak-spring-security/issues/78)).
+
+### Removed
+- 2.x 코드를 모두 걷어냈다. 기능은 v3 설계대로 #79~#91에서 새로 들어온다 ([#78](https://github.com/L-DXD/keycloak-spring-security/issues/78)).
+- WebFlux 모듈(`keycloak-spring-security-webflux`, `-webflux-starter`). 3.1.0에서 다시 넣는다 ([#92](https://github.com/L-DXD/keycloak-spring-security/issues/92)).
+- `keycloak-client` 의존. Lombok.
+
 ## [2.0.3] - 2026-07-16
 ### Fixed
 - **`keycloak.security.error.*` 프로퍼티가 전혀 적용되지 않던 버그**: `KeycloakHttpConfigurer`가 `exceptionHandling`의 EntryPoint/AccessDeniedHandler를 `configure()`에서 등록해, 그보다 뒤에 실행되는 `oauth2Login`이 심는 기본 EntryPoint에 덮어씌워지고 있었음. 그 결과 `error.redirect-enabled`, `error.authentication-failed-redirect-url`, `error.access-denied-redirect-url` 등 에러 처리 설정이 무시되고 항상 Spring Security 기본 동작이 나갔음. 등록 시점을 `init()`으로 옮겨 라이브러리 핸들러가 최종 필터 체인에 반영되도록 수정. **1.9.0 ~ 2.0.2 공통 결함**이며, 이 수정으로 `error.*` 설정이 처음으로 실제 적용된다.

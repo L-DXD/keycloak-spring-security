@@ -1,15 +1,25 @@
 plugins {
-    id 'io.spring.dependency-management' version '1.1.5' apply false
-    id 'com.vanniktech.maven.publish' version '0.28.0' apply false
+    id 'com.vanniktech.maven.publish' version '0.37.0' apply false
 }
 
-println "=================================================="
-println "  Building Keycloak Spring Security Library"
-println "  Version: ${projectVersion}"
-println "=================================================="
+// 배포하는 모듈. 이 목록에 있는 모듈만 Maven Central에 올라간다.
+def publishedModules = [
+    'keycloak-spring-security-core',
+    'keycloak-spring-security-web',
+    'keycloak-spring-security-web-starter',
+]
+
+// BUILD-02: 배포 모듈의 runtimeClasspath에 있으면 안 되는 의존성 (v2에서 뺀 것)
+def forbiddenDependencies = [
+    'io.github.l-dxd:keycloak-client',
+    'io.projectreactor.netty:*',
+    'io.jsonwebtoken:*',
+    'org.springframework.session:*',
+]
 
 allprojects {
     group = mavenGroupId
+    version = projectVersion
 
     repositories {
         mavenCentral()
@@ -17,54 +27,139 @@ allprojects {
 }
 
 subprojects {
-    // 'java' 플러그인이 적용된 프로젝트에만 자바 관련 설정을 적용
-    plugins.withType(JavaPlugin) {
+    plugins.withType(JavaPlugin).configureEach {
         java {
-            sourceCompatibility = JavaVersion.VERSION_17
-            targetCompatibility = JavaVersion.VERSION_17
+            withSourcesJar()
         }
 
-        tasks.withType(Test) {
-            useJUnitPlatform()
+        // Boot 4 최소 Java는 17이다. 더 높은 JDK로 빌드해도 17 바이트코드를 만든다(D12).
+        tasks.withType(JavaCompile).configureEach {
+            options.release = 17
+            options.encoding = 'UTF-8'
+            options.compilerArgs += ['-parameters']
         }
 
-        tasks.withType(Javadoc) {
-            options {
-                encoding 'UTF-8'
+        tasks.withType(Test).configureEach {
+            useJUnitPlatform {
+                // E2E는 따로 돈다 (integration-tests, #77)
+                excludeTags 'e2e'
             }
+            systemProperty 'file.encoding', 'UTF-8'
+        }
+
+        tasks.withType(Jar).configureEach {
+            manifest {
+                attributes('Implementation-Title': project.name, 'Implementation-Version': projectVersion)
+            }
+        }
+
+        tasks.withType(Javadoc).configureEach {
+            options.encoding = 'UTF-8'
+            options.addStringOption('Xdoclint:none', '-quiet')
+            // v3 작업 중 아직 클래스가 없는 모듈은 건너뛴다 (javadoc은 package-info만 있으면 실패한다)
+            def classSources = source.matching { exclude '**/package-info.java' }
+            onlyIf('문서로 만들 클래스가 있을 때') { !classSources.isEmpty() }
+        }
+
+        // Boot BOM은 빌드할 때 판을 고르는 데만 쓴다. 배포 pom에는 BOM을 넣지 않고 고른 판을 그대로 적는다(versionMapping).
+        // -PspringBootVersion=4.2.0-RC2 처럼 바꿔서 다음 판을 미리 돌려 본다 (BUILD-04)
+        def bomScope = configurations.dependencyScope('springBootBom')
+        configurations.matching { it.name.endsWith('Classpath') || it.name.endsWith('nnotationProcessor') }.configureEach {
+            extendsFrom bomScope.get()
+        }
+
+        dependencies {
+            springBootBom platform("org.springframework.boot:spring-boot-dependencies:${springBootVersion}")
+
+            implementation 'org.slf4j:slf4j-api'
+
+            testImplementation 'org.junit.jupiter:junit-jupiter'
+            testImplementation 'org.assertj:assertj-core'
+            testImplementation 'org.mockito:mockito-junit-jupiter'
+            testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
         }
     }
 
-    // 'io.spring.dependency-management' 플러그인이 적용된 프로젝트에만 의존성 관리 설정을 적용
-    plugins.withId('io.spring.dependency-management') {
-        dependencyManagement {
-            imports {
-                mavenBom "org.springframework.boot:spring-boot-dependencies:3.5.9"
+    if (publishedModules.contains(project.name)) {
+        apply plugin: 'com.vanniktech.maven.publish'
+
+        mavenPublishing {
+            publishToMavenCentral()
+            if (providers.gradleProperty('signingInMemoryKey').isPresent()) {
+                signAllPublications()
+            }
+            coordinates(mavenGroupId, project.name, projectVersion)
+
+            pom {
+                name = project.name
+                inceptionYear = '2025'
+                url = mavenProjectUrl
+                licenses {
+                    license {
+                        name = 'MIT License'
+                        url = 'https://opensource.org/licenses/MIT'
+                        distribution = 'repo'
+                    }
+                }
+                developers {
+                    developer {
+                        id = developerId
+                        name = developerName
+                        url = developerUrl
+                    }
+                }
+                scm {
+                    url = mavenProjectUrl
+                    connection = "scm:git:git://${mavenScmUrl}"
+                    developerConnection = "scm:git:ssh://git@${mavenScmUrl}"
+                }
             }
         }
-    }
 
-    afterEvaluate { project ->
-        if (project.plugins.hasPlugin(JavaPlugin)) {
-            project.dependencies {
-                // Test dependencies
-                testImplementation 'org.junit.jupiter:junit-jupiter-api'
-                testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine'
-                testImplementation 'org.assertj:assertj-core'
-                testImplementation 'org.mockito:mockito-core'
-                testImplementation 'org.mockito:mockito-junit-jupiter'
-                testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
-
-                // Common Lombok dependencies
-                compileOnly 'org.projectlombok:lombok'
-                annotationProcessor 'org.projectlombok:lombok'
-
-                // Common SLF4J dependency
-                implementation 'org.slf4j:slf4j-api'
-
-                // keycloak client library (etc. online, token exchange, ...)
-                implementation 'io.github.l-dxd:keycloak-client:1.0.0'
+        // pom·module 메타데이터에 BOM이 고른 실제 판을 적는다 (예: spring-security-web 7.1.2)
+        publishing {
+            publications.withType(MavenPublication).configureEach {
+                versionMapping {
+                    allVariants {
+                        fromResolutionResult()
+                    }
+                }
             }
         }
+
+        // 모듈 build.gradle의 description은 이 블록보다 늦게 정해진다
+        afterEvaluate {
+            mavenPublishing {
+                pom {
+                    description = project.description
+                }
+            }
+        }
+
+        def verifyForbidden = tasks.register('verifyForbiddenDependencies') {
+            group = 'verification'
+            description = 'BUILD-02: 배포 모듈에 v2에서 뺀 의존성이 없는지 본다'
+            def runtime = configurations.named('runtimeClasspath')
+            def artifacts = runtime.flatMap { it.incoming.artifacts.resolvedArtifacts }
+            def rules = forbiddenDependencies.collect()
+            def moduleName = project.name
+            inputs.files(runtime)
+            doLast {
+                def found = artifacts.get()
+                    .collect { it.id.componentIdentifier }
+                    .findAll { it instanceof ModuleComponentIdentifier }
+                    .collect { "${it.group}:${it.module}".toString() }
+                    .findAll { coordinate ->
+                        rules.any { rule ->
+                            def (g, a) = rule.tokenize(':')
+                            coordinate.startsWith("${g}:") && (a == '*' || coordinate == rule)
+                        }
+                    }
+                if (!found.isEmpty()) {
+                    throw new GradleException("BUILD-02 실패: ${moduleName}에 들어가면 안 되는 의존성 ${found.unique()}")
+                }
+            }
+        }
+        tasks.matching { it.name == 'check' }.configureEach { dependsOn verifyForbidden }
     }
 }

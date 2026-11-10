@@ -2,6 +2,8 @@
 
 [English](README.md) | **한국어**
 
+> **v3 작업 중.** `v3` 브랜치에서 Spring Boot 4.1 / Spring Security 7.1 기준으로 다시 짜고 있습니다. 계획·수용 조건 시나리오·결정 기록은 [docs/v3](docs/v3/README.md)에 있습니다. `main`의 문서는 아직 2.x 기준입니다.
+
 **도입 개발자 문서**
 
 - **[사용 가이드](docs/GUIDE.md)** — 빠른 시작 · 설정 레퍼런스 · 기능별 가이드 · 마이그레이션 · 트러블슈팅

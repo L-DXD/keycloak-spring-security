@@ -1,98 +1,17 @@
-import com.vanniktech.maven.publish.SonatypeHost
-
 plugins {
     id 'java-library'
-    id 'io.spring.dependency-management'
-    id 'com.vanniktech.maven.publish'
-    id 'signing'
 }
 
-version = projectVersion
-description = 'Keycloak Spring Security Web Starter - Auto-configuration for Servlet applications'
+description = 'Keycloak Spring Security Web Starter - Servlet 앱용 자동 설정'
 
 dependencies {
-    // 자동 설정을 위한 필수 의존성
-    api 'org.springframework.boot:spring-boot-autoconfigure'
-
-    // OAuth2 Client AutoConfiguration (OAuth2AuthorizedClientRepository 빈 자동 등록)
-    api 'org.springframework.boot:spring-boot-starter-oauth2-client'
-
-    // 세션 관리를 위한 Spring Session Core 의존성
-    api 'org.springframework.session:spring-session-core'
-
-    // ConfigurationProperties 스캔 및 메타데이터 생성을 위한 애노테이션 프로세서
-    annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
-
-    // Servlet 환경을 지원하기 위해 포함 (배포 시 자동으로 Maven 좌표로 변환됨)
     api project(':keycloak-spring-security-web')
 
-    // 사용자의 프로젝트 환경에 따라 필요한 의존성만 전이되도록 compileOnly로 설정
-    compileOnly 'org.springframework.boot:spring-boot-starter-web'
+    api 'org.springframework.boot:spring-boot-autoconfigure'
+    api 'org.springframework.boot:spring-boot-starter-security-oauth2-client'
 
-    // Redis Session Support (선택적 의존성)
-    // 라이브러리 사용자가 Redis를 원할 때만 자신의 프로젝트에 추가하면 됨
-    compileOnly 'org.springframework.boot:spring-boot-starter-data-redis'
-    compileOnly 'org.springframework.session:spring-session-data-redis'
+    annotationProcessor 'org.springframework.boot:spring-boot-configuration-processor'
 
-    // 테스트 전용: securityMatcher 동작 검증을 위한 Servlet API + MockHttpServletRequest
-    // (compileOnly 의존성을 테스트 클래스패스에 노출, production 산출물에는 전이되지 않음)
-    testImplementation 'org.springframework.boot:spring-boot-starter-web'
-    testImplementation 'org.springframework:spring-test'
-
-    // N-3 round-trip 테스트: Redis 직렬화 검증용 (테스트 전용, production 산출물에 전이되지 않음)
-    testImplementation 'org.springframework.boot:spring-boot-starter-data-redis'
-    testImplementation 'org.springframework.session:spring-session-data-redis'
-
-    // ApplicationContextRunner (Servlet OIDC JwtDecoder AutoConfiguration 통합 테스트용)
     testImplementation 'org.springframework.boot:spring-boot-test'
-}
-
-signing {
-    def secretFile = file("${rootDir}/secret.asc")
-    def signingPassword = findProperty("signingInMemoryKeyPassword")
-        ?: findProperty("signing.password")
-
-    if (secretFile.exists()) {
-        def signingKey = secretFile.text
-        useInMemoryPgpKeys(signingKey, signingPassword as String)
-        sign publishing.publications
-    } else {
-        println "secret.asc 파일이 없습니다. GPG 서명을 건너뜁니다."
-    }
-}
-
-mavenPublishing {
-    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
-    signAllPublications()
-
-    coordinates(mavenGroupId, "keycloak-spring-security-web-starter", version as String)
-
-    pom {
-        name = "keycloak-spring-security-web-starter"
-        description = project.description
-        inceptionYear = "2025"
-        url = mavenProjectUrl
-
-        licenses {
-            license {
-                name = "MIT License"
-                url = "https://opensource.org/licenses/MIT"
-                distribution = "repo"
-            }
-        }
-
-        developers {
-            developer {
-                id = developerId
-                name = developerName
-                url = developerUrl
-            }
-        }
-
-        scm {
-            url = mavenProjectUrl
-            connection = "scm:git:git://${mavenScmUrl}"
-            developerConnection = "scm:git:ssh://git@${mavenScmUrl}"
-        }
-    }
+    testImplementation 'org.springframework:spring-test'
 }
