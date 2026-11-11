@@ -9,6 +9,41 @@
 
 ## [Unreleased]
 
+## [3.0.0] - Unreleased
+
+> `v3-dev` 브랜치에서 작업 중. 계획과 진행은 [docs/v3](docs/v3/README.md), 묶음 이슈 [#111](https://github.com/L-DXD/keycloak-spring-security/issues/111).
+
+### Changed
+- Spring Boot 4.1.x 기준으로 다시 짠다. Spring Security 7.1.x, Spring Framework 7.0.x, Java 17 이상 ([#113](https://github.com/L-DXD/keycloak-spring-security/issues/113)).
+- 빌드: Gradle 9.9, configuration cache 켬. 배포 pom에 Boot BOM import를 넣지 않고 빌드 때 고른 판을 적는다 ([#113](https://github.com/L-DXD/keycloak-spring-security/issues/113)).
+- CI: Java 17·21에서 빌드하고, 다음 Boot 판(4.2.0-RC2)으로 미리 돌려 본다. 미리 보기는 실패해도 머지를 막지 않는다 ([#113](https://github.com/L-DXD/keycloak-spring-security/issues/113)).
+- 문서: README, 사용 가이드(`docs/GUIDE.md`·`.ko.md`)를 3.x 기준으로 새로 썼다. 2.x 문서는 `docs/v2/`로 옮겼다 ([#126](https://github.com/L-DXD/keycloak-spring-security/issues/126)).
+
+### Added
+- v2 → v3 옮기기 문서(`docs/MIGRATION-v3.md`·`.ko.md`): 바뀐 설정 키, 빠진 기능과 대안, DB 스키마, Keycloak client 설정, 화면이 할 일. 사용 가이드와 옮기기 문서의 설정 키를 설정 메타데이터와 맞춰 보는 테스트(DOC-02·04)가 있어 키를 더하고 문서를 빠뜨리면 빌드가 실패한다 ([#126](https://github.com/L-DXD/keycloak-spring-security/issues/126)).
+- 확장 지점: 자동 설정의 모든 빈은 같은 타입(CORS·시계는 같은 이름)의 사용자 빈을 올리면 빠진다. 사용자 `SecurityFilterChain`에 `KeycloakHttpConfigurer.keycloak()`을 붙이면 그 체인에서 로그인·갱신·로그아웃이 그대로 된다. 기본 체인은 앱이 다른 체인(예: `/actuator/**`)을 더해도 맨 뒤에 남아 나머지 주소를 지키고, 같은 이름의 빈이나 `keycloak.security.auto-filter-chain=false`로만 빠진다(v2 1.5.0 fail-open 재발 방지). 설정기는 `login`·`csrf`·`cors`·`logout` `Customizer`를 라이브러리 설정 뒤에 부른다. 공개 클래스는 암호 도구(`SessionIds`·`Hkdf`) 말고는 `final`이 아니고, core는 Servlet·Spring Web을 모른다(ArchUnit) ([#125](https://github.com/L-DXD/keycloak-spring-security/issues/125)).
+- MDC 로깅: v2와 같은 키(`traceId`·`httpMethod`·`requestUri`·`clientIp`·`userAgent`·`userId`·`username`·`sessionId`, 켜면 `queryString`·`status`·`durationMs`)와 설정(`keycloak.security.logging.*`, `trusted-proxy-count`). 요청 필터는 보안 체인 맨 앞, 사용자 필터는 인가 앞. `X-Request-Id`·`X-Forwarded-For`의 이상한 값은 쓰지 않고, `username`도 값 가리기(`LoggingValueSanitizer`, 기본 `DefaultPiiMaskingSanitizer`)를 거친다. MDC 접근은 `LoggingContextAccessor` 빈으로 바꾼다 ([#124](https://github.com/L-DXD/keycloak-spring-security/issues/124)).
+- back-channel 로그아웃 `POST /logout/connect/back-channel/keycloak`: Spring Security의 back-channel 필터가 `logout_token`을 검증하고, `KeycloakBackChannelLogoutHandler`가 `sid`(`kc_sid`)의 세션 행을 지운다(사유 `backchannel_logout`). CSRF·Origin 확인은 거치지 않는다. 틀린 토큰과 `sid`가 없는 토큰은 400 ([#123](https://github.com/L-DXD/keycloak-spring-security/issues/123)).
+- 로그아웃 `POST /logout`(CSRF 필요): 세션 행·쿠키 4개를 지우고(사유 `logout`) 리프레시 토큰으로 Keycloak 로그아웃을 서버끼리 부른 뒤 화면 로그아웃 주소로 302. Keycloak이 거절하거나 닿지 않으면 Keycloak 로그아웃 주소(`client_id`·`post_logout_redirect_uri`·`state`, `id_token_hint` 없음)로 302. `GET /logout`은 405. `revoke-refresh-token-on-local-logout=true`면 로컬 로그아웃(절대 상한·토큰 이상) 때 리프레시 토큰을 폐기한다(기본 끔). `KeycloakTokenClient`에 `logout`·`revoke`가 붙었다 ([#122](https://github.com/L-DXD/keycloak-spring-security/issues/122)).
+- CSRF·Origin·CORS: sid에 서명으로 묶은 double-submit 토큰(`SignedDoubleSubmitCsrfTokenRepository`, csrf 쿠키 HttpOnly, Spring 기본 Xor 처리기, 헤더 `X-XSRF-TOKEN`·폼 칸 `_csrf`)과 토큰을 주는 `GET /api/csrf`. 상태 바꾸는 요청은 Origin(없으면 Referer)이 화면이어야 한다. CORS는 화면 origin 하나·쿠키 허용(빈 이름 `keycloakCorsConfigurationSource`). 거절은 403 `INVALID_CSRF_TOKEN`·`ORIGIN_NOT_ALLOWED`. back-channel 로그아웃과 OIDC 콜백은 확인에서 뺀다 ([#121](https://github.com/L-DXD/keycloak-spring-security/issues/121)).
+- 갱신 `KeycloakRefreshService`: at가 없거나 만료면 sid의 세션 행을 잠그고 Keycloak에서 새 토큰을 받아 at 쿠키를 다시 쓴다. 절대 상한·리프레시 만료는 Keycloak을 부르지 않고 끝내고(사유 `absolute`·`idle`), `invalid_grant`면 `refresh_failed`, Keycloak에 닿지 못하면 세션을 두고 503. 같은 세션의 동시 요청은 Keycloak을 한 번만 부르고 그 토큰을 `refresh-reuse-window` 동안 나눠 쓴다. `X-Background` 요청은 갱신하지 않는다. Keycloak 호출은 `KeycloakTokenClient` 빈(기본 `DefaultKeycloakTokenClient`, 연결 2초·읽기 5초)으로 바꾼다 ([#120](https://github.com/L-DXD/keycloak-spring-security/issues/120)).
+- 요청 인증 `KeycloakAccessTokenFilter`: at 쿠키의 액세스 토큰을 로컬에서 검증해 `KeycloakPrincipal`(sub·sid·azp·클레임, 권한 없음)을 넣는다. 요청마다 Keycloak도 DB도 부르지 않는다. 만료 말고 다른 검증 실패면 로컬 로그아웃(`KeycloakLocalLogoutHandler`, 사유 `invalid_token`)하고 갱신하지 않는다. JWKS를 못 받으면 503. 사용자 변환은 `KeycloakPrincipalConverter` 빈으로 바꾼다 ([#119](https://github.com/L-DXD/keycloak-spring-security/issues/119)).
+- 로그인: `oauth2Login`에 PKCE S256, 암호화한 로그인 임시 쿠키(`__Host-{앱 이름}_login`, 5분), 돌아갈 경로(`return`, 상대 경로만)를 붙였다. 성공하면 예전 세션 행을 지우고 새 행과 sid·at·csrf 쿠키를 만든 뒤 화면 주소로 302, 실패하면 화면 `/?login_error=코드`로 302. HttpSession·UserInfo 호출·ID 토큰 저장이 없다. 기본 `SecurityFilterChain`과 `KeycloakHttpConfigurer.keycloak()`을 넣었다 ([#118](https://github.com/L-DXD/keycloak-spring-security/issues/118)).
+- 오류 응답 `KeycloakErrorResponseWriter`: 401·403·503을 `{"code","message"}` JSON으로, 401에는 `loginUrl`을 붙인다. `KeycloakAuthenticationEntryPoint`·`KeycloakAccessDeniedHandler`가 쓴다 ([#118](https://github.com/L-DXD/keycloak-spring-security/issues/118)).
+- 쿠키 `KeycloakCookieWriter`: `__Host-{앱 이름}_sid`·`_at`·`_csrf`·`_login`, Secure·HttpOnly·SameSite=Lax·Path=/, Domain 없음. 수명은 초 아래를 버리고, 지울 때도 같은 속성으로 Max-Age=0. 4KB에 가까운 쿠키는 한 번 경고한다 ([#117](https://github.com/L-DXD/keycloak-spring-security/issues/117)).
+- 세션 행 저장소 `KeycloakSessionStore`: DB(`JdbcKeycloakSessionStore`, PostgreSQL·H2, 기본)와 메모리. sid는 SHA-256만, 리프레시 토큰은 AES-256-GCM(키 id로 교체, 용도별 HKDF 키)으로 저장한다. 갱신은 행 잠금(`SELECT … FOR UPDATE`)으로 한 번만 한다. 스키마 SQL은 jar의 `kss/schema-postgresql.sql`·`kss/schema-h2.sql`이고 앱 마이그레이션이 넣는다. 기동 때 테이블·열을 검사한다 ([#116](https://github.com/L-DXD/keycloak-spring-security/issues/116)).
+- 끝난 세션 행 정리 작업(`session.cleanup-interval`)과 세션 이벤트(CREATED·REFRESHED·ENDED+사유). 기본 감사 로그(`com.ids.keycloak.security.audit`)를 남기고, `KeycloakSessionEventListener` 빈이나 `@EventListener`로 받을 수 있다 ([#116](https://github.com/L-DXD/keycloak-spring-security/issues/116)).
+- 액세스 토큰 로컬 검증 `KeycloakAccessTokenValidator`: JWKS 서명(RS256만)·iss·aud·azp·typ·시간(오차 30초). 만료만 걸리면 갱신 대상, 그 밖은 갱신 없이 실패, JWKS를 못 받으면 503. 모르는 kid면 JWKS를 1분에 한 번까지 다시 받는다 ([#115](https://github.com/L-DXD/keycloak-spring-security/issues/115)).
+- 설정 `keycloak.security.*`와 기동 검사: 필수 값·주소·키 길이를 기동 때 검사하고 잘못된 설정 이름을 모두 알려 준다. 기동 로그에 세션 저장소·앱 이름·화면 주소를 찍는다(비밀값 없음). `session.store=memory`면 경고 ([#114](https://github.com/L-DXD/keycloak-spring-security/issues/114)).
+- 검증 환경: 샘플 Spring Boot 앱(`integration-tests/servlet-app`)과 실제 Keycloak·PostgreSQL로 도는 E2E(`e2eTest`). Docker가 있으면 Testcontainers, 없으면 `start-local.sh` ([#112](https://github.com/L-DXD/keycloak-spring-security/issues/112)).
+- 손으로 해 보는 로컬 환경: `integration-tests/local-stack.sh up`이 Docker Compose로 Keycloak·PostgreSQL·화면(nginx, `https://app.kss.test`)을 띄우고, 샘플 앱은 `bootRun`으로 바로 붙는다. 실제 브라우저로 주요 기능을 하나씩 확인하는 스크립트(`integration-tests/browser/feature-walkthrough.mjs`, 49개, 건너뛴 확인은 따로 셈)와 그 결과·보지 않는 시나리오를 [검증 환경](docs/v3/03-검증-환경.md) 4-2절에 적었다. 스크립트는 LF로 받게 했다(`.gitattributes`). 시험 이미지는 `KSS_E2E_KEYCLOAK_IMAGE`·`KSS_E2E_POSTGRES_IMAGE`로 바꿀 수 있다 ([#128](https://github.com/L-DXD/keycloak-spring-security/issues/128)).
+
+### Removed
+- 2.x 코드를 모두 걷어냈다. 기능은 v3 설계대로 #114~#126에서 새로 들어온다 ([#113](https://github.com/L-DXD/keycloak-spring-security/issues/113)).
+- WebFlux 모듈(`keycloak-spring-security-webflux`, `-webflux-starter`). 3.1.0에서 다시 넣는다 ([#127](https://github.com/L-DXD/keycloak-spring-security/issues/127)).
+- `keycloak-client` 의존. Lombok.
+- v2 설정 가운데 Basic 인증(`basic-auth.*`), Bearer·토큰 발급 API(`bearer-token.*`), Rate limit(`rate-limit.*`), Keycloak 인가(`authorization.*`), 역할 매핑(`role-mapping.*`), 정적 리소스(`static-resources.*`), 쿠키 속성(`cookie.*`), 오류 리다이렉트(`error.*`), `matcher.*`, Redis·HttpSession 세션, `KeycloakLoginService`. 대안은 [옮기기 문서](docs/MIGRATION-v3.ko.md) 3-2절.
+
 ## [2.0.3] - 2026-07-16
 ### Fixed
 - **`keycloak.security.error.*` 프로퍼티가 전혀 적용되지 않던 버그**: `KeycloakHttpConfigurer`가 `exceptionHandling`의 EntryPoint/AccessDeniedHandler를 `configure()`에서 등록해, 그보다 뒤에 실행되는 `oauth2Login`이 심는 기본 EntryPoint에 덮어씌워지고 있었음. 그 결과 `error.redirect-enabled`, `error.authentication-failed-redirect-url`, `error.access-denied-redirect-url` 등 에러 처리 설정이 무시되고 항상 Spring Security 기본 동작이 나갔음. 등록 시점을 `init()`으로 옮겨 라이브러리 핸들러가 최종 필터 체인에 반영되도록 수정. **1.9.0 ~ 2.0.2 공통 결함**이며, 이 수정으로 `error.*` 설정이 처음으로 실제 적용된다.

@@ -29,9 +29,6 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Grant execute permission
-        run: chmod +x ./gradlew
-
       - name: Decode GPG Key
         run: |
           # 1. Base64 디코딩하여 파일 생성 (디버깅/확인용)
@@ -57,7 +54,7 @@ jobs:
       - name: Build all modules
         run: ./gradlew build --no-daemon
 
-      # 배포 순서: core → web, webflux → web-starter, webflux-starter (의존성 순서)
+      # 배포 순서: core → web → web-starter (의존성 순서). WebFlux 모듈은 3.1.0에서 다시 넣는다 (#127)
       - name: Publish core
         run: ./gradlew :keycloak-spring-security-core:publish --no-daemon
         env:
@@ -65,19 +62,15 @@ jobs:
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
           ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_PASSWORD }}
 
-      - name: Publish web and webflux
-        run: |
-          ./gradlew :keycloak-spring-security-web:publish --no-daemon
-          ./gradlew :keycloak-spring-security-webflux:publish --no-daemon
+      - name: Publish web
+        run: ./gradlew :keycloak-spring-security-web:publish --no-daemon
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
           ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_PASSWORD }}
 
-      - name: Publish web-starter and webflux-starter
-        run: |
-          ./gradlew :keycloak-spring-security-web-starter:publish --no-daemon
-          ./gradlew :keycloak-spring-security-webflux-starter:publish --no-daemon
+      - name: Publish web-starter
+        run: ./gradlew :keycloak-spring-security-web-starter:publish --no-daemon
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
@@ -119,24 +112,11 @@ jobs:
             implementation 'io.github.l-dxd:keycloak-spring-security-web-starter:${{ steps.version.outputs.version }}'
             ```
 
-            ### Reactive (Spring WebFlux)
-            ```groovy
-            implementation 'io.github.l-dxd:keycloak-spring-security-webflux-starter:${{ steps.version.outputs.version }}'
-            ```
-
             ### Maven
             ```xml
-            <!-- Servlet -->
             <dependency>
                 <groupId>io.github.l-dxd</groupId>
                 <artifactId>keycloak-spring-security-web-starter</artifactId>
-                <version>${{ steps.version.outputs.version }}</version>
-            </dependency>
-
-            <!-- Reactive -->
-            <dependency>
-                <groupId>io.github.l-dxd</groupId>
-                <artifactId>keycloak-spring-security-webflux-starter</artifactId>
                 <version>${{ steps.version.outputs.version }}</version>
             </dependency>
             ```

@@ -1,48 +1,41 @@
 package com.ids.keycloak.security.logging;
 
 /**
- * 라이브러리 전반에서 사용하는 표준 MDC 키를 정의합니다.
+ * 라이브러리가 MDC에 넣는 키. v2와 같은 이름이다 (로그 형식·대시보드를 그대로 쓸 수 있게).
  */
-public final class LoggingContextKeys {
+public class LoggingContextKeys {
 
-    private LoggingContextKeys() {}
+    // ===== 요청 (인증 전) =====
 
-    // ===== 요청 메타데이터 (인증 전 설정) =====
-
-    /** 요청 추적 ID (X-Request-Id 또는 자동 생성) */
+    /** 요청 추적 id ({@code X-Request-Id} 또는 새 UUID). */
     public static final String TRACE_ID = "traceId";
-
-    /** HTTP 메서드 (GET, POST, PUT, DELETE 등) */
+    /** HTTP 메서드. */
     public static final String HTTP_METHOD = "httpMethod";
-
-    /** 요청 URI */
+    /** 요청 경로. */
     public static final String REQUEST_URI = "requestUri";
-
-    /** 쿼리 스트링 (? 제외) */
+    /** 쿼리 문자열 (? 뺌, 디코딩·길이 제한·마스킹). 기본은 넣지 않는다. */
     public static final String QUERY_STRING = "queryString";
-
-    /** 클라이언트 IP 주소 */
+    /** 클라이언트 IP ({@code trusted-proxy-count} 기준). */
     public static final String CLIENT_IP = "clientIp";
-
-    /** User-Agent 헤더 (마스킹 + 길이 제한 적용) */
+    /** User-Agent (길이 제한·마스킹). */
     public static final String USER_AGENT = "userAgent";
 
-    // ===== 응답 메트릭 (요청 종료 시 설정) =====
+    // ===== 응답 (요청 끝, 기본 끔) =====
 
-    /** HTTP 응답 상태 코드 */
+    /** 응답 상태 코드. */
     public static final String STATUS = "status";
-
-    /** 요청 처리 소요 시간 (밀리초) */
+    /** 처리 시간 (밀리초). */
     public static final String DURATION_MS = "durationMs";
 
-    // ===== 인증 정보 (인증 후 설정) =====
+    // ===== 사용자 (인증 뒤) =====
 
-    /** 인증된 사용자 ID (Keycloak sub claim) */
+    /** Keycloak 사용자 id ({@code sub}). */
     public static final String USER_ID = "userId";
-
-    /** 인증된 사용자 이름 (preferred_username) */
+    /** {@code preferred_username}. */
     public static final String USERNAME = "username";
-
-    /** Keycloak 세션 ID (sid claim) */
+    /** Keycloak 세션 id (액세스 토큰 {@code sid}). 앱의 sid 쿠키 값이 아니다. */
     public static final String SESSION_ID = "sessionId";
+
+    protected LoggingContextKeys() {
+    }
 }

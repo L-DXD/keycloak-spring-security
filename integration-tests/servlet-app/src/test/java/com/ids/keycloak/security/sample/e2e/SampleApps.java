@@ -1,0 +1,84 @@
+package com.ids.keycloak.security.sample.e2e;
+
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.context.ConfigurableApplicationContext;
+
+import com.ids.keycloak.security.sample.SampleApplication;
+
+/**
+ * 샘플 앱을 테스트 JVM 안에서 띄운다. 앱 하나(client)당 한 번만 띄우고 JVM이 끝날 때 내린다.
+ * <ul>
+ *   <li>{@link #demo()}: client {@code demo}, {@code https://api.kss.test:8443}</li>
+ *   <li>{@link #demo2()}: client {@code demo2}, {@code https://api.kss.test:8444} (SSO·back-channel 시나리오)</li>
+ * </ul>
+ */
+public final class SampleApps {
+
+    private static final Map<String, Running> RUNNING = new HashMap<>();
+
+    private SampleApps() {
+    }
+
+    public static Running demo() {
+        return start("demo", 8443, null);
+    }
+
+    public static Running demo2() {
+        return start("demo2", 8444, "demo2");
+    }
+
+    private static synchronized Running start(String clientId, int port, String profile) {
+        return RUNNING.computeIfAbsent(clientId, id -> {
+            E2eEnvironment env = E2eEnvironment.get();
+            // back-channel 로그아웃 테스트 키를 앱이 JWKS를 받기 전에 realm에 넣는다
+            E2eLogoutTokens.get();
+            Map<String, Object> properties = new LinkedHashMap<>();
+            properties.put("kss.keycloak.url", env.keycloakUrl());
+            properties.put("kss.db.url", env.dbUrl());
+            properties.put("kss.db.username", env.dbUsername());
+            properties.put("kss.db.password", env.dbPassword());
+            properties.put("kss.tls-dir", env.tlsDir().toString());
+            properties.put("spring.main.banner-mode", "off");
+            // EVT-02: 라이브러리 DEBUG 로그까지 토큰·sid가 없는지 본다
+            properties.put("logging.level.com.ids.keycloak.security", "DEBUG");
+
+            E2eClock clock = new E2eClock();
+            SqlRecorder sql = new SqlRecorder();
+            HttpSessionCounter sessions = new HttpSessionCounter();
+            KeycloakOutage outage = new KeycloakOutage();
+            E2eSessionEvents events = new E2eSessionEvents();
+            SpringApplicationBuilder builder = new SpringApplicationBuilder(SampleApplication.class).properties(properties)
+                .listeners(events)
+                .initializers(context -> {
+                    context.getBeanFactory().registerSingleton("keycloakSecurityClock", clock);
+                    context.getBeanFactory().registerSingleton("e2eHttpSessionCounter", sessions);
+                    context.getBeanFactory().addBeanPostProcessor(sql);
+                    outage.attach(context);
+                    context.getBeanFactory().addBeanPostProcessor(outage);
+                });
+            if (profile != null) {
+                builder.profiles(profile);
+            }
+            ConfigurableApplicationContext context = builder.run();
+            E2eLogRecorder.attach();
+            Runtime.getRuntime().addShutdownHook(new Thread(context::close));
+            return new Running(clientId, "https://api.kss.test:" + port, context, clock, sql, sessions, outage, events);
+        });
+    }
+
+    /**
+     * 떠 있는 샘플 앱 하나. 테스트용으로 앱에 넣은 것: 시계({@code keycloakSecurityClock}), SQL 기록, HttpSession 수,
+     * 갱신 때 Keycloak 끊기({@link KeycloakOutage}), 세션 이벤트 모음({@link E2eSessionEvents}).
+     */
+    public record Running(String clientId, String baseUrl, ConfigurableApplicationContext context, E2eClock clock, SqlRecorder sql,
+                          HttpSessionCounter httpSessions, KeycloakOutage keycloakOutage, E2eSessionEvents sessionEvents) {
+
+        public String url(String path) {
+            return baseUrl + path;
+        }
+    }
+}
