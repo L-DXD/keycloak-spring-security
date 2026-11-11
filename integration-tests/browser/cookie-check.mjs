@@ -1,5 +1,5 @@
 // 실제 브라우저(Chromium)로 쿠키 동작을 한 번 본다 (#91). Gradle 빌드에 묶지 않은 손 확인용이다.
-// 준비: 샘플 앱(https://api.kss.test:8443)과 Keycloak(http://sso.kss.test:8180)을 띄운다 (docs/v3/03-검증-환경.md 7절).
+// 준비: 샘플 앱(https://api.kss.test:8443)과 Keycloak(http://sso.kss.test:8180)을 띄운다 (docs/v3/03-검증-환경.md 4-1절·5절).
 // 실행: node integration-tests/browser/cookie-check.mjs   (Playwright가 깔린 Node)
 //       모든 주소가 이 기계 안이다. HTTPS_PROXY 같은 프록시 환경 변수가 있으면 지우고 돌린다(브라우저가 그 프록시로 보낸다)
 // 화면 app.kss.test와 다른 사이트 evil.test는 이 스크립트가 띄우는 작은 HTTPS 서버(127.0.0.1:9443)가 맡는다.

@@ -36,6 +36,7 @@
 - 액세스 토큰 로컬 검증 `KeycloakAccessTokenValidator`: JWKS 서명(RS256만)·iss·aud·azp·typ·시간(오차 30초). 만료만 걸리면 갱신 대상, 그 밖은 갱신 없이 실패, JWKS를 못 받으면 503. 모르는 kid면 JWKS를 1분에 한 번까지 다시 받는다 ([#80](https://github.com/L-DXD/keycloak-spring-security/issues/80)).
 - 설정 `keycloak.security.*`와 기동 검사: 필수 값·주소·키 길이를 기동 때 검사하고 잘못된 설정 이름을 모두 알려 준다. 기동 로그에 세션 저장소·앱 이름·화면 주소를 찍는다(비밀값 없음). `session.store=memory`면 경고 ([#79](https://github.com/L-DXD/keycloak-spring-security/issues/79)).
 - 검증 환경: 샘플 Spring Boot 앱(`integration-tests/servlet-app`)과 실제 Keycloak·PostgreSQL로 도는 E2E(`e2eTest`). Docker가 있으면 Testcontainers, 없으면 `start-local.sh` ([#77](https://github.com/L-DXD/keycloak-spring-security/issues/77)).
+- 손으로 해 보는 로컬 환경: `integration-tests/local-stack.sh up`이 Docker Compose로 Keycloak·PostgreSQL·화면(nginx, `https://app.kss.test`)을 띄우고, 샘플 앱은 `bootRun`으로 바로 붙는다. 실제 브라우저로 주요 기능을 하나씩 확인하는 스크립트(`integration-tests/browser/feature-walkthrough.mjs`, 49개, 건너뛴 확인은 따로 셈)와 그 결과·보지 않는 시나리오를 [검증 환경](docs/v3/03-검증-환경.md) 4-2절에 적었다. 스크립트는 LF로 받게 했다(`.gitattributes`). 시험 이미지는 `KSS_E2E_KEYCLOAK_IMAGE`·`KSS_E2E_POSTGRES_IMAGE`로 바꿀 수 있다 ([#109](https://github.com/L-DXD/keycloak-spring-security/issues/109)).
 
 ### Removed
 - 2.x 코드를 모두 걷어냈다. 기능은 v3 설계대로 #79~#91에서 새로 들어온다 ([#78](https://github.com/L-DXD/keycloak-spring-security/issues/78)).

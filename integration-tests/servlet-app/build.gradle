@@ -25,13 +25,13 @@ tasks.named('bootJar') { enabled = false }
 def e2eDir = layout.buildDirectory.dir('e2e')
 def keycloakDir = rootProject.layout.projectDirectory.dir('integration-tests/keycloak')
 
-// 테스트 CA·서버 인증서 (integration-tests/keycloak/gen-test-certs.sh). start-local.sh와 같은 폴더를 쓴다
+// 테스트 CA·서버 인증서 (integration-tests/keycloak/gen-test-certs.sh). start-local.sh·local-stack.sh와 같은 폴더를 쓴다.
+// 스크립트가 "이미 있으면 그대로 둔다"를 맡는다. 출력 폴더를 Gradle 출력으로 적지 않는다:
+// 적으면 처음 돌 때(새 작업 폴더 등) Gradle이 그 폴더를 지워 CA가 바뀌고, 이미 띄운 Keycloak이 샘플 앱을 믿지 못한다
 def e2eCerts = tasks.register('e2eCerts', Exec) {
     group = 'verification'
-    description = 'E2E용 테스트 CA와 api.kss.test 인증서를 만든다'
+    description = 'E2E·로컬 실행용 테스트 CA와 인증서를 만든다 (이미 있으면 그대로 둔다)'
     def out = e2eDir.map { it.dir('tls') }
-    inputs.file(keycloakDir.file('gen-test-certs.sh'))
-    outputs.dir(out)
     commandLine 'bash', keycloakDir.file('gen-test-certs.sh').asFile.absolutePath, out.get().asFile.absolutePath
 }
 
@@ -44,6 +44,15 @@ def e2eHosts = tasks.register('e2eHosts') {
         def localName = InetAddress.localHost.hostName
         out.get().asFile.text = "127.0.0.1 localhost ${localName} app.kss.test api.kss.test sso.kss.test\n::1 localhost\n"
     }
+}
+
+// 손으로 띄우기: ./gradlew :integration-tests:servlet-app:bootRun  (두 번째 앱은 --args=--spring.profiles.active=demo2)
+// Keycloak·DB·화면은 integration-tests/local-stack.sh up 으로 먼저 띄운다 (docs/v3/03-검증-환경.md 5절).
+// *.kss.test 이름은 E2E와 같은 hosts 파일로 이 JVM 안에서만 푼다
+tasks.named('bootRun', JavaExec) {
+    dependsOn e2eCerts, e2eHosts
+    def hosts = e2eDir.map { it.file('hosts') }
+    jvmArgumentProviders.add({ ["-Djdk.net.hosts.file=${hosts.get().asFile.absolutePath}".toString()] } as CommandLineArgumentProvider)
 }
 
 // E2E-01·02: ./gradlew :integration-tests:servlet-app:e2eTest

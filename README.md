@@ -68,6 +68,17 @@ The groupId is `io.github.l-dxd` and the package root is `com.ids.keycloak.secur
 
 The E2E suite runs the sample Spring Boot app in `integration-tests/servlet-app` against a real Keycloak and PostgreSQL and drives it like a browser, from login to back-channel logout. How to run it is in the [test environment](docs/v3/03-검증-환경.md) document (Korean).
 
+To try the sample app by hand, start a local Keycloak, PostgreSQL and a small front-end page with Docker (test values only, bound to 127.0.0.1), then run the app:
+
+```bash
+integration-tests/local-stack.sh up                       # Keycloak :8180, PostgreSQL :5432, front https://app.kss.test
+./gradlew :integration-tests:servlet-app:bootRun          # sample app https://api.kss.test:8443
+./gradlew :integration-tests:servlet-app:bootRun --args=--spring.profiles.active=demo2   # second app :8444 (SSO, back-channel logout)
+integration-tests/local-stack.sh down                     # remove everything (realm and DB start fresh next time)
+```
+
+With both apps running, `integration-tests/browser/feature-walkthrough.mjs` checks every feature in a real Chromium (Playwright). The commands and the results are in section 4-2 of the [test environment](docs/v3/03-검증-환경.md) document.
+
 ## Contributing
 
 One issue, one PR. The acceptance scenarios in the issue become the test names, and an issue closes only when all of them pass as automated tests. The process is in [docs/v3/README](docs/v3/README.md).

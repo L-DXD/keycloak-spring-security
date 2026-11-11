@@ -24,8 +24,11 @@ import org.testcontainers.utility.MountableFile;
 public final class E2eEnvironment {
 
     public static final String REALM = "kss-demo";
-    public static final String KEYCLOAK_IMAGE = "quay.io/keycloak/keycloak:" + env("KSS_E2E_KEYCLOAK_VERSION", "26.8.2");
-    public static final String POSTGRES_IMAGE = "postgres:16-alpine";
+    /** 다른 저장소(사내 미러 등)에서 받을 때는 {@code KSS_E2E_KEYCLOAK_IMAGE}에 이미지 전체 이름을 준다. */
+    public static final String KEYCLOAK_IMAGE = env("KSS_E2E_KEYCLOAK_IMAGE",
+        "quay.io/keycloak/keycloak:" + env("KSS_E2E_KEYCLOAK_VERSION", "26.8.2"));
+    /** 다른 저장소에서 받을 때는 {@code KSS_E2E_POSTGRES_IMAGE}. */
+    public static final String POSTGRES_IMAGE = env("KSS_E2E_POSTGRES_IMAGE", "postgres:16-alpine");
 
     private static E2eEnvironment instance;
 
@@ -101,7 +104,7 @@ public final class E2eEnvironment {
             dbSource = "external";
         } else {
             requireDocker("KSS_E2E_DB_URL");
-            PostgreSQLContainer postgres = new PostgreSQLContainer(DockerImageName.parse(POSTGRES_IMAGE))
+            PostgreSQLContainer postgres = new PostgreSQLContainer(DockerImageName.parse(POSTGRES_IMAGE).asCompatibleSubstituteFor("postgres"))
                 .withDatabaseName("kss")
                 .withUsername("kss")
                 .withPassword("kss");

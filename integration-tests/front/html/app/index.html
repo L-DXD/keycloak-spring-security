@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kss 샘플 화면 (로컬 테스트)</title>
+<style>
+  body { font-family: system-ui, sans-serif; line-height: 1.5; max-width: 52rem; margin: 2rem auto; padding: 0 1rem; }
+  section { border: 1px solid #ccc; border-radius: 8px; padding: 0 1rem 1rem; margin: 1rem 0; }
+  button, a.button { display: inline-block; margin: .25rem .25rem .25rem 0; padding: .4rem .8rem; font: inherit;
+    border: 1px solid #888; border-radius: 4px; background: #f4f4f4; color: inherit; text-decoration: none; cursor: pointer; }
+  pre { background: #f6f6f6; padding: .75rem; min-height: 2.5rem; white-space: pre-wrap; word-break: break-all; }
+  .note { color: #555; font-size: .9rem; }
+  #banner { background: #eef6ee; border: 1px solid #9c9; padding: .5rem 1rem; border-radius: 6px; }
+</style>
+</head>
+<body>
+<h1>kss 샘플 화면 (로컬 테스트)</h1>
+<p class="note">
+  화면(<code>https://app.kss.test</code>)이 샘플 앱 API를 부르는 모습을 흉내 낸 정적 페이지입니다.
+  로그인 쿠키는 API 주소(<code>api.kss.test</code>)에만 있고, 이 페이지의 스크립트는 그 쿠키를 읽지 못합니다.
+</p>
+<p id="banner" hidden>로그아웃됐습니다.</p>
+<p>지금 주소: <code id="location"></code></p>
+<div id="apps"></div>
+
+<script>
+  // 샘플 앱 두 벌 (docs/v3/03-검증-환경.md 2절). 둘 다 같은 Keycloak realm(kss-demo)을 쓴다
+  const APPS = [
+    { name: 'demo', api: 'https://api.kss.test:8443' },
+    { name: 'demo2', api: 'https://api.kss.test:8444' },
+  ];
+
+  const path = location.pathname;
+  document.getElementById('location').textContent = location.href;
+  document.getElementById('banner').hidden = path !== '/logged-out';
+  // 로그인 뒤 돌아올 경로. 로그아웃 화면이면 처음 화면으로
+  const returnPath = path === '/logged-out' ? '/' : path;
+
+  async function call(out, label, url, init = {}) {
+    try {
+      const response = await fetch(url, { credentials: 'include', ...init });
+      const text = await response.text();
+      out.textContent = `${label}: ${response.status}\n${text}`;
+      return { status: response.status, text };
+    } catch (e) {
+      out.textContent = `${label}: 요청 실패 (${e.name}: ${e.message})`;
+      return { status: 0, text: '' };
+    }
+  }
+
+  async function csrfToken(api) {
+    const response = await fetch(`${api}/api/csrf`, { credentials: 'include' });
+    return (await response.json()).token;
+  }
+
+  for (const app of APPS) {
+    const section = document.createElement('section');
+    section.dataset.app = app.name;
+    section.innerHTML = `
+      <h2>${app.name} <small class="note">${app.api}</small></h2>
+      <a class="button" id="${app.name}-login">로그인</a>
+      <button type="button" id="${app.name}-me">내 정보 (GET /api/me)</button>
+      <button type="button" id="${app.name}-item">항목 만들기 (POST /api/items, CSRF)</button>
+      <button type="button" id="${app.name}-logout">로그아웃 (POST /logout)</button>
+      <form id="${app.name}-logout-form" method="post" action="${app.api}/logout" hidden>
+        <input type="hidden" name="_csrf">
+      </form>
+      <pre id="${app.name}-out"></pre>`;
+    document.getElementById('apps').appendChild(section);
+
+    const out = section.querySelector('pre');
+    section.querySelector(`#${app.name}-login`).href =
+      `${app.api}/oauth2/authorization/keycloak?return=${encodeURIComponent(returnPath)}`;
+    section.querySelector(`#${app.name}-me`).onclick = () => call(out, 'GET /api/me', `${app.api}/api/me`);
+    section.querySelector(`#${app.name}-item`).onclick = async () => {
+      const token = await csrfToken(app.api);
+      await call(out, 'POST /api/items', `${app.api}/api/items`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-XSRF-TOKEN': token },
+        body: JSON.stringify({ name: `화면에서 만든 항목 ${new Date().toLocaleTimeString()}` }),
+      });
+    };
+    // 로그아웃은 화면 이동(폼 POST)이다. 숨은 칸 _csrf에 토큰을 넣고 보낸다
+    section.querySelector(`#${app.name}-logout`).onclick = async () => {
+      const form = section.querySelector('form');
+      form.elements._csrf.value = await csrfToken(app.api);
+      form.submit();
+    };
+  }
+</script>
+</body>
+</html>
