@@ -14,7 +14,7 @@ public interface KeycloakTokenClient {
     KeycloakTokenResponse refresh(String refreshToken);
 
     /**
-     * 리프레시 토큰으로 Keycloak 세션을 끝낸다 (OIDC 로그아웃 주소에 서버끼리 POST, #87). Keycloak SSO 세션이 끝난다.
+     * 리프레시 토큰으로 Keycloak 세션을 끝낸다 (OIDC 로그아웃 주소에 서버끼리 POST, #122). Keycloak SSO 세션이 끝난다.
      *
      * @throws KeycloakTokenException Keycloak이 거절했거나(이미 끝난 세션 등) 부르지 못했다
      */

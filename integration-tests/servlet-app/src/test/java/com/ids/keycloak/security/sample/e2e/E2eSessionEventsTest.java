@@ -15,7 +15,7 @@ import com.ids.keycloak.security.event.KeycloakSessionEvent;
 import com.ids.keycloak.security.sample.e2e.BrowserClient.Exchange;
 
 /**
- * V3-13 세션 이벤트 (#89): 실제 Keycloak으로 로그인·갱신·로그아웃하고, 샘플 앱이 Spring 이벤트로 받은 순서를 본다 (EVT-01).
+ * V3-13 세션 이벤트 (#124): 실제 Keycloak으로 로그인·갱신·로그아웃하고, 샘플 앱이 Spring 이벤트로 받은 순서를 본다 (EVT-01).
  * 감사 로그 내용은 각 기능의 E2E가, 로그에 토큰·sid가 없는지는 {@link E2eZzLogHygieneTest}(EVT-02)가 본다.
  */
 @E2eTest

@@ -33,7 +33,7 @@ import jakarta.servlet.http.HttpServletRequest;
 
 /**
  * V3-08 요청 인증을 자동 설정의 기본 보안 체인 그대로 돌려 본다 (REQ-01·02·06, 통합).
- * 토큰 검증기만 테스트용으로 바꾼다 (서명 검증은 #80 단위·E2E 테스트가 본다).
+ * 토큰 검증기만 테스트용으로 바꾼다 (서명 검증은 #115 단위·E2E 테스트가 본다).
  */
 class KeycloakRequestAuthenticationTest {
 

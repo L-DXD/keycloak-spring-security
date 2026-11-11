@@ -50,7 +50,7 @@ class E2e01EnvironmentTest {
         try (BrowserClient browser = new BrowserClient(env.caCertificate())) {
             BrowserClient.Exchange ping = browser.get(app.url("/api/public/ping"));
 
-            // TLS가 맺어지고 앱이 답한다. 허용·거절은 #83에서 본다
+            // TLS가 맺어지고 앱이 답한다. 허용·거절은 #118에서 본다
             assertThat(ping.status()).isBetween(200, 499);
             assertThat(ping.uri().getScheme()).isEqualTo("https");
         }

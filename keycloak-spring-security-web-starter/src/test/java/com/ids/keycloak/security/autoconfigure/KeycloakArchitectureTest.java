@@ -15,7 +15,7 @@ import com.tngtech.archunit.core.domain.JavaModifier;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
 
-/** V3-14 (#90): 커스텀을 열어 둔다. core·web·starter의 공개 클래스를 한 번에 읽는다. */
+/** V3-14 (#125): 커스텀을 열어 둔다. core·web·starter의 공개 클래스를 한 번에 읽는다. */
 class KeycloakArchitectureTest {
 
     private static final JavaClasses ALL = new ClassFileImporter()

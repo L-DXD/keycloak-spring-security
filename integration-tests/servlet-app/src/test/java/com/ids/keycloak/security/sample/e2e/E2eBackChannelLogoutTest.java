@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 import com.ids.keycloak.security.sample.e2e.BrowserClient.Exchange;
 
 /**
- * V3-12 back-channel 로그아웃 (#88): Keycloak이 서버끼리 보내는 {@code logout_token}으로 다른 앱의 세션 행을 지운다 (BCL-01~04).
+ * V3-12 back-channel 로그아웃 (#123): Keycloak이 서버끼리 보내는 {@code logout_token}으로 다른 앱의 세션 행을 지운다 (BCL-01~04).
  * BCL-01은 실제 Keycloak이 보내는 토큰, BCL-02~04는 테스트 realm에 넣은 E2E 전용 키로 직접 서명한 토큰({@link E2eLogoutTokens})을 쓴다.
  */
 @E2eTest

@@ -12,7 +12,7 @@ import com.ids.keycloak.security.token.KeycloakAccessTokenValidator;
  * V3-04: 실제 Keycloak이 준 액세스 토큰이 라이브러리 로컬 검증(JWT-01)을 통과한다.
  * <p>
  * realm 설정(audience mapper, typ, sid)과 검증 규칙이 맞물리는지 본다. 토큰은 로그인 뒤 at 쿠키와 세션 행(앱 암호로 풀어서)에서 꺼낸다.
- * 요청마다 Keycloak을 부르지 않는 것(JWT-09)은 요청 인증(#84) 뒤에 본다.
+ * 요청마다 Keycloak을 부르지 않는 것(JWT-09)은 요청 인증(#119) 뒤에 본다.
  */
 @E2eTest
 class E2eJwtRealTokenTest {

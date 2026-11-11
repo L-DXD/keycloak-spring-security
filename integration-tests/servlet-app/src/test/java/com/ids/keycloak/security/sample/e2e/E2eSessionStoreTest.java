@@ -21,7 +21,7 @@ import com.ids.keycloak.security.session.SessionIds;
 
 /**
  * V3-05 (실제 PostgreSQL, 샘플 앱): Flyway로 넣은 세션 테이블을 라이브러리 저장소가 쓴다.
- * 로그인이 행을 만드는 것은 E2eLoginTest(#83)에서 본다. 여기서는 앱에 올라간 빈으로 직접 넣고 지운다.
+ * 로그인이 행을 만드는 것은 E2eLoginTest(#118)에서 본다. 여기서는 앱에 올라간 빈으로 직접 넣고 지운다.
  */
 @E2eTest
 class E2eSessionStoreTest {

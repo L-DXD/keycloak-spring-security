@@ -14,7 +14,7 @@ import com.ids.keycloak.security.sample.e2e.BrowserClient.Exchange;
 import tools.jackson.databind.JsonNode;
 
 /**
- * V3-08 요청 인증 (#84): 로그인한 쿠키로 API를 부를 때 Keycloak도 DB도 부르지 않는지 실제 Keycloak·PostgreSQL로 본다
+ * V3-08 요청 인증 (#119): 로그인한 쿠키로 API를 부를 때 Keycloak도 DB도 부르지 않는지 실제 Keycloak·PostgreSQL로 본다
  * (REQ-01~05, JWT-09). REQ-06(사용자 변환기)은 스타터 통합 테스트가 본다.
  */
 @E2eTest

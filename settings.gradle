@@ -15,7 +15,7 @@ include 'keycloak-spring-security-core'
 include 'keycloak-spring-security-web'
 include 'keycloak-spring-security-web-starter'
 
-// 샘플 앱 + 실제 Keycloak E2E (docs/v3/03-검증-환경.md, #77). 배포하지 않는다
+// 샘플 앱 + 실제 Keycloak E2E (docs/v3/03-검증-환경.md, #112). 배포하지 않는다
 include 'integration-tests:servlet-app'
 
-// WebFlux 모듈은 3.1.0에서 다시 넣는다 (docs/v3/04-결정-기록.md D5, #92)
+// WebFlux 모듈은 3.1.0에서 다시 넣는다 (docs/v3/04-결정-기록.md D5, #127)

@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 import com.ids.keycloak.security.sample.e2e.BrowserClient.Exchange;
 
 /**
- * V3-13 로그 점검 (#89, EVT-02): 테스트 JVM이 남긴 모든 로그(샘플 앱 두 개, 라이브러리는 DEBUG까지)에 토큰 모양(JWT)과 샘플 앱이 준
+ * V3-13 로그 점검 (#124, EVT-02): 테스트 JVM이 남긴 모든 로그(샘플 앱 두 개, 라이브러리는 DEBUG까지)에 토큰 모양(JWT)과 샘플 앱이 준
  * {@code __Host-} 쿠키 값(sid·at·csrf·login)이 하나도 없는지 본다. 리프레시 토큰도 Keycloak에서는 JWT라 같이 걸린다.
  * <p>
  * 클래스 이름순으로 돌아 맨 끝에 돈다({@code junit-platform.properties}). 혼자 돌려도 의미가 있게 로그인·갱신·잘못된 토큰·로그아웃을

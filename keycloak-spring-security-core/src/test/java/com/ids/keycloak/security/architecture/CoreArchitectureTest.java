@@ -10,7 +10,7 @@ import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
 
-/** V3-14 (#90): core는 Servlet·Spring Web을 모른다. JDBC 저장소를 WebFlux(3.1.0)와 같이 쓰려고 (D16). */
+/** V3-14 (#125): core는 Servlet·Spring Web을 모른다. JDBC 저장소를 WebFlux(3.1.0)와 같이 쓰려고 (D16). */
 class CoreArchitectureTest {
 
     private static final JavaClasses CORE = new ClassFileImporter()

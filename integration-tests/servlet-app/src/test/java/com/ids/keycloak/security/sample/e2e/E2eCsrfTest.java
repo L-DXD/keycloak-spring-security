@@ -15,7 +15,7 @@ import com.ids.keycloak.security.sample.e2e.BrowserClient.Exchange;
 import tools.jackson.databind.JsonNode;
 
 /**
- * V3-10 CSRF·Origin·CORS (#86): 실제 Keycloak으로 로그인한 쿠키로 샘플 앱의 {@code POST /api/items}를 부른다 (CSRF-01~07, CORS-01·02).
+ * V3-10 CSRF·Origin·CORS (#121): 실제 Keycloak으로 로그인한 쿠키로 샘플 앱의 {@code POST /api/items}를 부른다 (CSRF-01~07, CORS-01·02).
  * 화면은 {@code https://app.kss.test}이고, 다른 화면 흉내는 같은 사이트의 {@code https://evil.kss.test}다(SameSite만으로는 못 막는 경우).
  */
 @E2eTest

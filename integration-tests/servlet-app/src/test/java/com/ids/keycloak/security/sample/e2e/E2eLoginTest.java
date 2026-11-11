@@ -25,7 +25,7 @@ import com.ids.keycloak.security.sample.e2e.BrowserClient.StoredCookie;
 import tools.jackson.databind.JsonNode;
 
 /**
- * V3-07 로그인 (#83): 실제 Keycloak과 샘플 앱으로 LOGIN-01~08, COOKIE-01~03을 본다 (02 문서 3·4절).
+ * V3-07 로그인 (#118): 실제 Keycloak과 샘플 앱으로 LOGIN-01~08, COOKIE-01~03을 본다 (02 문서 3·4절).
  * 샘플 앱 설정은 액세스 토큰 60초, 절대 상한 3분이다 (03 문서 2절).
  */
 @E2eTest

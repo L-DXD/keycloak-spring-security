@@ -23,7 +23,7 @@ import com.ids.keycloak.security.web.refresh.KeycloakTokenException;
 import tools.jackson.databind.JsonNode;
 
 /**
- * V3-09 갱신 (#85): 액세스 토큰이 만료되면 서버가 sid로 세션 행을 잠그고 Keycloak에서 새 토큰을 받는다.
+ * V3-09 갱신 (#120): 액세스 토큰이 만료되면 서버가 sid로 세션 행을 잠그고 Keycloak에서 새 토큰을 받는다.
  * 실제 Keycloak·PostgreSQL과 샘플 앱으로 REFRESH-01~07을 본다. REFRESH-08·09는 web 모듈 단위·통합 테스트가 본다.
  * <p>
  * 액세스 토큰 만료는 at 쿠키를 지워서 만든다(브라우저가 Max-Age가 지난 쿠키를 버린 것과 같다). 실제 60초 만료와

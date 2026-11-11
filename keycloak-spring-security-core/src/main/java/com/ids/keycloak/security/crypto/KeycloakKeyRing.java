@@ -8,7 +8,7 @@ import java.util.Set;
 /**
  * 키 묶음 ({@code keycloak.security.crypto.*}). 키 id마다 32바이트 이상의 키가 있고, 새로 암호화할 때는 활성 키를 쓴다.
  * <p>
- * 리프레시 토큰 암호화, 로그인 임시 쿠키, CSRF 서명에 쓰는 용도별 키는 이 묶음에서 HKDF로 나눠 만든다 (#81).
+ * 리프레시 토큰 암호화, 로그인 임시 쿠키, CSRF 서명에 쓰는 용도별 키는 이 묶음에서 HKDF로 나눠 만든다 (#116).
  * {@link #toString()}에는 키 값이 나오지 않는다.
  */
 public class KeycloakKeyRing {

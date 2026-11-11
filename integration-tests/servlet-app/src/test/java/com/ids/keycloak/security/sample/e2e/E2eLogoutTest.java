@@ -26,7 +26,7 @@ import com.ids.keycloak.security.web.refresh.KeycloakTokenResponse;
 import tools.jackson.databind.JsonNode;
 
 /**
- * V3-11 로그아웃 (#87): 실제 Keycloak으로 로그인한 쿠키로 샘플 앱의 {@code POST /logout}을 부른다 (LOGOUT-01~06).
+ * V3-11 로그아웃 (#122): 실제 Keycloak으로 로그인한 쿠키로 샘플 앱의 {@code POST /logout}을 부른다 (LOGOUT-01~06).
  * 화면은 {@code https://app.kss.test}이고, 로그아웃 뒤 화면 주소는 {@code https://app.kss.test/logged-out}이다.
  */
 @E2eTest

@@ -19,7 +19,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
- * V3-15 문서 (#91): 사용 가이드와 v2 → v3 옮기기 문서가 코드의 설정 키와 어긋나지 않는지 본다.
+ * V3-15 문서 (#126): 사용 가이드와 v2 → v3 옮기기 문서가 코드의 설정 키와 어긋나지 않는지 본다.
  * 설정 키는 configuration processor가 만든 {@code META-INF/spring-configuration-metadata.json}에서 읽는다.
  * 문서 폴더는 Gradle이 {@code kss.docs.dir}로 준다 (IDE에서는 작업 폴더에서 위로 찾는다).
  */

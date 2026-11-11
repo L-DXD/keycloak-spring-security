@@ -1,4 +1,4 @@
--- 세션 테이블: 라이브러리 jar의 kss/schema-postgresql.sql을 그대로 옮겼다 (#81).
+-- 세션 테이블: 라이브러리 jar의 kss/schema-postgresql.sql을 그대로 옮겼다 (#116).
 -- 라이브러리를 올릴 때 CHANGELOG에 스키마 변경이 있으면 새 V 파일로 따라간다.
 CREATE TABLE auth_session (
   id                  UUID         PRIMARY KEY,

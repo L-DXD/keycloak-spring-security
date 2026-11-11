@@ -247,7 +247,7 @@ class KeycloakSecurityAutoConfigurationTest {
     }
 
     @Test
-    @DisplayName("토큰 클라이언트·갱신 서비스·로그아웃 처리기가 올라가고, 앱이 토큰 클라이언트를 바꿔 끼울 수 있다 (#85·#87)")
+    @DisplayName("토큰 클라이언트·갱신 서비스·로그아웃 처리기가 올라가고, 앱이 토큰 클라이언트를 바꿔 끼울 수 있다 (#120·#122)")
     void refreshBeans() {
         runner.run(context -> {
             assertThat(context.getBean(KeycloakTokenClient.class)).isInstanceOf(DefaultKeycloakTokenClient.class);

@@ -38,7 +38,7 @@ import com.ids.keycloak.security.web.refresh.KeycloakTokenResponse;
 import jakarta.servlet.http.Cookie;
 
 /**
- * V3-14 사용자 보안 체인 (#90, EXT-02·06): 앱이 {@link SecurityFilterChain}을 올리고 {@link KeycloakHttpConfigurer}를 붙이면 그 체인에서
+ * V3-14 사용자 보안 체인 (#125, EXT-02·06): 앱이 {@link SecurityFilterChain}을 올리고 {@link KeycloakHttpConfigurer}를 붙이면 그 체인에서
  * 로그인 시작·요청 인증·갱신·로그아웃이 기본 체인과 같이 된다. 앱 체인이 일부 주소만 받으면 기본 체인은 남아 나머지를 지킨다(fail-open 없음).
  * 기본 체인은 같은 이름의 빈이나 {@code auto-filter-chain=false}로만 빠진다. Keycloak 대신 토큰 검증기와 토큰 클라이언트만 바꾼다
  * (실제 Keycloak 흐름은 E2E가 기본 체인으로 본다).

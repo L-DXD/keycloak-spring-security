@@ -28,7 +28,7 @@ import com.ids.keycloak.security.session.InMemoryKeycloakSessionStore;
 import com.ids.keycloak.security.session.KeycloakSessionCleaner;
 
 /**
- * V3-14 자동 설정의 확장 지점 (#90). 자동 설정의 {@code @Bean}을 리플렉션으로 모두 찾아, 빈마다 사용자 빈을 올렸을 때 라이브러리 빈이
+ * V3-14 자동 설정의 확장 지점 (#125). 자동 설정의 {@code @Bean}을 리플렉션으로 모두 찾아, 빈마다 사용자 빈을 올렸을 때 라이브러리 빈이
  * 빠지고 그 빈만 남는지 본다 (EXT-01). 라이브러리는 빈을 타입(또는 이름)으로 찾으므로, 하나만 남으면 그것을 쓴다. 바꿔 끼운 빈이 실제로
  * 쓰이는지는 기능별 테스트가 본다(REQ-06 변환기, EVT-03 MDC 접근자, CORS 이름, 토큰 클라이언트 등). 보안 체인은 EXT-02
  * ({@link KeycloakUserChainTest}).
