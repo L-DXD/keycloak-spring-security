@@ -1,68 +1,43 @@
-import com.vanniktech.maven.publish.SonatypeHost
-
 plugins {
     id 'java-library'
-    id 'io.spring.dependency-management'
-    id 'com.vanniktech.maven.publish'
-    id 'signing'
 }
 
-version = projectVersion
-description = 'Keycloak Spring Security Core - Common utilities and models'
+description = 'Keycloak Spring Security Core - 세션 모델·저장소(JDBC·메모리), 암호, 토큰 규칙, 세션 이벤트 (Servlet·WebFlux 의존 없음)'
 
 dependencies {
-    // 순수 로직 모듈로, Spring Web/Servlet/Reactive 의존성 없음
+    // 순수 로직 모듈. jakarta.servlet, org.springframework.web 의존 금지 (EXT-04)
     api 'org.springframework.security:spring-security-core'
-    api 'org.springframework.boot:spring-boot-starter-oauth2-resource-server'
-    implementation 'com.fasterxml.jackson.core:jackson-annotations'
+    api 'org.springframework.security:spring-security-oauth2-jose'
+    // 기본 세션 저장소(JdbcKeycloakSessionStore). WebFlux(3.1.0)도 같은 저장소를 쓴다
+    api 'org.springframework:spring-jdbc'
+
+    testImplementation 'com.h2database:h2'
+    testRuntimeOnly 'org.postgresql:postgresql'
+    // EXT-04: core에 Servlet·Spring Web 의존이 없는지
+    testImplementation "com.tngtech.archunit:archunit:${archunitVersion}"
 }
 
-signing {
-    def secretFile = file("${rootDir}/secret.asc")
-    def signingPassword = findProperty("signingInMemoryKeyPassword")
-        ?: findProperty("signing.password")
-
-    if (secretFile.exists()) {
-        def signingKey = secretFile.text
-        useInMemoryPgpKeys(signingKey, signingPassword as String)
-        sign publishing.publications
-    } else {
-        println "secret.asc 파일이 없습니다. GPG 서명을 건너뜁니다."
+// 저장소 계약 테스트를 PostgreSQL에도 돌린다 (STORE-01). 주소가 없으면 그 테스트만 건너뛴다
+tasks.named('test', Test) {
+    ['KSS_TEST_DB_URL', 'KSS_TEST_DB_USERNAME', 'KSS_TEST_DB_PASSWORD'].each { name ->
+        def value = providers.environmentVariable(name)
+        if (value.isPresent()) {
+            environment name, value.get()
+        }
     }
 }
 
-mavenPublishing {
-    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
-    signAllPublications()
-
-    coordinates(mavenGroupId, "keycloak-spring-security-core", version as String)
-
-    pom {
-        name = "keycloak-spring-security-core"
-        description = project.description
-        inceptionYear = "2025"
-        url = mavenProjectUrl
-
-        licenses {
-            license {
-                name = "MIT License"
-                url = "https://opensource.org/licenses/MIT"
-                distribution = "repo"
-            }
-        }
-
-        developers {
-            developer {
-                id = developerId
-                name = developerName
-                url = developerUrl
-            }
-        }
-
-        scm {
-            url = mavenProjectUrl
-            connection = "scm:git:git://${mavenScmUrl}"
-            developerConnection = "scm:git:ssh://git@${mavenScmUrl}"
-        }
+// ./gradlew printSpringVersions: Boot BOM이 고른 Spring Framework·Security 판을 찍는다 (BUILD-01 확인용)
+tasks.register('printSpringVersions') {
+    group = 'help'
+    description = 'Boot BOM이 고른 Spring Framework·Security 판을 찍는다'
+    def artifacts = configurations.named('runtimeClasspath').flatMap { it.incoming.artifacts.resolvedArtifacts }
+    def bootVersion = springBootVersion
+    doLast {
+        def resolved = artifacts.get().collect { it.id.componentIdentifier }.findAll { it instanceof ModuleComponentIdentifier }
+        def pick = { String g, String a -> resolved.find { it.group == g && it.module == a }?.version }
+        println "Spring Boot BOM      ${bootVersion}"
+        println "Spring Framework     ${pick('org.springframework', 'spring-core')}"
+        println "Spring Security      ${pick('org.springframework.security', 'spring-security-core')}"
     }
 }

@@ -5,7 +5,7 @@ import java.util.regex.Pattern;
 /**
  * 로그 출력 전 PII/민감정보를 마스킹하는 기본 {@link LoggingValueSanitizer} 구현체.
  * <p>
- * 사내 로깅 표준의 PiiMasker 패턴을 라이브러리 기본값으로 내장합니다.
+ * v2와 같은 패턴이다.
  * </p>
  * 지원 패턴
  * <ul>

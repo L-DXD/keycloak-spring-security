@@ -46,6 +46,10 @@ out/
 *.yml
 *.yaml
 !.github/**/*.yml
+# 샘플 앱 설정은 테스트 값만 있어 저장소에 둔다
+!integration-tests/servlet-app/src/main/resources/application.yml
+# 로컬 확인용 Docker 구성도 테스트 값만 있다
+!integration-tests/compose.yaml
 
 # Postman
 postman/
@@ -60,3 +64,5 @@ tmpclaude-*
 *.yml_TMP
 *.yaml_TMP
 *_TMP
+# bootRun 출력 등 (OS 사용자 이름·경로가 들어 있을 수 있다)
+*.log

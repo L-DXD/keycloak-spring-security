@@ -1,22 +1,13 @@
 package com.ids.keycloak.security.config;
 
 /**
- * 세션 저장소 유형을 정의하는 Enum.
- * <p>
- * application.yml에서 keycloak.session.store-type 프로퍼티로 설정합니다.
- * </p>
+ * 세션 행을 어디에 두는가 ({@code keycloak.security.session.store}).
  */
 public enum SessionStoreType {
 
-    /**
-     * In-Memory 세션 저장소 (기본값)
-     * 단일 인스턴스 환경에 적합
-     */
-    MEMORY,
+    /** DB 테이블({@code auth_session}). 기본값. 서버 여러 대에서 같이 쓴다. */
+    JDBC,
 
-    /**
-     * Redis 세션 저장소
-     * 다중 인스턴스 환경 및 세션 영속성이 필요한 경우 사용
-     */
-    REDIS
+    /** 서버 메모리. 한 대짜리 개발·테스트용. 재시작하면 모두 로그아웃된다. */
+    MEMORY
 }

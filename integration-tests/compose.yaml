@@ -1,0 +1,92 @@
+# 로컬 확인용 Keycloak + PostgreSQL + 화면(nginx). 테스트 전용이다.
+#   - 비밀번호·키는 모두 테스트 값이다. 이 파일의 포트는 이 PC(127.0.0.1)에만 연다. 운영이나 공용 서버에 쓰지 않는다.
+#   - bootRun으로 띄우는 샘플 앱(8443·8444)은 Spring Boot 기본대로 모든 네트워크에서 듣는다(Keycloak 컨테이너가
+#     back-channel 로그아웃으로 부르려면 필요하다). 믿을 수 있는 네트워크에서만 띄운다.
+#   - 띄우기·끄기: integration-tests/local-stack.sh up | down  (docs/v3/03-검증-환경.md 5절)
+#   - 샘플 앱은 이 PC에서 bootRun으로 띄운다(8443, 두 번째 앱 8444). 이 파일에는 들어 있지 않다.
+# 주소: Keycloak http://sso.kss.test:8180 (관리자 admin / admin), DB localhost:5432 (kss / kss / kss), 화면 https://app.kss.test
+# 이미지를 다른 저장소(사내 미러 등)에서 받을 때: KSS_KEYCLOAK_IMAGE, KSS_POSTGRES_IMAGE, KSS_NGINX_IMAGE
+name: kss-local
+
+services:
+  keycloak:
+    image: ${KSS_KEYCLOAK_IMAGE:-quay.io/keycloak/keycloak:26.8.2}
+    command:
+      - start-dev
+      - --http-port=8180
+      - --import-realm
+      - --health-enabled=true
+      # back-channel 로그아웃 때 샘플 앱 HTTPS(테스트 CA)를 믿는다
+      - --truststore-paths=/opt/keycloak/conf/truststores/kss-test-ca.pem
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      # Docker에 프록시를 설정해 두면 그 값이 컨테이너에도 들어가 back-channel 로그아웃이 프록시로 간다. 테스트 주소는 빼 둔다
+      NO_PROXY: api.kss.test,app.kss.test,sso.kss.test,localhost,127.0.0.1
+      no_proxy: api.kss.test,app.kss.test,sso.kss.test,localhost,127.0.0.1
+    ports:
+      - "127.0.0.1:8180:8180"
+    extra_hosts:
+      # back-channel 로그아웃: Keycloak이 이 PC의 샘플 앱(https://api.kss.test:8443, 8444)을 부른다
+      - "api.kss.test:host-gateway"
+    # 인증서는 local-stack.sh(gen-test-certs.sh)가 먼저 만든다. 없으면 Docker가 빈 폴더를 만들지 않고 바로 실패하게 한다
+    volumes:
+      - type: bind
+        source: ./keycloak/realm-kss-demo.json
+        target: /opt/keycloak/data/import/realm-kss-demo.json
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ./servlet-app/build/e2e/tls/ca.pem
+        target: /opt/keycloak/conf/truststores/kss-test-ca.pem
+        read_only: true
+        bind: { create_host_path: false }
+    healthcheck:
+      # 이미지에 curl이 없어 bash로 관리 포트(9000)의 /health/ready를 본다
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '\"UP\"' <&3"]
+      interval: 3s
+      timeout: 3s
+      retries: 100
+      start_period: 10s
+
+  postgres:
+    image: ${KSS_POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_DB: kss
+      POSTGRES_USER: kss
+      POSTGRES_PASSWORD: kss
+    ports:
+      - "127.0.0.1:${KSS_DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "kss", "-d", "kss"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # 화면 흉내: https://app.kss.test (로그인·API 호출·로그아웃 버튼이 있는 정적 페이지 하나)
+  # 브라우저 확인용 다른 화면: https://evil.kss.test(같은 사이트), https://evil.test(다른 사이트)
+  front:
+    image: ${KSS_NGINX_IMAGE:-nginx:1.30-alpine}
+    ports:
+      - "127.0.0.1:443:443"
+    volumes:
+      - type: bind
+        source: ./front/nginx.conf
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ./front/html
+        target: /usr/share/nginx/html
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ./servlet-app/build/e2e/tls/app.crt
+        target: /etc/nginx/tls/app.crt
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ./servlet-app/build/e2e/tls/app.key
+        target: /etc/nginx/tls/app.key
+        read_only: true
+        bind: { create_host_path: false }

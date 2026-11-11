@@ -1,4 +1,1 @@
-com.ids.keycloak.security.config.KeycloakServletAutoConfiguration
-com.ids.keycloak.security.config.KeycloakBannerAutoConfiguration
-com.ids.keycloak.security.config.MemorySessionConfiguration
-com.ids.keycloak.security.config.RedisSessionConfiguration
+com.ids.keycloak.security.autoconfigure.KeycloakSecurityAutoConfiguration

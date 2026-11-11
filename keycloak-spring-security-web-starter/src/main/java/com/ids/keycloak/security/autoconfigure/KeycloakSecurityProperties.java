@@ -1,0 +1,532 @@
+package com.ids.keycloak.security.autoconfigure;
+
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import com.ids.keycloak.security.config.KeycloakLoggingSettings;
+import com.ids.keycloak.security.config.KeycloakSecuritySettings;
+import com.ids.keycloak.security.config.SessionStoreType;
+
+/**
+ * {@code keycloak.security.*} 설정. 기동 때 {@link KeycloakSecuritySettings}로 바꾸며 검사한다.
+ * <p>
+ * 필수: {@code frontend.base-url}, {@code crypto.active-key-id}, {@code crypto.keys}.
+ * 그리고 Spring 설정 {@code spring.security.oauth2.client.registration.keycloak}(issuer, client id/secret).
+ */
+@ConfigurationProperties(prefix = KeycloakSecuritySettings.PREFIX)
+public class KeycloakSecurityProperties {
+
+    /** 라이브러리를 켜는가. 끄면 자동 설정이 아무 것도 올리지 않는다. */
+    private boolean enabled = true;
+
+    /** Spring OAuth2 Client 등록 id. */
+    private String registrationId = "keycloak";
+
+    private final Frontend frontend = new Frontend();
+    private final Cookie cookie = new Cookie();
+    private final Session session = new Session();
+    private final Token token = new Token();
+    private final Request request = new Request();
+    private final Csrf csrf = new Csrf();
+    private final Logout logout = new Logout();
+    private final Crypto crypto = new Crypto();
+    private final Logging logging = new Logging();
+
+    /**
+     * 앞에 있는 믿을 수 있는 프록시 수. 로그의 클라이언트 IP를 X-Forwarded-For에서 고를 때 쓴다.
+     * 0이면 헤더를 보지 않는다. -1은 첫 값을 그대로 믿는다(v2 호환, 권하지 않음).
+     */
+    private int trustedProxyCount = 0;
+
+    /** 로그인 없이 허용하는 경로 (예: /api/public/**). */
+    private List<String> permitAllPaths = new ArrayList<>();
+
+    /**
+     * 기본 보안 체인({@code keycloakSecurityFilterChain})을 올리는가. 앱이 다른 체인(예: /actuator)을 더해도 기본 체인은
+     * 남아 나머지 주소를 지킨다. 앱이 모든 주소를 자기 체인으로 지킬 때만 끈다. 같은 이름의 빈을 올려도 기본 체인 대신 그것을 쓴다.
+     */
+    private boolean autoFilterChain = true;
+
+    /**
+     * 검사를 마친 설정으로 바꾼다.
+     *
+     * @param clientId OAuth2 등록의 client id. 앱 이름과 aud 기본값으로 쓴다. 등록이 없으면 {@code null}
+     */
+    public KeycloakSecuritySettings.Builder toSettingsBuilder(String clientId) {
+        return KeycloakSecuritySettings.builder()
+            .registrationId(registrationId)
+            .frontendBaseUrl(frontend.baseUrl)
+            .logoutSuccessPath(frontend.logoutSuccessPath)
+            .cookieAppName(cookie.appName != null ? cookie.appName : clientId)
+            .sessionStore(session.store)
+            .sessionTableName(session.tableName)
+            .absoluteTimeout(session.absoluteTimeout)
+            .refreshReuseWindow(session.refreshReuseWindow)
+            .cleanupInterval(session.cleanupInterval)
+            .clockSkew(token.clockSkew)
+            .requiredAudience(token.requiredAudience != null ? token.requiredAudience : clientId)
+            .backgroundHeader(request.backgroundHeader)
+            .csrfEndpoint(csrf.endpoint)
+            .revokeRefreshTokenOnLocalLogout(logout.revokeRefreshTokenOnLocalLogout)
+            .permitAllPaths(permitAllPaths)
+            .activeKeyId(crypto.activeKeyId)
+            .keys(crypto.keys)
+            .logging(logging.toSettings())
+            .trustedProxyCount(trustedProxyCount);
+    }
+
+    public boolean isEnabled() {
+        return enabled;
+    }
+
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
+    }
+
+    public String getRegistrationId() {
+        return registrationId;
+    }
+
+    public void setRegistrationId(String registrationId) {
+        this.registrationId = registrationId;
+    }
+
+    public Frontend getFrontend() {
+        return frontend;
+    }
+
+    public Cookie getCookie() {
+        return cookie;
+    }
+
+    public Session getSession() {
+        return session;
+    }
+
+    public Token getToken() {
+        return token;
+    }
+
+    public Request getRequest() {
+        return request;
+    }
+
+    public Csrf getCsrf() {
+        return csrf;
+    }
+
+    public Logout getLogout() {
+        return logout;
+    }
+
+    public Crypto getCrypto() {
+        return crypto;
+    }
+
+    public Logging getLogging() {
+        return logging;
+    }
+
+    public int getTrustedProxyCount() {
+        return trustedProxyCount;
+    }
+
+    public void setTrustedProxyCount(int trustedProxyCount) {
+        this.trustedProxyCount = trustedProxyCount;
+    }
+
+    public boolean isAutoFilterChain() {
+        return autoFilterChain;
+    }
+
+    public void setAutoFilterChain(boolean autoFilterChain) {
+        this.autoFilterChain = autoFilterChain;
+    }
+
+    public List<String> getPermitAllPaths() {
+        return permitAllPaths;
+    }
+
+    public void setPermitAllPaths(List<String> permitAllPaths) {
+        this.permitAllPaths = permitAllPaths;
+    }
+
+    /** 화면. */
+    public static class Frontend {
+
+        /** 화면 주소 (필수). CORS·Origin 확인, 로그인 뒤·로그아웃 뒤 주소에 쓴다. https만 (http는 localhost만). */
+        private String baseUrl;
+
+        /** 로그아웃 뒤 화면 경로. */
+        private String logoutSuccessPath = "/";
+
+        public String getBaseUrl() {
+            return baseUrl;
+        }
+
+        public void setBaseUrl(String baseUrl) {
+            this.baseUrl = baseUrl;
+        }
+
+        public String getLogoutSuccessPath() {
+            return logoutSuccessPath;
+        }
+
+        public void setLogoutSuccessPath(String logoutSuccessPath) {
+            this.logoutSuccessPath = logoutSuccessPath;
+        }
+    }
+
+    /** 쿠키. */
+    public static class Cookie {
+
+        /** 쿠키 이름에 넣는 앱 이름 (__Host-{앱 이름}_sid). 없으면 client id. */
+        private String appName;
+
+        public String getAppName() {
+            return appName;
+        }
+
+        public void setAppName(String appName) {
+            this.appName = appName;
+        }
+    }
+
+    /** 세션 행. */
+    public static class Session {
+
+        /** 세션 저장소. memory는 서버 한 대짜리 개발용. */
+        private SessionStoreType store = SessionStoreType.JDBC;
+
+        /** 세션 테이블 이름. */
+        private String tableName = "auth_session";
+
+        /** 로그인부터 이 시간이 지나면 다시 로그인시킨다. */
+        private Duration absoluteTimeout = Duration.ofHours(12);
+
+        /** 동시에 들어온 갱신 요청을 "방금 갱신함"으로 볼 시간. */
+        private Duration refreshReuseWindow = Duration.ofSeconds(10);
+
+        /** 끝난 세션 행을 지우는 주기. */
+        private Duration cleanupInterval = Duration.ofMinutes(10);
+
+        public SessionStoreType getStore() {
+            return store;
+        }
+
+        public void setStore(SessionStoreType store) {
+            this.store = store;
+        }
+
+        public String getTableName() {
+            return tableName;
+        }
+
+        public void setTableName(String tableName) {
+            this.tableName = tableName;
+        }
+
+        public Duration getAbsoluteTimeout() {
+            return absoluteTimeout;
+        }
+
+        public void setAbsoluteTimeout(Duration absoluteTimeout) {
+            this.absoluteTimeout = absoluteTimeout;
+        }
+
+        public Duration getRefreshReuseWindow() {
+            return refreshReuseWindow;
+        }
+
+        public void setRefreshReuseWindow(Duration refreshReuseWindow) {
+            this.refreshReuseWindow = refreshReuseWindow;
+        }
+
+        public Duration getCleanupInterval() {
+            return cleanupInterval;
+        }
+
+        public void setCleanupInterval(Duration cleanupInterval) {
+            this.cleanupInterval = cleanupInterval;
+        }
+    }
+
+    /** 액세스 토큰 검증. */
+    public static class Token {
+
+        /** 시간 검사 오차 (0~5분). */
+        private Duration clockSkew = Duration.ofSeconds(30);
+
+        /** aud에 있어야 하는 값. 없으면 client id. */
+        private String requiredAudience;
+
+        public Duration getClockSkew() {
+            return clockSkew;
+        }
+
+        public void setClockSkew(Duration clockSkew) {
+            this.clockSkew = clockSkew;
+        }
+
+        public String getRequiredAudience() {
+            return requiredAudience;
+        }
+
+        public void setRequiredAudience(String requiredAudience) {
+            this.requiredAudience = requiredAudience;
+        }
+    }
+
+    /** 요청. */
+    public static class Request {
+
+        /** 이 헤더가 붙은 요청은 토큰을 갱신하지 않는다 (화면의 자동 새로고침 등). */
+        private String backgroundHeader = "X-Background";
+
+        public String getBackgroundHeader() {
+            return backgroundHeader;
+        }
+
+        public void setBackgroundHeader(String backgroundHeader) {
+            this.backgroundHeader = backgroundHeader;
+        }
+    }
+
+    /** CSRF. */
+    public static class Csrf {
+
+        /** CSRF 토큰을 주는 주소. */
+        private String endpoint = "/api/csrf";
+
+        public String getEndpoint() {
+            return endpoint;
+        }
+
+        public void setEndpoint(String endpoint) {
+            this.endpoint = endpoint;
+        }
+    }
+
+    /** 로그아웃. */
+    public static class Logout {
+
+        /** 로컬 로그아웃(잘못된 토큰 등) 때 Keycloak 리프레시 토큰도 폐기한다. */
+        private boolean revokeRefreshTokenOnLocalLogout = false;
+
+        public boolean isRevokeRefreshTokenOnLocalLogout() {
+            return revokeRefreshTokenOnLocalLogout;
+        }
+
+        public void setRevokeRefreshTokenOnLocalLogout(boolean revokeRefreshTokenOnLocalLogout) {
+            this.revokeRefreshTokenOnLocalLogout = revokeRefreshTokenOnLocalLogout;
+        }
+    }
+
+    /** 키. 값은 환경 변수나 비밀 저장소에서 넣는다. */
+    public static class Crypto {
+
+        /** 새로 암호화할 때 쓰는 키 id (필수). */
+        private String activeKeyId;
+
+        /** 키 id → base64 키 (32바이트 이상, 필수). 예: openssl rand -base64 32 */
+        private Map<String, String> keys = new LinkedHashMap<>();
+
+        public String getActiveKeyId() {
+            return activeKeyId;
+        }
+
+        public void setActiveKeyId(String activeKeyId) {
+            this.activeKeyId = activeKeyId;
+        }
+
+        public Map<String, String> getKeys() {
+            return keys;
+        }
+
+        public void setKeys(Map<String, String> keys) {
+            this.keys = keys;
+        }
+    }
+
+    /** MDC 로깅 ({@code keycloak.security.logging.*}). 이름과 기본값은 v2와 같다. */
+    public static class Logging {
+
+        /** traceId를 넣는가 ({@code X-Request-Id} 또는 새 UUID). */
+        private boolean includeTraceId = true;
+
+        /** httpMethod를 넣는가. */
+        private boolean includeHttpMethod = true;
+
+        /** requestUri를 넣는가. */
+        private boolean includeRequestUri = true;
+
+        /** queryString을 넣는가 (디코딩·길이 제한·마스킹). */
+        private boolean includeQueryString = false;
+
+        /** clientIp를 넣는가 (trusted-proxy-count 기준). */
+        private boolean includeClientIp = true;
+
+        /** userAgent를 넣는가 (길이 제한·마스킹). */
+        private boolean includeUserAgent = true;
+
+        /** queryString 최대 길이. 넘으면 자른다. */
+        private int maxQueryLength = 512;
+
+        /** userAgent 최대 길이. 넘으면 자른다. */
+        private int maxUserAgentLength = 256;
+
+        /** 응답 헤더 X-Request-Id로 traceId를 돌려주는가. */
+        private boolean returnTraceIdHeader = true;
+
+        /** status·durationMs와 "request completed" 로그. 접근 로그와 겹쳐 기본 끔. */
+        private boolean includeResponseMetrics = false;
+
+        /** userId(sub)를 넣는가. */
+        private boolean includeUserId = true;
+
+        /** username(preferred_username)을 넣는가. */
+        private boolean includeUsername = true;
+
+        /** sessionId(Keycloak 세션 id, 토큰의 sid)를 넣는가. */
+        private boolean includeSessionId = true;
+
+        /** MDC 필터를 쓰지 않는 경로 (헬스·메트릭 수집 등). */
+        private List<String> excludePatterns = new ArrayList<>(List.of("/actuator/**"));
+
+        KeycloakLoggingSettings toSettings() {
+            return KeycloakLoggingSettings.builder()
+                .includeTraceId(includeTraceId)
+                .includeHttpMethod(includeHttpMethod)
+                .includeRequestUri(includeRequestUri)
+                .includeQueryString(includeQueryString)
+                .includeClientIp(includeClientIp)
+                .includeUserAgent(includeUserAgent)
+                .maxQueryLength(maxQueryLength)
+                .maxUserAgentLength(maxUserAgentLength)
+                .returnTraceIdHeader(returnTraceIdHeader)
+                .includeResponseMetrics(includeResponseMetrics)
+                .includeUserId(includeUserId)
+                .includeUsername(includeUsername)
+                .includeSessionId(includeSessionId)
+                .excludePatterns(excludePatterns)
+                .build();
+        }
+
+        public boolean isIncludeTraceId() {
+            return includeTraceId;
+        }
+
+        public void setIncludeTraceId(boolean includeTraceId) {
+            this.includeTraceId = includeTraceId;
+        }
+
+        public boolean isIncludeHttpMethod() {
+            return includeHttpMethod;
+        }
+
+        public void setIncludeHttpMethod(boolean includeHttpMethod) {
+            this.includeHttpMethod = includeHttpMethod;
+        }
+
+        public boolean isIncludeRequestUri() {
+            return includeRequestUri;
+        }
+
+        public void setIncludeRequestUri(boolean includeRequestUri) {
+            this.includeRequestUri = includeRequestUri;
+        }
+
+        public boolean isIncludeQueryString() {
+            return includeQueryString;
+        }
+
+        public void setIncludeQueryString(boolean includeQueryString) {
+            this.includeQueryString = includeQueryString;
+        }
+
+        public boolean isIncludeClientIp() {
+            return includeClientIp;
+        }
+
+        public void setIncludeClientIp(boolean includeClientIp) {
+            this.includeClientIp = includeClientIp;
+        }
+
+        public boolean isIncludeUserAgent() {
+            return includeUserAgent;
+        }
+
+        public void setIncludeUserAgent(boolean includeUserAgent) {
+            this.includeUserAgent = includeUserAgent;
+        }
+
+        public int getMaxQueryLength() {
+            return maxQueryLength;
+        }
+
+        public void setMaxQueryLength(int maxQueryLength) {
+            this.maxQueryLength = maxQueryLength;
+        }
+
+        public int getMaxUserAgentLength() {
+            return maxUserAgentLength;
+        }
+
+        public void setMaxUserAgentLength(int maxUserAgentLength) {
+            this.maxUserAgentLength = maxUserAgentLength;
+        }
+
+        public boolean isReturnTraceIdHeader() {
+            return returnTraceIdHeader;
+        }
+
+        public void setReturnTraceIdHeader(boolean returnTraceIdHeader) {
+            this.returnTraceIdHeader = returnTraceIdHeader;
+        }
+
+        public boolean isIncludeResponseMetrics() {
+            return includeResponseMetrics;
+        }
+
+        public void setIncludeResponseMetrics(boolean includeResponseMetrics) {
+            this.includeResponseMetrics = includeResponseMetrics;
+        }
+
+        public boolean isIncludeUserId() {
+            return includeUserId;
+        }
+
+        public void setIncludeUserId(boolean includeUserId) {
+            this.includeUserId = includeUserId;
+        }
+
+        public boolean isIncludeUsername() {
+            return includeUsername;
+        }
+
+        public void setIncludeUsername(boolean includeUsername) {
+            this.includeUsername = includeUsername;
+        }
+
+        public boolean isIncludeSessionId() {
+            return includeSessionId;
+        }
+
+        public void setIncludeSessionId(boolean includeSessionId) {
+            this.includeSessionId = includeSessionId;
+        }
+
+        public List<String> getExcludePatterns() {
+            return excludePatterns;
+        }
+
+        public void setExcludePatterns(List<String> excludePatterns) {
+            this.excludePatterns = excludePatterns;
+        }
+    }
+}
