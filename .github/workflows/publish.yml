@@ -32,17 +32,6 @@ jobs:
       - name: Grant execute permission
         run: chmod +x ./gradlew
 
-      - name: Decode GPG Key
-        run: |
-          # 1. Base64 디코딩하여 파일 생성 (디버깅/확인용)
-          echo "${{ secrets.GPG_SECRET_KEY_BASE64 }}" | base64 --decode > secret.asc
-
-          # 2. [핵심] 디코딩된 키 내용을 'ORG_GRADLE_PROJECT_signingInMemoryKey' 환경변수에 주입
-          # 멀티라인 텍스트를 환경변수에 넣기 위한 문법입니다.
-          echo "ORG_GRADLE_PROJECT_signingInMemoryKey<<EOF" >> $GITHUB_ENV
-          cat secret.asc >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-
       - name: Extract version
         id: version
         run: |
@@ -57,35 +46,21 @@ jobs:
       - name: Build all modules
         run: ./gradlew build --no-daemon
 
+      # 서명 키는 이 단계의 셸 안에서만 풀어 Gradle에 넘긴다.
+      # GITHUB_ENV에 넣으면 비밀값 마스킹이 걸리지 않아 뒤 단계마다 로그의 환경 변수 목록에 키가 그대로 찍힌다.
       # 배포 순서: core → web, webflux → web-starter, webflux-starter (의존성 순서)
-      - name: Publish core
-        run: ./gradlew :keycloak-spring-security-core:publish --no-daemon
+      - name: Publish all modules
         env:
+          GPG_SECRET_KEY_BASE64: ${{ secrets.GPG_SECRET_KEY_BASE64 }}
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
           ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_PASSWORD }}
-
-      - name: Publish web and webflux
         run: |
-          ./gradlew :keycloak-spring-security-web:publish --no-daemon
-          ./gradlew :keycloak-spring-security-webflux:publish --no-daemon
-        env:
-          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
-          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
-          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_PASSWORD }}
-
-      - name: Publish web-starter and webflux-starter
-        run: |
-          ./gradlew :keycloak-spring-security-web-starter:publish --no-daemon
-          ./gradlew :keycloak-spring-security-webflux-starter:publish --no-daemon
-        env:
-          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
-          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
-          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_PASSWORD }}
-
-      - name: Clean up
-        if: always()
-        run: rm -f secret.asc
+          ORG_GRADLE_PROJECT_signingInMemoryKey="$(printf '%s' "$GPG_SECRET_KEY_BASE64" | base64 --decode)"
+          export ORG_GRADLE_PROJECT_signingInMemoryKey
+          for module in core web webflux web-starter webflux-starter; do
+            ./gradlew ":keycloak-spring-security-${module}:publish" --no-daemon
+          done
 
   # 배포 완료 알림 (선택사항)
   notify:
