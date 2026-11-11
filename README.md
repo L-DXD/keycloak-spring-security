@@ -20,6 +20,8 @@ A library that adds Keycloak login to a Spring Boot app. One starter and a few l
 
 ## Quick start
 
+> The 3.x release on Maven Central is currently the preview `3.0.0-RC1`. Setting names and defaults may change before the final 3.0.0. Use [2.0.3](https://github.com/L-DXD/keycloak-spring-security/tree/2.x) in production.
+
 ```gradle
 implementation("io.github.l-dxd:keycloak-spring-security-web-starter:3.0.0")
 ```

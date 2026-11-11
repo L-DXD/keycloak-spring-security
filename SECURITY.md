@@ -6,6 +6,7 @@
 
 | Version | Support | Notes |
 |------|------|------|
+| 3.0.0-RC1 | Preview | For trying 3.0 before the final 3.0.0. Setting names and defaults may still change. Use 2.0.3 in production |
 | **2.0.3+** | **Recommended** | The `error.*` properties never took effect (EntryPoint/AccessDeniedHandler overwritten by `oauth2Login`) is fixed, along with Basic Auth clearing an authentication established by an earlier filter, an Introspect/UserInfo remote call per static resource request, HTTP 500 on corrupted Redis sessions, missing authentication-failure audit logs, and back-channel logout silently doing nothing. Includes everything from 2.0.2. Recommended for production |
 | 2.0.2 | Upgrade recommended | The Fixed items of 2.0.3 are not applied — `error.*` settings are silently ignored (common to 1.9.0–2.0.2), and static resources trigger a remote call per request. Includes all 4 external security review items (from 2.0.1) + all 8 full security review items (from 2.0.0), but upgrading to 2.0.3 is recommended. Note that 2.0.3 has 3 breaking changes (see [CHANGELOG.md](CHANGELOG.md)) |
 | 2.0.1 | **Deprecated (do not use)** | With Redis + Jackson sessions, every authenticated request returns 500 (`SecurityContext` deserialization failure) — fixed in 2.0.2. Upgrade to 2.0.2 immediately |

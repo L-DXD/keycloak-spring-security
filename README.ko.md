@@ -20,6 +20,8 @@ Spring Boot 앱에 Keycloak 로그인을 붙이는 라이브러리입니다. 스
 
 ## 빠른 시작
 
+> 지금 Maven Central에 있는 3.x는 미리 보기 `3.0.0-RC1`입니다. 정식 3.0.0 전까지 설정 이름·기본값이 바뀔 수 있습니다. 운영은 [2.0.3](https://github.com/L-DXD/keycloak-spring-security/tree/2.x)을 쓰세요.
+
 ```gradle
 implementation("io.github.l-dxd:keycloak-spring-security-web-starter:3.0.0")
 ```

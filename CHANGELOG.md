@@ -11,7 +11,7 @@
 
 ## [3.0.0] - Unreleased
 
-> `v3-dev` 브랜치에서 작업 중. 계획과 진행은 [docs/v3](docs/v3/README.md), 묶음 이슈 [#111](https://github.com/L-DXD/keycloak-spring-security/issues/111).
+> 미리 보기 `3.0.0-RC1`을 2026-11-11에 냈다(Maven Central). 정식 3.0.0 전까지 설정 이름·기본값이 바뀔 수 있다. 계획과 진행은 [docs/v3](docs/v3/README.md), 묶음 이슈 [#111](https://github.com/L-DXD/keycloak-spring-security/issues/111).
 
 ### Changed
 - Spring Boot 4.1.x 기준으로 다시 짠다. Spring Security 7.1.x, Spring Framework 7.0.x, Java 17 이상 ([#113](https://github.com/L-DXD/keycloak-spring-security/issues/113)).
@@ -189,7 +189,7 @@
 ### Added
 - `@EnableMethodSecurity` 적용, 초기 OIDC 로그인/세션/로그아웃/Redis 세션 등 기반 기능
 
-[Unreleased]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.3...HEAD
+[Unreleased]: https://github.com/L-DXD/keycloak-spring-security/compare/v3.0.0-RC1...HEAD
 [2.0.3]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.2...v2.0.3
 [2.0.2]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.1...v2.0.2
 [2.0.1]: https://github.com/L-DXD/keycloak-spring-security/compare/v2.0.0...v2.0.1
