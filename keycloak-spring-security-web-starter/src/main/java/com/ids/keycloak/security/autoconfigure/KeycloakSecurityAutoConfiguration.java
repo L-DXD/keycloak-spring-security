@@ -172,8 +172,9 @@ public class KeycloakSecurityAutoConfiguration {
     public KeycloakAccessTokenValidator keycloakAccessTokenValidator(KeycloakSecuritySettings settings, KeycloakProvider provider,
                                                                      JwkSetFetcher jwkSetFetcher,
                                                                      @Qualifier("keycloakSecurityClock") Clock clock) {
-        return new DefaultKeycloakAccessTokenValidator(new KeycloakJwkSource(jwkSetFetcher, clock), provider.issuer(),
-            provider.clientId(), settings.requiredAudience(), settings.clockSkew(), clock);
+        KeycloakJwkSource jwkSource = new KeycloakJwkSource(jwkSetFetcher, settings.jwksMinRefetchInterval(), clock);
+        return new DefaultKeycloakAccessTokenValidator(jwkSource, provider.issuer(), provider.clientId(), settings.requiredAudience(),
+            settings.clockSkew(), clock);
     }
 
     /** 리프레시 토큰 암호 (AES-256-GCM, 키 id로 교체). KMS·HSM을 쓰려면 이 빈을 바꾼다. */

@@ -3,13 +3,17 @@ package com.ids.keycloak.security.autoconfigure;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.sql.DataSource;
 
@@ -62,6 +66,13 @@ import com.ids.keycloak.security.web.refresh.DefaultKeycloakTokenClient;
 import com.ids.keycloak.security.web.refresh.KeycloakRefreshService;
 import com.ids.keycloak.security.web.refresh.KeycloakTokenClient;
 import com.ids.keycloak.security.web.refresh.KeycloakTokenResponse;
+import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.JWSHeader;
+import com.nimbusds.jose.crypto.RSASSASigner;
+import com.nimbusds.jose.jwk.RSAKey;
+import com.nimbusds.jose.jwk.gen.RSAKeyGenerator;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
 
 /**
  * V3-03 설정과 기동 검사 (CONF-01~05).
@@ -244,6 +255,99 @@ class KeycloakSecurityAutoConfigurationTest {
                 assertThat(context.getBean(KeycloakAccessTokenValidator.class)).isSameAs(custom);
                 assertThat(context.getBean(JwkSetFetcher.class)).isSameAs(fetcher);
             });
+    }
+
+    @Test
+    @DisplayName("JWT-08 token.jwks-min-refetch-interval이 기본 검증기의 JWKS 다시 받기 간격이 된다 (기본 5분)")
+    void jwksMinRefetchIntervalReachesJwkSource() throws Exception {
+        RSAKey unknownKey = new RSAKeyGenerator(2048).keyID("k-unknown").generate();
+        Instant start = Instant.parse("2026-11-12T00:00:00Z");
+
+        // 30초로 줄이면 30초 뒤에 다시 받는다
+        AtomicInteger fetches = new AtomicInteger();
+        MovableClock clock = new MovableClock(start);
+        runner.withPropertyValues("keycloak.security.token.jwks-min-refetch-interval=30s")
+            .withBean(JwkSetFetcher.class, () -> countingFetcher(fetches))
+            .withBean("keycloakSecurityClock", Clock.class, () -> clock)
+            .run(context -> {
+                assertThat(context.getBean(KeycloakSecuritySettings.class).jwksMinRefetchInterval()).hasSeconds(30);
+                KeycloakAccessTokenValidator validator = context.getBean(KeycloakAccessTokenValidator.class);
+
+                assertThat(validator.validate(signed(unknownKey, clock)).status()).as("처음 받고, 간격 안이라 다시 받지 않음")
+                    .isEqualTo(AccessTokenValidationResult.Status.UNAVAILABLE);
+                clock.advance(Duration.ofSeconds(29));
+                assertThat(validator.validate(signed(unknownKey, clock)).status()).isEqualTo(AccessTokenValidationResult.Status.UNAVAILABLE);
+                assertThat(fetches.get()).isEqualTo(1);
+                clock.advance(Duration.ofSeconds(1));
+                assertThat(validator.validate(signed(unknownKey, clock)).status()).as("30초 뒤: 다시 받아도 없는 키")
+                    .isEqualTo(AccessTokenValidationResult.Status.INVALID);
+                assertThat(fetches.get()).isEqualTo(2);
+            });
+
+        // 설정이 없으면 5분: 30초 뒤에는 다시 받지 않고, 5분 뒤에 받는다
+        AtomicInteger defaultFetches = new AtomicInteger();
+        MovableClock defaultClock = new MovableClock(start);
+        runner.withBean(JwkSetFetcher.class, () -> countingFetcher(defaultFetches))
+            .withBean("keycloakSecurityClock", Clock.class, () -> defaultClock)
+            .run(context -> {
+                assertThat(context.getBean(KeycloakSecuritySettings.class).jwksMinRefetchInterval()).hasMinutes(5);
+                KeycloakAccessTokenValidator validator = context.getBean(KeycloakAccessTokenValidator.class);
+
+                validator.validate(signed(unknownKey, defaultClock));
+                defaultClock.advance(Duration.ofSeconds(30));
+                assertThat(validator.validate(signed(unknownKey, defaultClock)).status()).isEqualTo(AccessTokenValidationResult.Status.UNAVAILABLE);
+                assertThat(defaultFetches.get()).isEqualTo(1);
+                defaultClock.advance(Duration.ofMinutes(4).plusSeconds(30));
+                assertThat(validator.validate(signed(unknownKey, defaultClock)).status()).isEqualTo(AccessTokenValidationResult.Status.INVALID);
+                assertThat(defaultFetches.get()).isEqualTo(2);
+            });
+    }
+
+    /** 키가 없는 JWKS를 주고 받은 횟수를 센다. */
+    static JwkSetFetcher countingFetcher(AtomicInteger fetches) {
+        return () -> {
+            fetches.incrementAndGet();
+            return "{\"keys\":[]}";
+        };
+    }
+
+    /** 앱이 모르는 키로 서명한 액세스 토큰 (지금 발급, 60초). */
+    static String signed(RSAKey key, Clock clock) throws Exception {
+        Instant now = clock.instant();
+        JWTClaimsSet claims = new JWTClaimsSet.Builder().issuer(ISSUER).subject("user-1").audience("demo").claim("azp", "demo")
+            .claim("typ", "Bearer").issueTime(Date.from(now)).expirationTime(Date.from(now.plusSeconds(60))).build();
+        SignedJWT jwt = new SignedJWT(new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(key.getKeyID()).build(), claims);
+        jwt.sign(new RSASSASigner(key));
+        return jwt.serialize();
+    }
+
+    /** 테스트가 앞으로 돌리는 시계. */
+    static class MovableClock extends Clock {
+
+        private volatile Instant now;
+
+        MovableClock(Instant now) {
+            this.now = now;
+        }
+
+        void advance(Duration duration) {
+            now = now.plus(duration);
+        }
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
     }
 
     @Test

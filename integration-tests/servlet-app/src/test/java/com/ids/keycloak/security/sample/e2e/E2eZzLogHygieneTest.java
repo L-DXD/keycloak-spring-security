@@ -40,7 +40,7 @@ class E2eZzLogHygieneTest {
             browser.removeCookie(API_HOST, "__Host-demo_at");
             assertThat(browser.get(app.url("/api/me")).status()).isEqualTo(200);
             browser.replaceCookieValue(API_HOST, "__Host-demo_at", FORGED_AT);
-            // 모르는 kid: JWKS를 막 다시 받았으면 1분 동안은 503, 아니면 다시 받아 보고 401 (JWT-08). 어느 쪽이든 그 값이 로그에 남으면 안 된다
+            // 모르는 kid: JWKS를 받은 지 token.jwks-min-refetch-interval(기본 5분)이 안 됐으면 503, 지났으면 다시 받아 보고 401 (JWT-08). 어느 쪽이든 그 값이 로그에 남으면 안 된다
             assertThat(browser.get(app.url("/api/me")).status()).as("위조 토큰").isIn(401, 503);
         }
         try (BrowserClient browser = new BrowserClient(env.caCertificate())) {
