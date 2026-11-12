@@ -69,6 +69,7 @@ public class KeycloakSecurityProperties {
             .refreshReuseWindow(session.refreshReuseWindow)
             .cleanupInterval(session.cleanupInterval)
             .clockSkew(token.clockSkew)
+            .jwksMinRefetchInterval(token.jwksMinRefetchInterval)
             .requiredAudience(token.requiredAudience != null ? token.requiredAudience : clientId)
             .backgroundHeader(request.backgroundHeader)
             .csrfEndpoint(csrf.endpoint)
@@ -262,6 +263,9 @@ public class KeycloakSecurityProperties {
         /** 시간 검사 오차 (0~5분). */
         private Duration clockSkew = Duration.ofSeconds(30);
 
+        /** 모르는 kid가 왔을 때 JWKS를 다시 받는 최소 간격 (10초~1시간). 길수록 Keycloak 호출이 적고, 키를 바꾼 직후 503이 길어질 수 있다. */
+        private Duration jwksMinRefetchInterval = Duration.ofMinutes(5);
+
         /** aud에 있어야 하는 값. 없으면 client id. */
         private String requiredAudience;
 
@@ -271,6 +275,14 @@ public class KeycloakSecurityProperties {
 
         public void setClockSkew(Duration clockSkew) {
             this.clockSkew = clockSkew;
+        }
+
+        public Duration getJwksMinRefetchInterval() {
+            return jwksMinRefetchInterval;
+        }
+
+        public void setJwksMinRefetchInterval(Duration jwksMinRefetchInterval) {
+            this.jwksMinRefetchInterval = jwksMinRefetchInterval;
         }
 
         public String getRequiredAudience() {

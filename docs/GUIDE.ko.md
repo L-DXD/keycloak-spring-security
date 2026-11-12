@@ -160,6 +160,7 @@ MdcRequestFilter            traceId 등 로그 값
 | `session.refresh-reuse-window` | `10s` | 동시 갱신을 "방금 갱신함"으로 볼 시간 |
 | `session.cleanup-interval` | `10m` | 끝난 행을 지우는 주기 |
 | `token.clock-skew` | `30s` | 시간 검사 오차 (0~5분) |
+| `token.jwks-min-refetch-interval` | `5m` | 모르는 kid면 JWKS를 다시 받는 최소 간격 (10초~1시간). 길수록 엉터리 kid가 몰려도 Keycloak을 덜 부르고, Keycloak 키를 바꾼 직후 503이 길어질 수 있음 |
 | `token.required-audience` | client id | 액세스 토큰 `aud`에 있어야 하는 값 |
 | `request.background-header` | `X-Background` | 이 헤더가 붙은 요청은 갱신하지 않음 |
 | `csrf.endpoint` | `/api/csrf` | CSRF 토큰을 주는 주소 |
@@ -406,10 +407,10 @@ SecurityFilterChain actuator(HttpSecurity http) throws Exception {
 | 기동 실패 세션 테이블 | `auth_session` 마이그레이션이 없음 ([1-3](#1-3-세션-테이블)) |
 | 기동 실패 공개 client | Keycloak client의 Client authentication을 켜고 secret 설정 |
 | 로그인 뒤 `?login_error=invalid_state` | 로그인에 5분 넘게 걸림, 또는 앱 주소가 https가 아니어서 `__Host-` 쿠키가 안 남음 |
-| 로그인 뒤 `?login_error=invalid_token` | 액세스 토큰 `aud`에 client id가 없음(Audience mapper), 또는 `sid`가 없음(`basic` scope) |
+| 로그인 뒤 `?login_error=invalid_token` | 액세스 토큰 `aud`에 client id가 없음(Audience mapper), 또는 `sid`가 없음(`basic` scope). 또는 Keycloak 서명 키를 막 바꿨는데 앱이 JWKS를 마지막으로 받아 본 지 `token.jwks-min-refetch-interval`이 안 됨(지나면 다시 로그인하면 됨) |
 | 상태 바꾸는 요청이 403 `ORIGIN_NOT_ALLOWED` | `frontend.base-url`과 화면 origin이 다름 |
 | 상태 바꾸는 요청이 403 `INVALID_CSRF_TOKEN` | `X-XSRF-TOKEN` 헤더가 없음. `credentials: "include"` 확인 |
-| 갑자기 503 `KEYCLOAK_UNAVAILABLE` | 앱에서 Keycloak(JWKS·토큰 주소)에 닿지 않음. 세션은 남아 있음 |
+| 갑자기 503 `KEYCLOAK_UNAVAILABLE` | 앱에서 Keycloak(JWKS·토큰 주소)에 닿지 않음. 또는 Keycloak 서명 키를 막 바꿨는데 앱이 JWKS를 마지막으로 받아 본 지 `token.jwks-min-refetch-interval`(기본 5분)이 안 됨(그 시간이 지나면 다시 받음). 어느 쪽이든 세션은 남아 있음 |
 | 다른 앱 로그아웃 뒤에도 잠깐 로그인 상태 | at 쿠키 만료까지는 통함 ([4-7](#4-7-back-channel-로그아웃)) |
 | back-channel 로그아웃이 안 옴 | Keycloak에서 앱 주소에 닿는지, Backchannel logout URL·session required 확인 |
 | 로그에 이메일이 `a***@…` | 값 가리기(정상). 끄려면 `NoOpLoggingValueSanitizer` 빈 |

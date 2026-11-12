@@ -88,6 +88,7 @@ Redis·`spring-session-*` 의존성은 지웁니다. WebFlux 스타터는 3.0.0�
 | `session.absolute-timeout` | `12h` | | 로그인부터 이 시간이 지나면 다시 로그인 |
 | `session.refresh-reuse-window` | `10s` | | 동시 갱신을 "방금 갱신함"으로 볼 시간 |
 | `token.clock-skew` | `30s` | | 시간 검사 오차 (0~5분) |
+| `token.jwks-min-refetch-interval` | `5m` | | 모르는 kid면 JWKS를 다시 받는 최소 간격 (10초~1시간) |
 | `token.required-audience` | client id | | 액세스 토큰 `aud`에 있어야 하는 값 |
 | `request.background-header` | `X-Background` | | 이 헤더가 붙은 요청은 토큰을 갱신하지 않음 |
 | `csrf.endpoint` | `/api/csrf` | | CSRF 토큰을 주는 주소 |

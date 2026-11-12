@@ -19,7 +19,11 @@ import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.proc.SecurityContext;
 
 /**
- * JWKS를 받아 두고 쓴다. 모르는 kid가 오면 다시 받되, 다시 받기는 {@code minRefetchInterval}(기본 1분)에 한 번만 한다 (JWT-08).
+ * JWKS를 받아 두고 쓴다. 모르는 kid가 오면 다시 받되, 다시 받기는 {@code minRefetchInterval}(기본 5분)에 한 번만 한다 (JWT-08).
+ * 스타터에서는 {@code keycloak.security.token.jwks-min-refetch-interval}로 바꾼다.
+ * 간격이 길수록 엉터리 kid를 섞은 요청이 몰려도 Keycloak을 덜 부르지만, 다시 받은 직후 Keycloak이 키를 바꾸면
+ * 새 kid 토큰은 남은 간격 동안 UNAVAILABLE(503)이다 (로그아웃은 하지 않는다).
+ * 다시 받기에 실패한 시도도 간격에 넣는다. Keycloak certs 주소가 실패하는 동안에도 간격에 한 번만 부른다.
  * <ul>
  *   <li>다시 받았는데도 모르는 kid: 키 없음 → 검증 결과 INVALID</li>
  *   <li>간격 제한 때문에 다시 받지 못한 모르는 kid: {@link KeySourceException} → UNAVAILABLE(503).
@@ -30,7 +34,7 @@ import com.nimbusds.jose.proc.SecurityContext;
 public class KeycloakJwkSource implements JWKSource<SecurityContext> {
 
     /** 모르는 kid 때문에 다시 받는 최소 간격 기본값. */
-    public static final Duration DEFAULT_MIN_REFETCH_INTERVAL = Duration.ofMinutes(1);
+    public static final Duration DEFAULT_MIN_REFETCH_INTERVAL = Duration.ofMinutes(5);
 
     private static final Logger log = LoggerFactory.getLogger(KeycloakJwkSource.class);
 
@@ -39,7 +43,7 @@ public class KeycloakJwkSource implements JWKSource<SecurityContext> {
     private final Clock clock;
 
     private volatile JWKSet cached;
-    private volatile Instant fetchedAt;
+    private volatile Instant lastAttemptAt;
     private int fetchCount;
 
     public KeycloakJwkSource(JwkSetFetcher fetcher, Clock clock) {
@@ -78,13 +82,14 @@ public class KeycloakJwkSource implements JWKSource<SecurityContext> {
             return cached;
         }
         Instant now = clock.instant();
-        if (cached != null && fetchedAt != null && now.isBefore(fetchedAt.plus(minRefetchInterval))) {
+        if (cached != null && lastAttemptAt != null && now.isBefore(lastAttemptAt.plus(minRefetchInterval))) {
             return cached;
         }
+        // 실패해도 간격에 넣는다. 처음 받기(cached 없음)는 간격을 보지 않으므로 실패하면 다음 요청에서 바로 다시 한다
+        lastAttemptAt = now;
         try {
             JWKSet fetched = JWKSet.parse(fetcher.fetch());
             cached = fetched;
-            fetchedAt = now;
             fetchCount++;
             log.debug("[KSS] JWKS를 받았습니다: 키 {}개 ({}번째)", fetched.getKeys().size(), fetchCount);
             return fetched;

@@ -160,6 +160,7 @@ Everything is under `keycloak.security.*`. If a value is wrong, startup stops an
 | `session.refresh-reuse-window` | `10s` | How long a concurrent refresh counts as "just refreshed" |
 | `session.cleanup-interval` | `10m` | How often ended rows are deleted |
 | `token.clock-skew` | `30s` | Allowed clock difference (0 to 5 minutes) |
+| `token.jwks-min-refetch-interval` | `5m` | Minimum time between JWKS refetches for an unknown kid (10 seconds to 1 hour). Longer means fewer Keycloak calls when requests with bogus `kid` values pile up, and a longer 503 window right after Keycloak rotates its keys |
 | `token.required-audience` | client id | Value that must be in the access token `aud` |
 | `request.background-header` | `X-Background` | Requests with this header never refresh |
 | `csrf.endpoint` | `/api/csrf` | Where the CSRF token is served |
@@ -406,10 +407,10 @@ If you add another chain that matches every request under a different name, Spri
 | Startup fails on the session table | The `auth_session` migration is missing ([1-3](#1-3-session-table)) |
 | Startup fails on a public client | Turn on Client authentication in Keycloak and set the secret |
 | `?login_error=invalid_state` after login | Login took over 5 minutes, or the app is not on https so the `__Host-` cookie was dropped |
-| `?login_error=invalid_token` after login | The access token `aud` lacks the client id (Audience mapper), or `sid` is missing (`basic` scope) |
+| `?login_error=invalid_token` after login | The access token `aud` lacks the client id (Audience mapper), or `sid` is missing (`basic` scope). Or Keycloak just rotated its signing key and the app last tried to fetch the JWKS less than `token.jwks-min-refetch-interval` ago (log in again once that has passed) |
 | 403 `ORIGIN_NOT_ALLOWED` on state-changing requests | `frontend.base-url` differs from the front-end origin |
 | 403 `INVALID_CSRF_TOKEN` on state-changing requests | No `X-XSRF-TOKEN` header. Check `credentials: "include"` |
-| Sudden 503 `KEYCLOAK_UNAVAILABLE` | The app cannot reach Keycloak (JWKS or token endpoint). Sessions are kept |
+| Sudden 503 `KEYCLOAK_UNAVAILABLE` | The app cannot reach Keycloak (JWKS or token endpoint). Or Keycloak just rotated its signing key and the app last tried to fetch the JWKS less than `token.jwks-min-refetch-interval` (default 5 minutes) ago (it refetches once that has passed). Either way sessions are kept |
 | Still logged in briefly after logout in another app | The at cookie works until it expires ([4-7](#4-7-back-channel-logout)) |
 | Back-channel logout never arrives | Check Keycloak can reach the app, the Backchannel logout URL and "session required" |
 | E-mail shows as `a***@…` in logs | Masking (expected). To turn it off, a `NoOpLoggingValueSanitizer` bean |
