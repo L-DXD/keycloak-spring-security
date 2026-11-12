@@ -15,6 +15,9 @@
 //     --no-outage  Keycloak 컨테이너를 잠깐 멈춰 보는 단계를 건너뛴다
 //   KSS_DEMO_LOG·KSS_DEMO2_LOG에 bootRun 출력 파일을 주면 감사 로그 줄도 보여 준다(안 주면 그 줄만 뺀다).
 //   KSS_TOUR_SHOTS=<폴더>를 주면 단계마다 화면을 PNG로 남긴다.
+//   KSS_TOUR_NOTES=<JSON 파일>을 주면 단계마다 덧붙일 글(예: 팀 점검표 번호)을 안내판에 같이 띄우고, 맨 끝에 요약 단계를 더한다.
+//     모양: {"label": "덧붙임 제목", "steps": {"<단계 키>": ["글", ...]}, "summary": {"title": "...", "look": "...", "lines": ["..."]}}
+//     단계 키는 아래 step('키', ...)의 첫 인자다. 없는 키를 적으면 시작할 때 알려 준다.
 //
 // 브라우저는 따로 만든 빈 프로필로 뜬다(평소 쓰는 크롬 프로필·쿠키를 건드리지 않는다). *.kss.test는 이 브라우저 안에서만 이 PC로 푼다
 // (/etc/hosts를 고치지 않는다). 테스트 CA는 이 브라우저에서만 인증서 오류를 넘긴다.
@@ -41,6 +44,7 @@ const HEADLESS = ARGS.includes('--headless');
 const CHROME = ARGS.includes('--chrome');
 const OUTAGE = !ARGS.includes('--no-outage');
 const SHOTS = process.env.KSS_TOUR_SHOTS;
+const NOTES = process.env.KSS_TOUR_NOTES ? JSON.parse(fs.readFileSync(process.env.KSS_TOUR_NOTES, 'utf8')) : null;
 if (HEADLESS && AUTO_MS === null) {
   console.error('--headless는 --auto와 같이 씁니다("다음"을 누를 사람이 없습니다)');
   process.exit(2);
@@ -161,6 +165,16 @@ const browser = await chromium.launch({
   args: ['--host-resolver-rules=MAP *.kss.test 127.0.0.1, MAP evil.test 127.0.0.1', '--window-size=1440,960'],
 });
 const ctx = await browser.newContext({ ignoreHTTPSErrors: true, viewport: HEADLESS ? { width: 1440, height: 900 } : null, locale: 'ko-KR' });
+// 이번 실행에서 앱이 내린 sid 쿠키 값 전부(마지막 단계: 로그에 원문이 없어야 한다). 302 응답의 Set-Cookie도 본다
+const seenSids = new Set();
+ctx.on('response', async (response) => {
+  try {
+    for (const h of await response.headersArray()) {
+      const m = h.name.toLowerCase() === 'set-cookie' && /^__Host-[A-Za-z0-9-]+_sid=([^;]+)/.exec(h.value);
+      if (m && m[1]) seenSids.add(m[1]);
+    }
+  } catch { /* 페이지가 닫히며 끊긴 응답은 넘긴다 */ }
+});
 const apiUrl = (app, p) => `${APPS[app].api}${p}`;
 async function cookiesOf(context, app) {
   return (await context.cookies('https://api.kss.test')).filter((c) => c.name.startsWith(`__Host-${app}_`));
@@ -203,6 +217,9 @@ function drawBoard(s) {
       .state { color: #666; font-size: 12px; }
       .next { font: inherit; font-weight: 700; padding: 6px 16px; border: 0; border-radius: 6px; background: #1f6feb; color: #fff; cursor: pointer; }
       .next[disabled] { background: #9db7e0; cursor: default; }
+      .notes { margin: 0 0 8px; padding: 6px 10px; background: #f3f6fb; border-left: 3px solid #1f6feb; border-radius: 4px; font-size: 13px; }
+      .notes b { display: block; font-size: 12px; color: #1f6feb; }
+      .notes div { padding: 1px 0; }
       .min .body { display: none; } .min { width: 220px; }`;
     root.appendChild(style);
     const box = document.createElement('div');
@@ -220,6 +237,12 @@ function drawBoard(s) {
   head.append(fold);
   const body = el('div', 'body');
   body.append(el('h2', '', s.title), el('p', 'look', s.look));
+  if (s.notes && s.notes.length) {
+    const notes = el('div', 'notes');
+    notes.append(el('b', '', s.notesLabel || '덧붙임'));
+    for (const line of s.notes) notes.append(el('div', '', line));
+    body.append(notes);
+  }
   const list = el('ul');
   for (const r of s.results) list.append(el('li', r.ok === null ? 'info' : r.ok ? 'pass' : 'fail', r.text));
   body.append(list);
@@ -346,14 +369,19 @@ async function pastReuseWindow(note, since) {
 const page = await ctx.newPage();
 page.on('load', () => render(page));
 const steps = [];
-const step = (title, look, run) => steps.push({ title, look, run });
+const step = (key, title, look, run) => steps.push({ key, title, look, run });
 const st = {}; // 단계끼리 넘기는 값
 const aliceId = await userId(ALICE.username);
 const shortName = (c) => c.name.replace(/^__Host-[a-z0-9]+_/, '');
 const code = (r) => json(r.text)?.code ?? '';
+// Node에서 브라우저 쿠키를 그대로 붙여 API를 부른다(브라우저가 못 바꾸는 Origin 헤더를 정해 보낼 때)
+async function asBrowser(app, p, { method = 'GET', origin, headers = {}, body } = {}) {
+  const jar = (await cookiesOf(ctx, app)).map((c) => `${c.name}=${c.value}`).join('; ');
+  return request(apiUrl(app, p), { method, body, headers: { Cookie: jar, ...(origin ? { Origin: origin } : {}), ...headers } });
+}
 
-step('화면 열기',
-  '화면 주소(app.kss.test)와 API 주소(api.kss.test:8443은 demo, :8444는 demo2)가 달라요. 로그인 쿠키는 API 주소에만 생겨요. '
+step('start', '화면 열기',
+  '화면 주소(app.kss.test)와 API 주소(api.kss.test:8443은 demo, :8444는 demo2)가 달라요. 둘은 같은 사이트(kss.test)예요. 로그인 쿠키는 API 주소에만 생겨요. '
   + '로그인 뒤 돌아와야 할 곳을 보려고 /items/3 화면에서 시작해요.',
   async (note) => {
     await page.goto(`${APP}/items/3`);
@@ -362,19 +390,21 @@ step('화면 열기',
     await note(c.length === 0, `demo 쿠키 ${c.length}개 (로그인 전이라 없어요)`);
   });
 
-step('로그인 전에는',
-  '로그인 없이 허용한 주소는 그냥 되고, 로그인이 필요한 주소는 401과 "로그인 주소"를 JSON으로 돌려줘요. 화면은 이 주소로 로그인을 보내면 돼요.',
+step('before-login', '로그인 전에는',
+  '허용 목록(permit-all-paths)에 넣은 주소만 그냥 되고, 나머지는 모두 로그인이 필요해요. 로그인이 필요한 주소는 401과 "로그인 주소"를 JSON으로 돌려줘요.',
   async (note) => {
     const ping = await frontFetch(page, apiUrl('demo', '/api/public/ping'));
     await note(ping.status === 200, `GET /api/public/ping (허용 주소) → ${ping.status}`);
+    const unknown = await frontFetch(page, apiUrl('demo', '/api/anything-else'));
+    await note(unknown.status === 401, `GET /api/anything-else (목록에 없는 주소) → ${unknown.status} ${code(unknown)}`);
     const me = await press(page, 'demo', 'me');
     const body = json(me.text) ?? {};
     await note(me.status === 401 && body.code === 'AUTHENTICATION_REQUIRED', `"내 정보" GET /api/me → ${me.status} ${body.code ?? ''}`);
     await note(body.loginUrl === '/oauth2/authorization/keycloak', `응답의 로그인 주소 loginUrl = ${body.loginUrl}`);
   });
 
-step('로그인 버튼 → Keycloak 로그인 화면',
-  '화면의 "로그인"은 API의 /oauth2/authorization/keycloak?return=/items/3 으로 가요. 앱이 Keycloak으로 보낸 요청에 PKCE(S256)·state·nonce가 붙었는지 봐요.',
+step('login-button', '로그인 버튼 → Keycloak 로그인 화면',
+  '화면의 "로그인"은 API의 /oauth2/authorization/keycloak?return=/items/3 으로 가요. 앱이 Keycloak으로 보낸 요청에 PKCE(S256)·state·nonce가 붙었는지, scope가 openid뿐인지(offline_access 없음) 봐요.',
   async (note) => {
     const authorize = page.waitForRequest((r) => r.url().startsWith(`${KC}/realms/${REALM}/protocol/openid-connect/auth`));
     const formShown = await pressLogin(page, 'demo');
@@ -382,18 +412,19 @@ step('로그인 버튼 → Keycloak 로그인 화면',
     await note(formShown, `Keycloak 로그인 화면 (${new URL(page.url()).host})`);
     await note(q.code_challenge_method === 'S256' && Boolean(q.code_challenge), `PKCE code_challenge_method=${q.code_challenge_method}`);
     await note(Boolean(q.state && q.nonce), `state·nonce ${q.state && q.nonce ? '있음' : '없음'}`);
-    await note((q.scope ?? '').split(' ').includes('openid'), `client_id=${q.client_id}, scope=${q.scope}`);
+    await note((q.scope ?? '').split(' ').includes('openid') && !(q.scope ?? '').includes('offline_access'), `client_id=${q.client_id}, scope=${q.scope}`);
   });
 
-step('아이디·비밀번호 넣기 → 원래 화면으로',
+step('login-form', '아이디·비밀번호 넣기 → 원래 화면으로',
   '테스트 사용자 alice로 로그인해요. Keycloak이 앱으로 돌려보내면 앱이 토큰을 받고, 처음 있던 /items/3 화면으로 돌아와야 해요.',
   async (note) => {
     await fillLogin(page, ALICE);
     await note(page.url() === `${APP}/items/3`, `돌아온 화면 ${page.url()}`);
   });
 
-step('쿠키 3개 (API 주소에만, 스크립트는 못 읽음)',
-  '브라우저에는 sid·at·csrf 쿠키 셋만 생겨요. 모두 Secure·HttpOnly·SameSite=Lax이고 api.kss.test 전용이에요. 리프레시 토큰은 쿠키가 아니라 앱 DB에 암호문으로 있어요.',
+step('cookies', '쿠키 3개 · 토큰 · DB 행',
+  '브라우저에는 sid·at·csrf 쿠키 셋만 생겨요. 모두 __Host- 이름, Secure·HttpOnly·SameSite=Lax·Path=/, Domain 없이 api.kss.test 전용이에요. '
+  + 'ID 토큰은 어디에도 두지 않고, 리프레시 토큰은 쿠키가 아니라 앱 DB 행에 암호문으로만 있어요.',
   async (note) => {
     const cs = await cookiesOf(ctx, 'demo');
     const names = cs.map(shortName).sort();
@@ -401,21 +432,28 @@ step('쿠키 3개 (API 주소에만, 스크립트는 못 읽음)',
     const now = Date.now() / 1000;
     for (const c of cs.sort((a, b) => a.name.localeCompare(b.name))) {
       await note(c.secure && c.httpOnly && c.sameSite === 'Lax' && c.path === '/' && c.domain === 'api.kss.test',
-        `${shortName(c)}: Secure ${c.secure ? 'O' : 'X'} · HttpOnly ${c.httpOnly ? 'O' : 'X'} · SameSite=${c.sameSite} · ${c.domain} 전용 · ${Math.round(c.expires - now)}초 뒤 만료`);
+        `${shortName(c)}: Secure ${c.secure ? 'O' : 'X'} · HttpOnly ${c.httpOnly ? 'O' : 'X'} · SameSite=${c.sameSite} · Path=${c.path} · ${c.domain} 전용 · ${Math.round(c.expires - now)}초 뒤 만료`);
     }
     const others = (await ctx.cookies('https://api.kss.test')).filter((c) => /JSESSIONID|id_token|access_token|refresh/i.test(c.name));
     await note(others.length === 0, `JSESSIONID·ID 토큰·리프레시 토큰 쿠키 ${others.length ? '있음' : '없음'}`);
-    const visible = await page.evaluate(() => document.cookie);
-    await note(!visible.includes('__Host-'), `화면 스크립트의 document.cookie = ${JSON.stringify(visible)}`);
+    const at = jwtPayload((await cookie(ctx, 'demo', 'at')).value);
+    const aud = [].concat(at.aud ?? []);
+    await note(at.iss === `${KC}/realms/${REALM}` && aud.includes('demo') && at.azp === 'demo' && at.typ === 'Bearer',
+      `at 토큰: iss=${at.iss}, aud에 demo ${aud.includes('demo') ? '있음' : '없음'}, azp=${at.azp}, typ=${at.typ}`);
+    await note(Boolean(at.sid), `at 토큰에 Keycloak 세션 sid ${at.sid ? '있음' : '없음'}`);
+    const visible = await page.evaluate(() => ({ cookie: document.cookie, local: localStorage.length, session: sessionStorage.length }));
+    await note(!visible.cookie.includes('__Host-') && visible.local === 0 && visible.session === 0,
+      `화면 스크립트: document.cookie = ${JSON.stringify(visible.cookie)}, localStorage ${visible.local}개, sessionStorage ${visible.session}개`);
     const row = await myRow(ctx, 'demo');
-    st.demoRow = row;
-    await note(Boolean(row && !row.plain && /^[0-9a-f]{64}$/.test(row.sidHash)),
-      row ? `DB 세션 행: sid는 해시(${row.sidHash.slice(0, 12)}…)로만, 리프레시 토큰은 암호문` : 'DB 세션 행 없음');
+    await note(Boolean(row && !row.plain && /^[0-9a-f]{64}$/.test(row.sidHash) && row.sidHash !== (await cookie(ctx, 'demo', 'sid')).value),
+      row ? `DB 세션 행(앱 DB): sid는 해시(${row.sidHash.slice(0, 12)}…, 64자)로만, 리프레시 토큰은 암호문(eyJ로 시작 안 함)` : 'DB 세션 행 없음');
+    const columns = sql(`select string_agg(column_name, ',' order by ordinal_position) from information_schema.columns where table_schema = 'public' and table_name = 'auth_session'`);
+    await note(!/id_token|access_token/.test(columns), `세션 행 칸: ${columns}`);
     const audit = await auditLine('demo', `[KSS] 세션 만듦 session=${row?.id}`);
     if (audit !== null) await note(audit, `감사 로그 "[KSS] 세션 만듦" ${audit ? '있음' : '없음'}`);
   });
 
-step('내 정보 (로그인한 뒤)',
+step('me', '내 정보 (로그인한 뒤)',
   '화면이 credentials: include로 API를 부르면 쿠키가 같이 가요. 앱은 at 쿠키의 토큰을 스스로 검사하고 누구인지 알려 줘요.',
   async (note) => {
     const me = await press(page, 'demo', 'me');
@@ -423,7 +461,7 @@ step('내 정보 (로그인한 뒤)',
     await note(me.status === 200 && body.username === 'alice', `"내 정보" GET /api/me → ${me.status}, username=${body.username}`);
   });
 
-step('항목 만들기 (CSRF 토큰을 헤더로)',
+step('item', '항목 만들기 (CSRF 토큰을 헤더로)',
   '상태를 바꾸는 요청(POST)은 CSRF 토큰이 있어야 해요. 화면이 GET /api/csrf로 토큰을 받아 X-XSRF-TOKEN 헤더로 보내요.',
   async (note) => {
     const r = await press(page, 'demo', 'item');
@@ -431,7 +469,7 @@ step('항목 만들기 (CSRF 토큰을 헤더로)',
     await note(r.status === 201 && body.createdBy === aliceId, `"항목 만들기" POST /api/items → ${r.status}, createdBy=alice의 sub`);
   });
 
-step('CSRF 토큰이 없으면 막힘',
+step('no-csrf', 'CSRF 토큰이 없으면 막힘',
   '같은 요청을 토큰 없이 보내면 403이에요. 로그아웃(POST /logout)도 토큰 없이는 안 되고 세션이 그대로 남아요.',
   async (note) => {
     const r = await frontFetch(page, apiUrl('demo', '/api/items'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{"name":"토큰 없음"}' },
@@ -441,7 +479,7 @@ step('CSRF 토큰이 없으면 막힘',
     await note(out.status === 403 && (await myRow(ctx, 'demo')) !== null, `POST /logout (토큰 없음) → ${out.status}, 세션 그대로`);
   });
 
-step('주소창으로 /logout 열기 (GET)',
+step('get-logout', '주소창으로 /logout 열기 (GET)',
   '링크나 주소창(GET)으로는 로그아웃되지 않아요. 405와 Allow: POST가 오고 세션은 그대로예요. 지금 창에 보이는 JSON이 그 응답이에요.',
   async (note) => {
     st.leaked = await csrfToken(page, 'demo'); // 다음 단계에서 "토큰이 새 나갔다"고 치고 쓴다
@@ -451,9 +489,9 @@ step('주소창으로 /logout 열기 (GET)',
     await note((await myRow(ctx, 'demo')) !== null, '세션 그대로 (로그아웃 안 됨)');
   });
 
-step('같은 사이트의 다른 화면 (evil.kss.test)',
+step('same-site', '같은 사이트의 다른 화면 (evil.kss.test)',
   'evil.kss.test는 app.kss.test와 같은 사이트라 SameSite=Lax 쿠키가 따라가요. 그래도 앱이 요청의 Origin(허용한 화면은 app.kss.test 하나)을 보고 막아요. '
-  + '토큰이 새 나갔다고 치고 넣어 봐도 403이에요(CORS 거절: Invalid CORS request). 이 화면의 fetch도 CORS로 막혀요.',
+  + '토큰이 새 나갔다고 치고 넣어 봐도 403이에요. 이 화면의 fetch도 CORS로 막혀요.',
   async (note) => {
     await page.goto(`${SAME_SITE_OTHER}/`);
     await note(null, `지금 화면 ${page.url()}`);
@@ -463,9 +501,17 @@ step('같은 사이트의 다른 화면 (evil.kss.test)',
     const r = await submitForm(page, apiUrl('demo', '/api/items'), { _csrf: st.leaked, name: 'same-site' });
     await note(r.status === 403 && r.cookie.includes('__Host-demo_sid'),
       `여기서 폼 POST /api/items (쿠키 감, 맞는 토큰까지 넣음) → ${r.status} ${r.body.code ?? r.text}`);
+    // 브라우저 밖에서 쿠키·토큰을 그대로 붙이고 Origin만 바꿔 본다(브라우저는 Origin을 바꿀 수 없다)
+    const headers = { 'Content-Type': 'application/json', 'X-XSRF-TOKEN': st.leaked };
+    const evil = await asBrowser('demo', '/api/items', { method: 'POST', origin: 'https://evil.example', headers, body: '{}' });
+    await note(evil.status === 403, `쿠키·토큰 맞고 Origin: https://evil.example → ${evil.status} ${json(evil.text)?.code ?? evil.text}`);
+    const none = await asBrowser('demo', '/api/items', { method: 'POST', headers, body: '{}' });
+    await note(none.status === 403 && json(none.text)?.code === 'ORIGIN_NOT_ALLOWED', `쿠키·토큰 맞고 Origin·Referer 없음 → ${none.status} ${json(none.text)?.code ?? none.text}`);
+    const good = await asBrowser('demo', '/api/items', { method: 'POST', origin: APP, headers, body: '{}' });
+    await note(good.status === 201, `같은 쿠키·토큰에 Origin: ${APP} → ${good.status}`);
   });
 
-step('다른 사이트 (evil.test)',
+step('cross-site', '다른 사이트 (evil.test)',
   '완전히 다른 사이트에서는 SameSite=Lax라 폼 POST에 쿠키가 아예 안 가요. fetch도 CORS로 막혀요.',
   async (note) => {
     await page.goto(`${CROSS_SITE}/`);
@@ -477,7 +523,25 @@ step('다른 사이트 (evil.test)',
     await note(r.status === 403 && !r.cookie.includes('__Host-'), `여기서 폼 POST /api/items → ${r.status} ${r.body.code ?? r.text}, 쿠키 ${r.cookie.includes('__Host-') ? '감' : '안 감'}`);
   });
 
-step('돌아갈 주소에 바깥 주소를 넣으면',
+step('preflight', 'CORS 사전 확인 (OPTIONS)',
+  '브라우저가 POST 전에 묻는 사전 확인에, 앱은 화면 주소(app.kss.test) 하나에만 "허용, 쿠키 포함, 헤더 Content-Type·X-XSRF-TOKEN·X-Background"를 답해요. 다른 주소에는 허용 헤더를 안 줘요.',
+  async (note) => {
+    const ask = (origin) => request(apiUrl('demo', '/api/items'), { method: 'OPTIONS', headers: {
+      Origin: origin, 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'content-type,x-xsrf-token,x-background' } });
+    const goodPre = await ask(APP);
+    const h = goodPre.headers;
+    await note(h['access-control-allow-origin'] === APP && h['access-control-allow-credentials'] === 'true',
+      `Origin ${APP} → ${goodPre.status}, Allow-Origin=${h['access-control-allow-origin']}, Allow-Credentials=${h['access-control-allow-credentials']}`);
+    await note(/x-xsrf-token/i.test(h['access-control-allow-headers'] ?? '') && /x-background/i.test(h['access-control-allow-headers'] ?? ''),
+      `Allow-Headers=${h['access-control-allow-headers']}`);
+    await note(null, `Allow-Methods=${h['access-control-allow-methods']}`);
+    for (const other of [SAME_SITE_OTHER, 'https://evil.example']) {
+      const bad = await ask(other);
+      await note(!bad.headers['access-control-allow-origin'], `Origin ${other} → ${bad.status}, Allow-Origin ${bad.headers['access-control-allow-origin'] ?? '없음'}`);
+    }
+  });
+
+step('return-path', '돌아갈 주소에 바깥 주소를 넣으면',
   '로그인 뒤 돌아갈 곳(return)은 화면 안의 경로만 받아요. 바깥 주소를 넣으면 화면 첫 주소(/)로만 가요. Keycloak엔 이미 로그인돼 있어 폼 없이 돌아오고, 다시 로그인한 셈이라 새 세션이 생겨요.',
   async (note) => {
     const outside = [];
@@ -501,8 +565,8 @@ step('돌아갈 주소에 바깥 주소를 넣으면',
     if (audit !== null) await note(audit, `감사 로그 "세션 끝남 reason=relogin" ${audit ? '있음' : '없음'}`);
   });
 
-step('요청마다 Keycloak을 부르지 않음',
-  'at가 살아 있는 동안은 앱이 토큰 서명·기한만 스스로 검사해요. "내 정보"를 20번 불러도 Keycloak에는 한 번도 안 가요(Keycloak 이벤트로 셈).',
+step('local-verify', '요청마다 Keycloak을 부르지 않음',
+  'at가 살아 있는 동안은 앱이 토큰 서명·기한을 스스로 검사해요(introspect·UserInfo 안 씀). "내 정보"를 20번 불러도 Keycloak에는 한 번도 안 가요(Keycloak 이벤트로 셈).',
   async (note) => {
     st.kcSid = (await myRow(ctx, 'demo')).kcSid;
     const since = Date.now();
@@ -514,8 +578,8 @@ step('요청마다 Keycloak을 부르지 않음',
     await note(events.length === 0, `그동안 Keycloak 호출 ${events.length}번`);
   });
 
-step('at가 끝나도 계속 됨 (토큰 갱신)',
-  'at 쿠키를 지워 "at가 만료돼 브라우저가 버린" 상태를 만들어요. 다음 요청에서 앱이 DB의 리프레시 토큰으로 Keycloak에서 새 토큰을 받아, 사용자는 모르게 그대로 200이 와요.',
+step('refresh', 'at가 끝나도 계속 됨 (토큰 갱신)',
+  'at 쿠키를 지워 "at가 만료돼 브라우저가 버린" 상태를 만들어요. 다음 요청에서 앱이 DB의 리프레시 토큰과 client secret으로 Keycloak에서 새 토큰을 받아, 사용자는 모르게 그대로 200이 와요.',
   async (note) => {
     const rowBefore = await myRow(ctx, 'demo');
     const atBefore = (await cookie(ctx, 'demo', 'at')).value;
@@ -530,7 +594,7 @@ step('at가 끝나도 계속 됨 (토큰 갱신)',
     await note(Boolean(rowAfter.refreshedAt && rowAfter.refreshedAt !== rowBefore.refreshedAt), `DB 행 refreshed_at ${rowBefore.refreshedAt || '(없음)'} → ${rowAfter.refreshedAt}`);
   });
 
-step('동시에 여러 번 · 주기 호출',
+step('concurrent-background', '동시에 여러 번 · 주기 호출',
   '화면이 동시에 5번 불러도 Keycloak 갱신은 1번만 해요. 화면이 알아서 주기적으로 부르는 요청(X-Background: 1)은 갱신하지 않고 401만 줘요. 사람이 누른 다음 요청은 다시 됩니다.',
   async (note) => {
     await pastReuseWindow(note, st.lastRefresh);
@@ -551,7 +615,7 @@ step('동시에 여러 번 · 주기 호출',
   });
 
 if (OUTAGE) {
-  step('Keycloak이 멈추면',
+  step('outage-down', 'Keycloak이 멈추면',
     'Keycloak 컨테이너를 실제로 멈춰요. 갱신이 필요한 요청은 503 KEYCLOAK_UNAVAILABLE을 받고, 세션 행과 쿠키는 그대로 남아요(Keycloak이 돌아오면 이어서 씀).',
     async (note) => {
       await pastReuseWindow(note, st.lastRefresh);
@@ -562,7 +626,7 @@ if (OUTAGE) {
       await note(r.status === 503 && code(r) === 'KEYCLOAK_UNAVAILABLE', `at 없이 "내 정보" → ${r.status} ${code(r)}`);
       await note((await myRow(ctx, 'demo')) !== null && Boolean(await cookie(ctx, 'demo', 'sid')), '세션 행·sid 쿠키 그대로');
     });
-  step('Keycloak이 돌아오면',
+  step('outage-up', 'Keycloak이 돌아오면',
     'Keycloak을 다시 띄워요(몇십 초 걸려요). 같은 세션으로 다음 요청이 그대로 200이 돼요.',
     async (note) => {
       await note(null, 'Keycloak을 다시 띄우는 중…');
@@ -573,10 +637,32 @@ if (OUTAGE) {
     });
 }
 
-step('두 번째 앱 demo2: 로그인 폼 없이 (SSO)',
-  '같은 Keycloak을 쓰는 다른 앱(demo2, :8444)은 로그인 버튼만 누르면 폼 없이 바로 들어와요. 두 앱의 토큰은 같은 Keycloak 세션(sid)을 가리켜요. 쿠키 이름도 앱마다 따로예요.',
+step('tampered-at', '서명이 망가진 at',
+  'at 쿠키의 서명 끝 몇 글자만 바꿔 넣어요. 앱은 서명 검사에서 거절해 401을 주고, 이 세션(행·쿠키)을 끝내요. 위조 토큰으로는 Keycloak 갱신도 부르지 않아요.',
+  async (note) => {
+    const good = await cookie(ctx, 'demo', 'at');
+    const broken = good.value.slice(0, -4) + (good.value.slice(-4) === 'AAAA' ? 'BBBB' : 'AAAA');
+    const rowId = (await myRow(ctx, 'demo')).id;
+    const since = Date.now();
+    await ctx.addCookies([{ name: good.name, value: broken, url: 'https://api.kss.test/', secure: true, httpOnly: true, sameSite: 'Lax', expires: good.expires }]);
+    await note(null, 'at 쿠키 서명 끝 4글자를 바꿨어요');
+    const r = await press(page, 'demo', 'me');
+    await sleep(500);
+    const refreshes = await kcEvents(st.kcSid, since, 'REFRESH_TOKEN');
+    await note(r.status === 401, `"내 정보" → ${r.status} ${code(r)}`);
+    await note(!rowExists('demo', rowId) && (await cookiesOf(ctx, 'demo')).length === 0, '세션 행·demo 쿠키 지워짐');
+    await note(refreshes.length === 0, `Keycloak 갱신 ${refreshes.length}번`);
+    const audit = await auditLine('demo', `[KSS] 세션 끝남 reason=invalid_token session=${rowId}`);
+    if (audit !== null) await note(audit, `감사 로그 "세션 끝남 reason=invalid_token" ${audit ? '있음' : '없음'}`);
+  });
+
+step('sso', '두 번째 앱 demo2: 로그인 폼 없이 (SSO)',
+  '앞 단계에서 demo 세션이 끝났으니 demo에 다시 로그인해요(Keycloak엔 로그인돼 있어 폼 없음). 같은 Keycloak을 쓰는 다른 앱 demo2(:8444)도 로그인 버튼만 누르면 폼 없이 들어와요. 두 앱 토큰은 같은 Keycloak 세션(sid)을 가리키고, 쿠키 이름은 앱마다 따로예요.',
   async (note) => {
     if (new URL(page.url()).pathname !== '/') await page.goto(`${APP}/`);
+    const demoForm = await pressLogin(page, 'demo');
+    await note(!demoForm, `demo "로그인" → ${demoForm ? 'Keycloak 폼이 나옴' : '폼 없이 바로 돌아옴'}`);
+    if (!HEADLESS) await sleep(900);
     const formShown = await pressLogin(page, 'demo2');
     await note(!formShown, `demo2 "로그인" → ${formShown ? 'Keycloak 폼이 나옴' : '폼 없이 바로 돌아옴'}`);
     const sidOf = async (app) => jwtPayload((await cookie(ctx, app, 'at')).value).sid;
@@ -589,11 +675,19 @@ step('두 번째 앱 demo2: 로그인 폼 없이 (SSO)',
     st.kcSidNow = s1;
   });
 
-step('demo 로그아웃',
-  'demo의 "로그아웃"은 CSRF 토큰을 숨은 칸에 넣은 폼 POST예요. 앱이 서버끼리 Keycloak 로그아웃을 하고, 화면의 로그아웃 주소(/logged-out)로 보내요. demo 쿠키와 DB 행이 지워지고 Keycloak SSO 세션도 끝나요.',
+step('logout', 'demo 로그아웃',
+  'demo의 "로그아웃"은 CSRF 토큰을 숨은 칸(_csrf)에 넣은 폼 POST(화면 이동)예요. 앱이 서버끼리 Keycloak 로그아웃을 하고, 화면의 로그아웃 주소(/logged-out)로 보내요. '
+  + '응답이 쿠키 넷(sid·at·csrf·login)을 Max-Age=0으로 지우고, DB 행과 Keycloak SSO 세션도 끝나요.',
   async (note) => {
     const demoRow = await myRow(ctx, 'demo');
+    const logoutResponse = page.waitForResponse((r) => r.url() === apiUrl('demo', '/logout') && r.request().method() === 'POST');
     await clickAndLand(page, '#demo-logout');
+    const res = await logoutResponse;
+    const req = res.request();
+    await note(req.isNavigationRequest() && /(^|&)_csrf=[^&]+/.test(req.postData() ?? ''), `POST /logout: 화면 이동(폼), 숨은 칸 _csrf ${/(^|&)_csrf=[^&]+/.test(req.postData() ?? '') ? '있음' : '없음'}`);
+    const cleared = (await res.headersArray()).filter((h) => h.name.toLowerCase() === 'set-cookie' && /Max-Age=0/i.test(h.value))
+      .map((h) => h.value.split('=')[0].replace(/^__Host-demo_/, ''));
+    await note(cleared.length === 4 && ['sid', 'at', 'csrf', 'login'].every((n) => cleared.includes(n)), `응답 Set-Cookie Max-Age=0: ${cleared.join(', ')} (${cleared.length}개), 상태 ${res.status()}`);
     await note(page.url() === `${APP}/logged-out`, `지금 화면 ${page.url()} ("로그아웃됐습니다")`);
     await note((await cookiesOf(ctx, 'demo')).length === 0, 'demo 쿠키 모두 지워짐');
     await note(!rowExists('demo', demoRow.id), 'demo DB 세션 행 지워짐');
@@ -603,7 +697,7 @@ step('demo 로그아웃',
     if (audit !== null) await note(audit, `감사 로그 "세션 끝남 reason=logout" ${audit ? '있음' : '없음'}`);
   });
 
-step('demo2도 따라서 끝남 (back-channel 로그아웃)',
+step('backchannel', 'demo2도 따라서 끝남 (back-channel 로그아웃)',
   'Keycloak이 demo2에게 서버끼리 "이 세션 끝났다"를 보내(back-channel) demo2 DB 행도 지워져요. 브라우저의 demo2 at는 남은 시간(최대 60초)까지만 통하고, at가 끝나면 갱신 없이 401이에요.',
   async (note) => {
     const gone = await waitFor(() => !rowExists('demo2', st.demo2Row.id));
@@ -621,13 +715,42 @@ step('demo2도 따라서 끝남 (back-channel 로그아웃)',
     await note(after.status === 401 && refreshes.length === 0, `at가 끝난 demo2 "내 정보" → ${after.status}, Keycloak 갱신 ${refreshes.length}번`);
   });
 
-step('다시 로그인하면 폼이 다시 나옴',
-  'Keycloak SSO 세션이 정말 끝났는지 봐요. demo "로그인"을 누르면 이번엔 Keycloak 로그인 폼이 다시 나와야 해요. 여기까지예요.',
+step('login-again', '다시 로그인하면 폼이 다시 나옴',
+  'Keycloak SSO 세션이 정말 끝났는지 봐요. demo "로그인"을 누르면 이번엔 Keycloak 로그인 폼이 다시 나와야 해요.',
   async (note) => {
+    if (new URL(page.url()).origin !== APP) await page.goto(`${APP}/`);
     const formShown = await pressLogin(page, 'demo');
     await note(formShown, `demo "로그인" → ${formShown ? 'Keycloak 로그인 폼이 다시 나옴' : '폼 없이 들어감'}`);
+  });
+
+step('logs', '로그에 토큰·sid 원문이 없음',
+  '두 앱 로그 전체에서 JWT 모양(eyJ…)과, 이번에 앱이 내린 sid 쿠키 값이 하나도 없어야 해요. 세션이 끝날 때마다 사유(reason=)가 남았는지도 봐요.',
+  async (note) => {
+    for (const app of ['demo', 'demo2']) {
+      const file = APPS[app].log;
+      if (!file || !fs.existsSync(file)) {
+        await note(null, `${app} 로그 파일을 안 줘서 못 봐요(KSS_${app === 'demo' ? 'DEMO' : 'DEMO2'}_LOG)`);
+        continue;
+      }
+      const log = fs.readFileSync(file, 'utf8');
+      const jwtLike = (log.match(/eyJ[A-Za-z0-9_-]{10,}/g) ?? []).length;
+      const rawSid = [...seenSids].filter((v) => log.includes(v)).length;
+      const reasons = [...new Set((log.match(/\[KSS\] 세션 끝남 reason=([a-z_]+)/g) ?? []).map((l) => l.split('reason=')[1]))];
+      await note(jwtLike === 0 && rawSid === 0 && seenSids.size > 0, `${app} 로그: JWT 모양 ${jwtLike}개, sid 원문 ${rawSid}개 (이번 sid ${seenSids.size}개와 비교)`);
+      await note(reasons.length > 0, `${app} 로그의 세션 끝남 사유: ${reasons.join(', ') || '없음'}`);
+    }
     await note(null, '실제 시간을 기다리는 것(at 만료 95초, 미사용 2분, 절대 상한 3분)은 feature-walkthrough.mjs --slow로 봐요');
   });
+
+if (NOTES?.summary) {
+  step('notes-summary', NOTES.summary.title ?? '요약', NOTES.summary.look ?? '', async (note) => {
+    for (const line of NOTES.summary.lines ?? []) await note(null, line);
+  });
+}
+if (NOTES?.steps) {
+  const unknown = Object.keys(NOTES.steps).filter((k) => !steps.some((s) => s.key === k));
+  if (unknown.length) console.error(`KSS_TOUR_NOTES에 없는 단계 키: ${unknown.join(', ')} (있는 키: ${steps.map((s) => s.key).join(', ')})`);
+}
 
 // ---------------------------------------------------------------- 돌리기
 
@@ -655,7 +778,8 @@ if (SHOTS) fs.mkdirSync(SHOTS, { recursive: true });
 try {
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i];
-    board = { n: i + 1, total: steps.length, title: s.title, look: s.look, results: [], state: 'running', auto: AUTO_MS !== null };
+    board = { n: i + 1, total: steps.length, title: s.title, look: s.look, results: [], state: 'running', auto: AUTO_MS !== null,
+      notesLabel: NOTES?.label, notes: NOTES?.steps?.[s.key] ?? [] };
     console.log(`\n== ${i + 1}/${steps.length} ${s.title}`);
     await render(page);
     const note = async (ok, text) => {
