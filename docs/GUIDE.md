@@ -247,7 +247,7 @@ async function post(path, body) {
 
 | Rule | Details |
 |---|---|
-| CORS | Only the `frontend.base-url` origin, with credentials. Allowed headers `Content-Type`·`Accept`·`X-Requested-With`·`X-XSRF-TOKEN`·`X-Background` |
+| CORS | Only the `frontend.base-url` origin, with credentials. Allowed headers `Content-Type`·`X-XSRF-TOKEN`·`X-Background` |
 | Origin check | Except GET·HEAD·OPTIONS·TRACE, `Origin` (or `Referer`) must be the allowed front end |
 | CSRF | `X-XSRF-TOKEN` header or form field `_csrf`. The token is bound to the sid, so a planted cookie does not work |
 | Exclusions | Keycloak's back-channel logout and the OIDC callback are excluded automatically. Webhooks and similar: [5-3](#5-3-configurer-customizers) |

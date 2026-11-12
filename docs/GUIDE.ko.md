@@ -247,7 +247,7 @@ async function post(path, body) {
 
 | 규칙 | 내용 |
 |---|---|
-| CORS | `frontend.base-url` origin 하나만, 쿠키 허용. 허용 헤더 `Content-Type`·`Accept`·`X-Requested-With`·`X-XSRF-TOKEN`·`X-Background` |
+| CORS | `frontend.base-url` origin 하나만, 쿠키 허용. 허용 헤더 `Content-Type`·`X-XSRF-TOKEN`·`X-Background` |
 | Origin 확인 | GET·HEAD·OPTIONS·TRACE 말고는 `Origin`(없으면 `Referer`)이 허용 화면이어야 함 |
 | CSRF | `X-XSRF-TOKEN` 헤더 또는 폼 칸 `_csrf`. 토큰은 sid에 묶여 있어 다른 사람 쿠키를 심어도 통하지 않음 |
 | 빼기 | Keycloak이 부르는 back-channel 로그아웃과 OIDC 콜백은 자동으로 빠짐. 웹훅 등은 [5-3](#5-3-설정기-customizer) |

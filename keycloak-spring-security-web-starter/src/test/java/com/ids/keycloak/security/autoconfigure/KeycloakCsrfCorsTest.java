@@ -144,6 +144,41 @@ class KeycloakCsrfCorsTest {
     }
 
     @Test
+    @DisplayName("CORS-03 (통합) 허용 헤더는 Content-Type·X-XSRF-TOKEN·X-Background 셋뿐: X-Requested-With·Authorization만 물으면 403, 섞어 물으면 그 헤더는 답에 없다")
+    void preflightAllowsOnlyThreeHeaders() {
+        runner.run(context -> {
+            FilterChainProxy chain = context.getBean("springSecurityFilterChain", FilterChainProxy.class);
+            MockHttpServletRequest three = request("OPTIONS", "/api/items");
+            three.addHeader("Origin", FRONTEND);
+            three.addHeader("Access-Control-Request-Method", "POST");
+            three.addHeader("Access-Control-Request-Headers", "content-type,x-xsrf-token,x-background");
+            MockHttpServletResponse ok = send(chain, three);
+            assertThat(ok.getStatus()).isEqualTo(200);
+            assertThat(ok.getHeader("Access-Control-Allow-Headers"))
+                .containsIgnoringCase("content-type").containsIgnoringCase("x-xsrf-token").containsIgnoringCase("x-background");
+
+            for (String header : new String[] {"x-requested-with", "authorization"}) {
+                MockHttpServletRequest only = request("OPTIONS", "/api/items");
+                only.addHeader("Origin", FRONTEND);
+                only.addHeader("Access-Control-Request-Method", "POST");
+                only.addHeader("Access-Control-Request-Headers", header);
+                MockHttpServletResponse denied = send(chain, only);
+                assertThat(denied.getStatus()).as(header).isEqualTo(403);
+                assertThat(denied.getHeader("Access-Control-Allow-Origin")).as(header).isNull();
+
+                // 허용 헤더와 섞어 물으면 Spring은 200에 허용된 것만 답한다. 브라우저는 답에 없는 헤더를 보고 실제 요청을 막는다
+                MockHttpServletRequest mixed = request("OPTIONS", "/api/items");
+                mixed.addHeader("Origin", FRONTEND);
+                mixed.addHeader("Access-Control-Request-Method", "POST");
+                mixed.addHeader("Access-Control-Request-Headers", "content-type," + header);
+                MockHttpServletResponse partial = send(chain, mixed);
+                assertThat(partial.getHeader("Access-Control-Allow-Headers")).as(header)
+                    .containsIgnoringCase("content-type").doesNotContainIgnoringCase(header);
+            }
+        });
+    }
+
+    @Test
     @DisplayName("BCL-04 (통합) back-channel 주소는 CSRF·Origin 없이 받는다: 틀린 logout_token은 403이 아니라 400 invalid_request, 처리기 빈은 기본값")
     void backChannelSkipsCsrfAndOrigin() {
         runner.run(context -> {
