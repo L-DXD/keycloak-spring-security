@@ -6,7 +6,7 @@ Spring Boot 앱에 Keycloak 로그인을 붙이는 라이브러리입니다. 스
 
 - **3.x**: Java 17+, Spring Boot 4.1, Spring Security 7.1, Servlet(Spring MVC). WebFlux는 3.1.0
 - **방식**: 앱이 토큰을 맡는 BFF. 화면은 `__Host-` 쿠키만 들고, 액세스 토큰은 앱 안에서 검증하고(요청마다 Keycloak·DB를 부르지 않음), 리프레시 토큰은 앱 DB에 암호화해 둡니다
-- **2.x**(Spring Boot 3.5)는 [docs/v2](docs/v2/GUIDE.ko.md)와 `2.x` 브랜치에 있습니다
+- **2.x**(Spring Boot 3.5)는 [docs/v2](docs/v2/GUIDE.ko.md)와 `2.x` 브랜치에 있습니다. 3.0.0부터 지원하지 않습니다([SECURITY](SECURITY.ko.md))
 
 ## 문서
 
@@ -19,8 +19,6 @@ Spring Boot 앱에 Keycloak 로그인을 붙이는 라이브러리입니다. 스
 | [docs/v3](docs/v3/README.md) | 설계, 수용 조건 시나리오, 검증 환경, 결정 기록 (기여자용) |
 
 ## 빠른 시작
-
-> 지금 Maven Central에 있는 3.x는 미리 보기 `3.0.0-RC1`입니다. 정식 3.0.0 전까지 설정 이름·기본값이 바뀔 수 있습니다. 운영은 [2.0.3](https://github.com/L-DXD/keycloak-spring-security/tree/2.x)을 쓰세요.
 
 ```gradle
 implementation("io.github.l-dxd:keycloak-spring-security-web-starter:3.0.0")

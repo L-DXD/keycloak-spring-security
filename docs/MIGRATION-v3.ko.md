@@ -31,7 +31,7 @@ implementation("org.springframework.boot:spring-boot-starter-jdbc")   // 세션 
 runtimeOnly("org.postgresql:postgresql")
 ```
 
-Redis·`spring-session-*` 의존성은 지웁니다. WebFlux 스타터는 3.0.0에 없습니다(3.1.0까지 v2를 씁니다).
+Redis·`spring-session-*` 의존성은 지웁니다. WebFlux 스타터는 3.0.0에 없습니다(3.1.0까지 v2를 씁니다. 2.x는 3.0.0부터 지원하지 않아 수정이 나오지 않습니다).
 
 ## 3. 설정 키
 

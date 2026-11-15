@@ -6,8 +6,9 @@
 
 | 버전 | 지원 | 비고 |
 |------|------|------|
-| 3.0.0-RC1 | 미리 보기 | 정식 3.0.0 전에 써 보는 판. 설정 이름·기본값이 바뀔 수 있다. 운영은 2.0.3 |
-| **2.0.3+** | **권장** | `error.*` 프로퍼티가 전혀 적용되지 않던 버그(EntryPoint/AccessDeniedHandler가 `oauth2Login`에 밀림) 수정, Basic Auth 실패 시 앞단 필터 인증까지 소거하던 문제, 정적 리소스 요청마다 Introspect/UserInfo 원격 호출, Redis 세션 손상 시 HTTP 500, 인증 실패 감사 로그 부재, 백채널 로그아웃 조용한 무동작 수정. 2.0.2 내용 전부 포함. 프로덕션 권장 |
+| **3.0.x** | **권장** | Spring Boot 4.1 · Spring Security 7.1. 2.x에서 옮기는 법은 [docs/MIGRATION-v3.ko.md](docs/MIGRATION-v3.ko.md) |
+| 3.0.0-RC1 | 3.0.0으로 업그레이드 | 3.0.0 미리 보기. 3.0.0에서 JWKS 다시 받기 기본 간격과 CORS 허용 헤더가 바뀌었다([CHANGELOG.md](CHANGELOG.md)) |
+| 2.0.3 | 지원 끝 | Spring Boot 3.5. 더 고치지 않는다. 3.0.x로 옮긴다. `error.*` 프로퍼티가 전혀 적용되지 않던 버그(EntryPoint/AccessDeniedHandler가 `oauth2Login`에 밀림) 수정, Basic Auth 실패 시 앞단 필터 인증까지 소거하던 문제, 정적 리소스 요청마다 Introspect/UserInfo 원격 호출, Redis 세션 손상 시 HTTP 500, 인증 실패 감사 로그 부재, 백채널 로그아웃 조용한 무동작 수정. 2.0.2 내용 전부 포함. 프로덕션 권장 |
 | 2.0.2 | 업그레이드 권고 | 2.0.3 Fixed 항목 미반영 — `error.*` 설정이 조용히 무시되고(1.9.0~2.0.2 공통), 정적 리소스 요청마다 원격 호출 발생. 외부 보안 검토 4건(2.0.1분) + 보안 전수 검토 8건(2.0.0분)은 모두 포함하나 2.0.3으로 업그레이드 권고. 2.0.3에는 breaking 3건이 있으니 [CHANGELOG.md](CHANGELOG.md) 확인 |
 | 2.0.1 | **사용 금지 (deprecated)** | Redis + Jackson 세션 사용 시 인증 요청마다 500 (`SecurityContext` 역직렬화 실패) — 2.0.2에서 수정. 즉시 2.0.2로 업그레이드 |
 | 2.0.0 | **사용 금지 (deprecated)** | 2.0.1과 동일한 세션 역직렬화 500 회귀 + 외부 검토 4건 미반영 — 즉시 2.0.2로 업그레이드 |
@@ -17,7 +18,7 @@
 | 1.6.0 – 1.9.x | 업그레이드 권고 | 보안 전수 검토(1.10.0) 미반영 — reactive 백채널 JWKS 검증, 쿠키 `secure` 기본값, X-Forwarded-For 신뢰, Redis JSON 직렬화 등, Advisory 1/2/3/5/6/7/8도 미반영 |
 | < 1.5.0 | 미지원 | **SecurityFilterChain Fail-Open** (CVSS 8.1) — 즉시 업그레이드 |
 
-> 프로덕션에서는 **항상 2.0.3 이상**을 사용하세요. **2.0.0 / 2.0.1은 Redis + Jackson 세션 역직렬화 회귀(인증 요청마다 500)로 사용 금지**이며 2.0.2에서 수정됐습니다. 버전별 상세 변경은 [CHANGELOG.md](CHANGELOG.md)를 참고하세요.
+> **3.0.x**를 쓰세요. 2.x는 지원이 끝났습니다. 아직 2.x라면 옮기기 전까지 **항상 2.0.3 이상**을 사용하세요. **2.0.0 / 2.0.1은 Redis + Jackson 세션 역직렬화 회귀(인증 요청마다 500)로 사용 금지**이며 2.0.2에서 수정됐습니다. 버전별 상세 변경은 [CHANGELOG.md](CHANGELOG.md)를 참고하세요.
 
 ## 과거 보안 수정 (Resolved Advisories)
 

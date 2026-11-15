@@ -31,7 +31,7 @@ implementation("org.springframework.boot:spring-boot-starter-jdbc")   // session
 runtimeOnly("org.postgresql:postgresql")
 ```
 
-Remove the Redis and `spring-session-*` dependencies. There is no WebFlux starter in 3.0.0 (stay on v2 until 3.1.0).
+Remove the Redis and `spring-session-*` dependencies. There is no WebFlux starter in 3.0.0 (stay on v2 until 3.1.0; 2.x is unsupported as of 3.0.0 and gets no further fixes).
 
 ## 3. Configuration keys
 

@@ -6,7 +6,7 @@ A library that adds Keycloak login to a Spring Boot app. One starter and a few l
 
 - **3.x**: Java 17+, Spring Boot 4.1, Spring Security 7.1, Servlet (Spring MVC). WebFlux comes in 3.1.0
 - **Model**: a BFF where the app holds the tokens. The browser carries only `__Host-` cookies, the access token is validated inside the app (no Keycloak or database call per request), and the refresh token is stored encrypted in the app database
-- **2.x** (Spring Boot 3.5) lives in [docs/v2](docs/v2/GUIDE.md) and the `2.x` branch
+- **2.x** (Spring Boot 3.5) lives in [docs/v2](docs/v2/GUIDE.md) and the `2.x` branch. It is unsupported as of 3.0.0 ([SECURITY](SECURITY.md))
 
 ## Documentation
 
@@ -19,8 +19,6 @@ A library that adds Keycloak login to a Spring Boot app. One starter and a few l
 | [docs/v3](docs/v3/README.md) | Design, acceptance scenarios, test environment, decision log (for contributors, Korean) |
 
 ## Quick start
-
-> The 3.x release on Maven Central is currently the preview `3.0.0-RC1`. Setting names and defaults may change before the final 3.0.0. Use [2.0.3](https://github.com/L-DXD/keycloak-spring-security/tree/2.x) in production.
 
 ```gradle
 implementation("io.github.l-dxd:keycloak-spring-security-web-starter:3.0.0")
