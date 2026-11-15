@@ -43,8 +43,8 @@ public class KeycloakCors {
         cors.setAllowedOrigins(new ArrayList<>(List.of(Objects.requireNonNull(frontendOrigin))));
         cors.setAllowCredentials(true);
         cors.setAllowedMethods(new ArrayList<>(List.of("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE")));
-        cors.setAllowedHeaders(new ArrayList<>(List.of("Content-Type", "Accept", "X-Requested-With",
-            SignedDoubleSubmitCsrfTokenRepository.HEADER_NAME, Objects.requireNonNull(backgroundHeader))));
+        cors.setAllowedHeaders(new ArrayList<>(List.of("Content-Type", SignedDoubleSubmitCsrfTokenRepository.HEADER_NAME,
+            Objects.requireNonNull(backgroundHeader))));
         cors.setMaxAge(MAX_AGE);
         return cors;
     }

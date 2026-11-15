@@ -32,6 +32,8 @@ public class KeycloakSecuritySettings {
     private static final Pattern HEADER_NAME = Pattern.compile("[!#$%&'*+.^_`|~0-9A-Za-z-]+");
     private static final Set<String> LOOPBACK_HOSTS = Set.of("localhost", "127.0.0.1", "[::1]", "::1");
     private static final Duration MAX_CLOCK_SKEW = Duration.ofMinutes(5);
+    private static final Duration MIN_JWKS_REFETCH_INTERVAL = Duration.ofSeconds(10);
+    private static final Duration MAX_JWKS_REFETCH_INTERVAL = Duration.ofHours(1);
 
     private final String registrationId;
     private final URI frontendBaseUrl;
@@ -44,6 +46,7 @@ public class KeycloakSecuritySettings {
     private final Duration refreshReuseWindow;
     private final Duration cleanupInterval;
     private final Duration clockSkew;
+    private final Duration jwksMinRefetchInterval;
     private final String requiredAudience;
     private final String backgroundHeader;
     private final String csrfEndpoint;
@@ -65,6 +68,7 @@ public class KeycloakSecuritySettings {
         this.refreshReuseWindow = b.refreshReuseWindow;
         this.cleanupInterval = b.cleanupInterval;
         this.clockSkew = b.clockSkew;
+        this.jwksMinRefetchInterval = b.jwksMinRefetchInterval;
         this.requiredAudience = b.requiredAudience;
         this.backgroundHeader = b.backgroundHeader;
         this.csrfEndpoint = b.csrfEndpoint;
@@ -144,6 +148,11 @@ public class KeycloakSecuritySettings {
         return clockSkew;
     }
 
+    /** 모르는 kid가 왔을 때 JWKS를 다시 받는 최소 간격. 기본 5분 (10초~1시간). */
+    public Duration jwksMinRefetchInterval() {
+        return jwksMinRefetchInterval;
+    }
+
     /** 액세스 토큰 aud에 있어야 하는 값. 기본은 client id. */
     public String requiredAudience() {
         return requiredAudience;
@@ -215,6 +224,7 @@ public class KeycloakSecuritySettings {
         private Duration refreshReuseWindow = Duration.ofSeconds(10);
         private Duration cleanupInterval = Duration.ofMinutes(10);
         private Duration clockSkew = Duration.ofSeconds(30);
+        private Duration jwksMinRefetchInterval = Duration.ofMinutes(5);
         private String requiredAudience;
         private String backgroundHeader = "X-Background";
         private String csrfEndpoint = "/api/csrf";
@@ -276,6 +286,11 @@ public class KeycloakSecuritySettings {
 
         public Builder clockSkew(Duration clockSkew) {
             this.clockSkew = clockSkew;
+            return this;
+        }
+
+        public Builder jwksMinRefetchInterval(Duration jwksMinRefetchInterval) {
+            this.jwksMinRefetchInterval = jwksMinRefetchInterval;
             return this;
         }
 
@@ -441,6 +456,10 @@ public class KeycloakSecuritySettings {
         private void checkToken(List<Problem> problems) {
             if (clockSkew == null || clockSkew.isNegative() || clockSkew.compareTo(MAX_CLOCK_SKEW) > 0) {
                 problems.add(issue("token.clock-skew", "0초에서 5분 사이여야 합니다"));
+            }
+            if (jwksMinRefetchInterval == null || jwksMinRefetchInterval.compareTo(MIN_JWKS_REFETCH_INTERVAL) < 0
+                || jwksMinRefetchInterval.compareTo(MAX_JWKS_REFETCH_INTERVAL) > 0) {
+                problems.add(issue("token.jwks-min-refetch-interval", "10초에서 1시간 사이여야 합니다"));
             }
             if (isBlank(requiredAudience)) {
                 problems.add(issue("token.required-audience", "필수입니다 (스타터는 client id를 기본값으로 쓴다)"));

@@ -31,7 +31,7 @@ implementation("org.springframework.boot:spring-boot-starter-jdbc")   // session
 runtimeOnly("org.postgresql:postgresql")
 ```
 
-Remove the Redis and `spring-session-*` dependencies. There is no WebFlux starter in 3.0.0 (stay on v2 until 3.1.0).
+Remove the Redis and `spring-session-*` dependencies. There is no WebFlux starter in 3.0.0 (stay on v2 until 3.1.0; 2.x is unsupported as of 3.0.0 and gets no further fixes).
 
 ## 3. Configuration keys
 
@@ -88,6 +88,7 @@ Remove the Redis and `spring-session-*` dependencies. There is no WebFlux starte
 | `session.absolute-timeout` | `12h` | | Log in again after this long since login |
 | `session.refresh-reuse-window` | `10s` | | How long a concurrent refresh counts as "just refreshed" |
 | `token.clock-skew` | `30s` | | Allowed clock difference (0 to 5 minutes) |
+| `token.jwks-min-refetch-interval` | `5m` | | Minimum time between JWKS refetches for an unknown kid (10 seconds to 1 hour) |
 | `token.required-audience` | client id | | Value that must be in the access token `aud` |
 | `request.background-header` | `X-Background` | | Requests with this header never refresh the token |
 | `csrf.endpoint` | `/api/csrf` | | Where the front end gets the CSRF token |

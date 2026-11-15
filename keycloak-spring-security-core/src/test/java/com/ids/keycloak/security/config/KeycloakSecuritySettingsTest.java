@@ -15,6 +15,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import com.ids.keycloak.security.config.KeycloakSecurityConfigurationException.Problem;
+import com.ids.keycloak.security.token.KeycloakJwkSource;
 
 class KeycloakSecuritySettingsTest {
 
@@ -52,6 +53,7 @@ class KeycloakSecuritySettingsTest {
         assertThat(settings.refreshReuseWindow()).isEqualTo(Duration.ofSeconds(10));
         assertThat(settings.cleanupInterval()).isEqualTo(Duration.ofMinutes(10));
         assertThat(settings.clockSkew()).isEqualTo(Duration.ofSeconds(30));
+        assertThat(settings.jwksMinRefetchInterval()).isEqualTo(Duration.ofMinutes(5));
         assertThat(settings.backgroundHeader()).isEqualTo("X-Background");
         assertThat(settings.csrfEndpoint()).isEqualTo("/api/csrf");
         assertThat(settings.revokeRefreshTokenOnLocalLogout()).isFalse();
@@ -160,6 +162,45 @@ class KeycloakSecuritySettingsTest {
         }
     }
 
+    @Nested
+    @DisplayName("token.jwks-min-refetch-interval")
+    class JwksMinRefetchInterval {
+
+        static final String PROPERTY = "keycloak.security.token.jwks-min-refetch-interval";
+
+        @Test
+        @DisplayName("JWT-08 기본값은 5분이고, KeycloakJwkSource 기본값과 같다")
+        void defaultIsFiveMinutes() {
+            assertThat(valid().build().jwksMinRefetchInterval())
+                .isEqualTo(Duration.ofMinutes(5))
+                .isEqualTo(KeycloakJwkSource.DEFAULT_MIN_REFETCH_INTERVAL);
+        }
+
+        @ParameterizedTest(name = "JWT-08 {0}은 받는다")
+        @ValueSource(strings = {"PT10S", "PT1M", "PT1H"})
+        @DisplayName("JWT-08 10초에서 1시간 사이면 받는다")
+        void inRange(String value) {
+            assertThat(valid().jwksMinRefetchInterval(Duration.parse(value)).build().jwksMinRefetchInterval()).isEqualTo(Duration.parse(value));
+        }
+
+        @ParameterizedTest(name = "JWT-08 {0}은 설정 이름을 알려 주고 실패한다")
+        @ValueSource(strings = {"PT0S", "PT-1S", "PT-5M", "PT9S", "PT9.999S", "PT1H0.001S", "PT1H1S", "PT2H"})
+        @DisplayName("JWT-08 0·음수·10초 미만·1시간 넘음은 설정 이름을 알려 주고 실패한다")
+        void outOfRange(String value) {
+            assertThatThrownBy(() -> valid().jwksMinRefetchInterval(Duration.parse(value)).build())
+                .isInstanceOf(KeycloakSecurityConfigurationException.class)
+                .hasMessageContaining(PROPERTY)
+                .hasMessageContaining("10초에서 1시간 사이");
+            assertThat(problemProperties(valid().jwksMinRefetchInterval(Duration.parse(value)))).containsExactly(PROPERTY);
+        }
+
+        @Test
+        @DisplayName("JWT-08 값이 없으면(null) 설정 이름을 알려 주고 실패한다")
+        void nullIsRejected() {
+            assertThat(problemProperties(valid().jwksMinRefetchInterval(null))).containsExactly(PROPERTY);
+        }
+    }
+
     @Test
     @DisplayName("잘못된 것을 한 번에 모두 알려 준다")
     void reportsAllProblems() {
@@ -168,6 +209,7 @@ class KeycloakSecuritySettingsTest {
             .sessionTableName("auth_session; drop table x")
             .absoluteTimeout(Duration.ZERO)
             .clockSkew(Duration.ofMinutes(10))
+            .jwksMinRefetchInterval(Duration.ZERO)
             .backgroundHeader("X Background")
             .csrfEndpoint("api/csrf")
             .permitAllPaths(List.of("/ok", "//evil"))
@@ -180,6 +222,7 @@ class KeycloakSecuritySettingsTest {
             "keycloak.security.session.table-name",
             "keycloak.security.session.absolute-timeout",
             "keycloak.security.token.clock-skew",
+            "keycloak.security.token.jwks-min-refetch-interval",
             "keycloak.security.token.required-audience",
             "keycloak.security.request.background-header",
             "keycloak.security.csrf.endpoint",

@@ -2,10 +2,13 @@ package com.ids.keycloak.security.token;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Date;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -138,20 +141,87 @@ class DefaultKeycloakAccessTokenValidatorTest {
     }
 
     @Test
-    @DisplayName("JWT-08 모르는 kid가 1분 안에 두 번 오면 JWKS를 한 번만 다시 받는다. 두 번째는 로그아웃 대신 UNAVAILABLE")
+    @DisplayName("JWT-08 모르는 kid가 5분 안에 두 번 오면 JWKS를 한 번만 다시 받는다. 두 번째는 로그아웃 대신 UNAVAILABLE")
     void unknownKidRefetchIsRateLimited() {
+        assertThat(KeycloakJwkSource.DEFAULT_MIN_REFETCH_INTERVAL).isEqualTo(Duration.ofMinutes(5));
         assertThat(validator.validate(tokens.token()).isValid()).isTrue();
         assertThat(tokens.fetches.get()).as("처음 한 번 받는다").isEqualTo(1);
         tokens.clock.advance(Duration.ofMinutes(10));
         String unknown = TestTokens.sign(TestTokens.newKey("k-unknown"), tokens.claims().build());
 
         AccessTokenValidationResult first = validator.validate(unknown);
-        tokens.clock.advance(Duration.ofSeconds(30));
-        AccessTokenValidationResult second = validator.validate(unknown);
+        tokens.clock.advance(Duration.ofMinutes(4).plusSeconds(59));
+        AccessTokenValidationResult second = validator.validate(TestTokens.sign(TestTokens.newKey("k-unknown"), tokens.claims().build()));
 
         assertThat(tokens.fetches.get()).as("모르는 kid로 다시 받는 것은 한 번").isEqualTo(2);
         assertThat(first.status()).as("다시 받아도 없는 키").isEqualTo(Status.INVALID);
         assertThat(second.status()).as("간격 제한으로 못 받음").isEqualTo(Status.UNAVAILABLE);
+    }
+
+    @Test
+    @DisplayName("JWT-08 다시 받은 뒤 5분이 지나면 모르는 kid로 다시 받는다")
+    void unknownKidRefetchAfterInterval() {
+        assertThat(validator.validate(tokens.token()).isValid()).isTrue();
+        tokens.clock.advance(Duration.ofMinutes(10));
+        String unknown = TestTokens.sign(TestTokens.newKey("k-unknown"), tokens.claims().build());
+        assertThat(validator.validate(unknown).status()).isEqualTo(Status.INVALID);
+        assertThat(tokens.fetches.get()).isEqualTo(2);
+
+        tokens.clock.advance(Duration.ofMinutes(5));
+        String later = TestTokens.sign(TestTokens.newKey("k-unknown"), tokens.claims().build());
+        AccessTokenValidationResult result = validator.validate(later);
+
+        assertThat(tokens.fetches.get()).as("간격이 지나 한 번 더 받는다").isEqualTo(3);
+        assertThat(result.status()).as("받아도 없는 키").isEqualTo(Status.INVALID);
+    }
+
+    @Test
+    @DisplayName("JWT-08 간격은 생성자로 바꾼다 (스타터 설정 token.jwks-min-refetch-interval)")
+    void customRefetchInterval() {
+        KeycloakJwkSource shortInterval = new KeycloakJwkSource(tokens.fetcher(), Duration.ofSeconds(30), tokens.clock);
+        DefaultKeycloakAccessTokenValidator custom = tokens.validator(shortInterval);
+        assertThat(custom.validate(tokens.token()).isValid()).isTrue();
+        String unknown = TestTokens.sign(TestTokens.newKey("k-unknown"), tokens.claims().build());
+
+        tokens.clock.advance(Duration.ofSeconds(29));
+        assertThat(custom.validate(unknown).status()).as("30초 안: 다시 받지 않음").isEqualTo(Status.UNAVAILABLE);
+        tokens.clock.advance(Duration.ofSeconds(1));
+        assertThat(custom.validate(unknown).status()).as("30초 뒤: 다시 받아도 없는 키").isEqualTo(Status.INVALID);
+
+        assertThat(tokens.fetches.get()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("JWT-08 다시 받기가 실패해도 간격에 넣는다. Keycloak이 실패하는 동안 모르는 kid가 몰려도 5분에 한 번만 부른다")
+    void failedRefetchCountsTowardInterval() {
+        AtomicBoolean failing = new AtomicBoolean();
+        AtomicInteger attempts = new AtomicInteger();
+        JwkSetFetcher working = tokens.fetcher();
+        KeycloakJwkSource flaky = new KeycloakJwkSource(() -> {
+            attempts.incrementAndGet();
+            if (failing.get()) {
+                throw new IOException("read timed out");
+            }
+            return working.fetch();
+        }, tokens.clock);
+        DefaultKeycloakAccessTokenValidator custom = tokens.validator(flaky);
+        assertThat(custom.validate(tokens.token()).isValid()).isTrue();
+        tokens.clock.advance(Duration.ofMinutes(10));
+        failing.set(true);
+        String unknown = TestTokens.sign(TestTokens.newKey("k-unknown"), tokens.claims().build());
+
+        for (int i = 0; i < 20; i++) {
+            assertThat(custom.validate(unknown).status()).as("로그아웃 대신 UNAVAILABLE").isEqualTo(Status.UNAVAILABLE);
+            tokens.clock.advance(Duration.ofSeconds(1));
+        }
+        assertThat(attempts.get()).as("처음 1번 + 실패한 다시 받기 1번").isEqualTo(2);
+
+        failing.set(false);
+        tokens.clock.advance(Duration.ofMinutes(5));
+        tokens.signingKey = TestTokens.newKey("k2");
+        tokens.published = List.of(tokens.signingKey);
+        assertThat(custom.validate(tokens.token()).isValid()).as("간격이 지나면 다시 받아 통과").isTrue();
+        assertThat(attempts.get()).isEqualTo(3);
     }
 
     @Test

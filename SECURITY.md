@@ -6,8 +6,9 @@
 
 | Version | Support | Notes |
 |------|------|------|
-| 3.0.0-RC1 | Preview | For trying 3.0 before the final 3.0.0. Setting names and defaults may still change. Use 2.0.3 in production |
-| **2.0.3+** | **Recommended** | The `error.*` properties never took effect (EntryPoint/AccessDeniedHandler overwritten by `oauth2Login`) is fixed, along with Basic Auth clearing an authentication established by an earlier filter, an Introspect/UserInfo remote call per static resource request, HTTP 500 on corrupted Redis sessions, missing authentication-failure audit logs, and back-channel logout silently doing nothing. Includes everything from 2.0.2. Recommended for production |
+| **3.0.x** | **Recommended** | Spring Boot 4.1 · Spring Security 7.1. To migrate from 2.x see [docs/MIGRATION-v3.md](docs/MIGRATION-v3.md) |
+| 3.0.0-RC1 | Upgrade to 3.0.0 | Preview of 3.0.0. In 3.0.0 the default JWKS refetch interval and the allowed CORS headers changed (see [CHANGELOG.md](CHANGELOG.md)) |
+| 2.0.3 | Unsupported | Spring Boot 3.5. No further fixes; move to 3.0.x. The `error.*` properties never took effect (EntryPoint/AccessDeniedHandler overwritten by `oauth2Login`) is fixed, along with Basic Auth clearing an authentication established by an earlier filter, an Introspect/UserInfo remote call per static resource request, HTTP 500 on corrupted Redis sessions, missing authentication-failure audit logs, and back-channel logout silently doing nothing. Includes everything from 2.0.2. Recommended for production |
 | 2.0.2 | Upgrade recommended | The Fixed items of 2.0.3 are not applied — `error.*` settings are silently ignored (common to 1.9.0–2.0.2), and static resources trigger a remote call per request. Includes all 4 external security review items (from 2.0.1) + all 8 full security review items (from 2.0.0), but upgrading to 2.0.3 is recommended. Note that 2.0.3 has 3 breaking changes (see [CHANGELOG.md](CHANGELOG.md)) |
 | 2.0.1 | **Deprecated (do not use)** | With Redis + Jackson sessions, every authenticated request returns 500 (`SecurityContext` deserialization failure) — fixed in 2.0.2. Upgrade to 2.0.2 immediately |
 | 2.0.0 | **Deprecated (do not use)** | Same session deserialization 500 regression as 2.0.1 + the 4 external review items not applied — upgrade to 2.0.2 immediately |
@@ -17,7 +18,7 @@
 | 1.6.0 – 1.9.x | Upgrade recommended | Full security review (1.10.0) not applied — reactive back-channel JWKS validation, cookie `secure` default, X-Forwarded-For trust, Redis JSON serialization, etc.; Advisory 1/2/3/5/6/7/8 also not applied |
 | < 1.5.0 | Unsupported | **SecurityFilterChain Fail-Open** (CVSS 8.1) — upgrade immediately |
 
-> In production, **always use 2.0.3 or higher**. **2.0.0 / 2.0.1 must not be used due to the Redis + Jackson session deserialization regression (500 on every authenticated request)**, which was fixed in 2.0.2. For detailed per-version changes, see [CHANGELOG.md](CHANGELOG.md).
+> Use **3.0.x**. 2.x is no longer supported; if you are still on 2.x, **always use 2.0.3 or higher** until you move. **2.0.0 / 2.0.1 must not be used due to the Redis + Jackson session deserialization regression (500 on every authenticated request)**, which was fixed in 2.0.2. For detailed per-version changes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Resolved Advisories
 
