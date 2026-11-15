@@ -41,7 +41,7 @@
 - 손으로 해 보는 로컬 환경: `integration-tests/local-stack.sh up`이 Docker Compose로 Keycloak·PostgreSQL·화면(nginx, `https://app.kss.test`)을 띄우고, 샘플 앱은 `bootRun`으로 바로 붙는다. 실제 브라우저로 주요 기능을 하나씩 확인하는 스크립트(`integration-tests/browser/feature-walkthrough.mjs`, 49개, 건너뛴 확인은 따로 셈)와 그 결과·보지 않는 시나리오를 [검증 환경](docs/v3/03-검증-환경.md) 4-2절에 적었다. 스크립트는 LF로 받게 했다(`.gitattributes`). 시험 이미지는 `KSS_E2E_KEYCLOAK_IMAGE`·`KSS_E2E_POSTGRES_IMAGE`로 바꿀 수 있다 ([#128](https://github.com/L-DXD/keycloak-spring-security/issues/128)).
 
 ### Removed
-- 2.x 코드를 모두 걷어냈다. 기능은 v3 설계대로 #114~#126에서 새로 들어온다 ([#113](https://github.com/L-DXD/keycloak-spring-security/issues/113)).
+- 2.x 코드를 모두 걷어냈다. 기능은 v3 설계대로 새로 넣었다(위 Added, #114~#126) ([#113](https://github.com/L-DXD/keycloak-spring-security/issues/113)).
 - WebFlux 모듈(`keycloak-spring-security-webflux`, `-webflux-starter`). 3.1.0에서 다시 넣는다 ([#127](https://github.com/L-DXD/keycloak-spring-security/issues/127)).
 - `keycloak-client` 의존. Lombok.
 - v2 설정 가운데 Basic 인증(`basic-auth.*`), Bearer·토큰 발급 API(`bearer-token.*`), Rate limit(`rate-limit.*`), Keycloak 인가(`authorization.*`), 역할 매핑(`role-mapping.*`), 정적 리소스(`static-resources.*`), 쿠키 속성(`cookie.*`), 오류 리다이렉트(`error.*`), `matcher.*`, Redis·HttpSession 세션, `KeycloakLoginService`. 대안은 [옮기기 문서](docs/MIGRATION-v3.ko.md) 3-2절.
@@ -60,7 +60,7 @@
 - `matcher.include`/`exclude` 매칭 시 경로를 정규화(context-path 제거, traversal 방지)하도록 수정.
 
 ### Added
-- **`KeycloakLoginService`** (servlet, `com.ids.keycloak.security.authentication`) — 외부에서 이미 획득한 토큰으로 인증 세션을 세우는 **프로그래밍 방식 로그인 API**. Token Exchange, 커스텀 SSO 핸드오프, 테스트 등 OIDC 리다이렉트 흐름 밖에서 로그인을 성립시켜야 할 때 사용한다. 토큰 검증은 `KeycloakAuthenticationProvider#createAuthenticatedToken` 단일 진입점을 반드시 경유하므로 검증 우회가 없고, 성공 시 세션 고정 방지(다른 사용자로 재로그인이면 세션 신규 생성, 동일 사용자면 세션 ID 회전) → `SecurityContext` 저장 → 토큰 쿠키 발급 → Refresh Token/Principal Name/Keycloak Session ID 세션 저장까지 OIDC 로그인 성공과 동등한 결과를 만든다. 토큰 묶음 값 객체 `KeycloakTokens`(`of(idToken, accessToken)` / `of(idToken, accessToken, refreshToken)`)를 함께 추가. 사용법은 [docs/GUIDE.md](docs/GUIDE.md) 4.11 참고.
+- **`KeycloakLoginService`** (servlet, `com.ids.keycloak.security.authentication`) — 외부에서 이미 획득한 토큰으로 인증 세션을 세우는 **프로그래밍 방식 로그인 API**. Token Exchange, 커스텀 SSO 핸드오프, 테스트 등 OIDC 리다이렉트 흐름 밖에서 로그인을 성립시켜야 할 때 사용한다. 토큰 검증은 `KeycloakAuthenticationProvider#createAuthenticatedToken` 단일 진입점을 반드시 경유하므로 검증 우회가 없고, 성공 시 세션 고정 방지(다른 사용자로 재로그인이면 세션 신규 생성, 동일 사용자면 세션 ID 회전) → `SecurityContext` 저장 → 토큰 쿠키 발급 → Refresh Token/Principal Name/Keycloak Session ID 세션 저장까지 OIDC 로그인 성공과 동등한 결과를 만든다. 토큰 묶음 값 객체 `KeycloakTokens`(`of(idToken, accessToken)` / `of(idToken, accessToken, refreshToken)`)를 함께 추가. 사용법은 [docs/v2/GUIDE.md](docs/v2/GUIDE.md) 4.11 참고.
 - `keycloak.security.authentication.security-context-repository` — 인증 `SecurityContext`를 어디에 영속화할지 선택(`NULL` 기본값/`HTTP_SESSION`/`DELEGATING`). 기본값 `NULL`은 기존 동작(매 요청 재검증, 세션 미저장) 유지이며, 세션을 통해 인증을 이어받아야 하면 opt-in 한다.
 - `keycloak.security.static-resources.enabled`(기본 `true`) / `.filter-skip`(기본 `true`) / `.permit-all`(기본 `false`) / `.patterns`(기본 `[/css/**, /js/**, /images/**, /webjars/**, /favicon.ico]`) — 정적 리소스를 인증 필터·인가에서 제외. `filter-skip`(인증 계산 스킵, 성능)과 `permit-all`(인가 면제)은 축이 분리되어 있으며, `filter-skip`은 `permit-all=true`일 때만 실제로 적용된다(둘을 독립적으로 켜면 정적 리소스가 영구 미인증으로 고정되어 무한 리다이렉트 루프가 발생하기 때문).
 - `keycloak.security.csrf.token-repository` — CSRF 토큰 저장소 선택(`SESSION` 기본값/`COOKIE`). `matcher.exclude`로 제외한 경로는 Keycloak 체인이 적용되지 않아 세션 저장소로는 토큰을 읽거나 심을 수 없으므로, 그 경로에서도 CSRF 토큰이 필요하면 `COOKIE`로 전환한다.
