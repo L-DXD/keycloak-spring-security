@@ -43,10 +43,26 @@ jobs:
       - name: Build all modules
         run: ./gradlew build --no-daemon
 
+      # 같은 판이 이미 Maven Central에 있으면 올리지 않는다(올라간 판은 다시 올릴 수 없다).
+      # 수동 실행으로 먼저 올린 뒤 태그를 달 때 올리기가 두 번 도는 것을 막는다.
+      - name: Check Maven Central
+        id: central
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BASE="https://repo1.maven.org/maven2/io/github/l-dxd/keycloak-spring-security-core"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/$VERSION/keycloak-spring-security-core-$VERSION.pom" || true)
+          if [ "$CODE" = "200" ] || curl -s "$BASE/maven-metadata.xml" | grep -q "<version>$VERSION</version>"; then
+            echo "published=true" >> $GITHUB_OUTPUT
+            echo "$VERSION is already on Maven Central. Skipping publish."
+          else
+            echo "published=false" >> $GITHUB_OUTPUT
+          fi
+
       # 서명 키는 이 단계의 셸 안에서만 풀어 Gradle에 넘긴다.
       # GITHUB_ENV에 넣으면 비밀값 마스킹이 걸리지 않아 뒤 단계마다 로그의 환경 변수 목록에 키가 그대로 찍힌다.
       # 배포 순서: core → web → web-starter (의존성 순서). WebFlux 모듈은 3.1.0에서 다시 넣는다 (#127)
       - name: Publish core, web, web-starter
+        if: steps.central.outputs.published != 'true'
         env:
           GPG_SECRET_KEY_BASE64: ${{ secrets.GPG_SECRET_KEY_BASE64 }}
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
